@@ -10,6 +10,7 @@ import {
 } from "../db/repositories/pullRequests.ts";
 import { cancelForPr } from "../db/repositories/reminders.ts";
 import { type PrState, computeTargetState, isTerminal } from "../domain/prState.ts";
+import { type GithubEmailFetcher, resolveSlackUser } from "../identity/resolve.ts";
 import type { Logger } from "../logger.ts";
 import { sanitizeLinkLabel, sanitizeMrkdwn } from "../slack/blocks.ts";
 import type { SlackBlock, SlackClient } from "../slack/client.ts";
@@ -26,7 +27,7 @@ export interface PullRequestPayload {
     merged?: boolean;
     title: string;
     html_url: string;
-    user: { login: string };
+    user: { login: string; id: number };
     head: { sha: string };
     updated_at: string;
   };
@@ -37,6 +38,8 @@ export interface PrHandlerDeps {
   db: Db;
   slack: SlackClient;
   logger: Logger;
+  /** Optional GitHub email lookup so identity resolution can fall back past the map. */
+  fetchGithubEmail?: GithubEmailFetcher;
 }
 
 export interface PullRequestHandlingOptions {
@@ -147,6 +150,33 @@ export async function handlePullRequest(
       );
       await setChannel(db, current.id, channelId, root.slackTs);
       current = { ...current, rootMessageTs: root.slackTs };
+    }
+
+    // Invite the PR author into their channel. Idempotent per author, and
+    // retryable across events, so an author who links their account after
+    // opening still gets pulled in on the next PR event.
+    const authorSlackId = await resolveSlackUser(deps, {
+      githubId: pr.user.id,
+      login: pr.user.login,
+    });
+    if (authorSlackId) {
+      await deliverSlackMessage(
+        db,
+        slack,
+        { prId: current.id, kind: "author_invite", githubEventRef: String(pr.user.id) },
+        {
+          channel: channelId,
+          text: sanitizeMrkdwn(`PR opened by ${pr.user.login}`),
+          threadTs: current.rootMessageTs ?? undefined,
+          blocks: [
+            {
+              type: "section",
+              text: { type: "mrkdwn", text: `👤 Opened by <@${authorSlackId}>` },
+            },
+          ],
+        },
+        () => slack.inviteUsers(channelId, [authorSlackId]),
+      );
     }
 
     const desiredState = current.currentState;

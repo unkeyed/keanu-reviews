@@ -37,7 +37,7 @@ const payload = (over: Partial<ReviewRequestPayload> = {}): ReviewRequestPayload
     merged: false,
     title: "Review me",
     html_url: "https://github.com/unkey/api/pull/1",
-    user: { login: "oz" },
+    user: { login: "oz", id: 100 },
     head: { sha: "sha-1" },
     updated_at: "2026-08-11T12:00:00Z",
   },

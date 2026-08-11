@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "../db/client.ts";
+import { upsertIdentity } from "../db/repositories/identities.ts";
 import { findByRepoNumber, prId } from "../db/repositories/pullRequests.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createLogger } from "../logger.ts";
@@ -37,7 +38,7 @@ const payload = (
       merged: false,
       title: "Add auth",
       html_url: "https://github.com/unkey/api/pull/1423",
-      user: { login: "oz" },
+      user: { login: "oz", id: 100 },
       head: { sha: "sha1" },
       updated_at: "2026-08-11T12:00:00Z",
       ...over,
@@ -47,6 +48,25 @@ const payload = (
 const deps = () => ({ db, slack, logger: createLogger("error") });
 
 describe("handlePullRequest (U4 channel lifecycle)", () => {
+  it("invites the linked PR author into the channel on open", async () => {
+    await upsertIdentity(db, {
+      githubUserId: 100,
+      githubLogin: "oz",
+      slackUserId: "U100",
+      source: "self-link",
+    });
+    await handlePullRequest(deps(), payload("opened"));
+    expect(slack.invites).toEqual([{ channelId: "C1", userIds: ["U100"] }]);
+    // Idempotent: a second event does not re-invite the author.
+    await handlePullRequest(deps(), payload("synchronize"));
+    expect(slack.invites).toHaveLength(1);
+  });
+
+  it("does not invite an unlinked author (degrades quietly)", async () => {
+    await handlePullRequest(deps(), payload("opened"));
+    expect(slack.invites).toHaveLength(0);
+  });
+
   it("opened draft creates a draft-* channel, stores mapping + root ts", async () => {
     await handlePullRequest(deps(), payload("opened", { draft: true }));
     expect(slack.channels).toHaveLength(1);
@@ -122,7 +142,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   it("sanitizes untrusted PR titles and logins in blocks and fallback text", async () => {
     const event = payload("opened", {
       title: "ship <!channel>",
-      user: { login: "<!everyone>" },
+      user: { login: "<!everyone>", id: 101 },
     });
     await handlePullRequest(deps(), event);
     expect(JSON.stringify(slack.messages.at(-1))).not.toContain("<!channel>");

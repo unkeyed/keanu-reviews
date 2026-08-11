@@ -46,7 +46,7 @@ The build-vs-buy question is already settled: the team trialed axolo in producti
 - R7. PR lifecycle activity (opened, ready-for-review, converted-to-draft, closed, merged, reopened) is reported in the channel, with follow-up activity threaded under the PR's root message.
 
 **Reviewers**
-- R8. When a reviewer is requested on a PR, that reviewer is invited to the PR's channel.
+- R8. The PR author is invited to the channel when it is created, and each requested reviewer is invited when the review is requested. Invites resolve the GitHub user to a linked Slack account (identity map, U9) and are idempotent; an unlinked user is skipped and retried on later events.
 
 **Reminders**
 - R9. A reminder posts approximately 12 hours after a review is requested if that review is still pending; it is suppressed once the review is submitted, the review request is removed, or the PR is closed/merged.

@@ -31,7 +31,7 @@ const payload = (over: Partial<ReviewCommentPayload["comment"]> = {}): ReviewCom
     merged: false,
     title: "Add auth",
     html_url: "https://github.com/unkey/api/pull/1423",
-    user: { login: "oz" },
+    user: { login: "oz", id: 100 },
     head: { sha: "sha1" },
     updated_at: "2026-08-11T12:00:00Z",
   },
