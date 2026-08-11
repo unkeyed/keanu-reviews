@@ -1,0 +1,23 @@
+{
+  "name": "unkey-slack-pr-bot",
+  "runtime": "node",
+  "entrypoint": "src/index.ts",
+  "healthCheck": {
+    "path": "/health",
+    "port": 3000
+  },
+  "instances": {
+    "min": 1,
+    "max": 1,
+    "note": "Single active writer per KTD10 until job leasing + atomic reminder claim land; then max may be raised."
+  },
+  "secrets": [
+    "GITHUB_APP_ID",
+    "GITHUB_APP_PRIVATE_KEY",
+    "GITHUB_WEBHOOK_SECRET",
+    "GITHUB_INSTALLATION_IDS",
+    "SLACK_BOT_TOKEN",
+    "SLACK_SIGNING_SECRET",
+    "DATABASE_URL"
+  ]
+}
