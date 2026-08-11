@@ -1,3 +1,4 @@
+import type { GithubUserFetcher } from "../identity/link.ts";
 import type { GithubEmailFetcher } from "../identity/resolve.ts";
 import type { InstallationAuth } from "./auth.ts";
 
@@ -22,5 +23,25 @@ export function createGithubEmailFetcher(
     if (!res.ok) return undefined;
     const body = (await res.json()) as { email?: string | null };
     return body.email ?? undefined;
+  };
+}
+
+/** Production GitHub user fetcher (U9): resolve a login to its immutable id. */
+export function createGithubUserFetcher(
+  auth: InstallationAuth,
+  installationId: string,
+): GithubUserFetcher {
+  return async (login: string) => {
+    const token = await auth.getToken(installationId);
+    const res = await fetch(`https://api.github.com/users/${encodeURIComponent(login)}`, {
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: "application/vnd.github+json",
+        "user-agent": "unkey-slack-pr-bot",
+      },
+    });
+    if (!res.ok) return undefined;
+    const body = (await res.json()) as { id?: number; login?: string };
+    return body.id && body.login ? { id: body.id, login: body.login } : undefined;
   };
 }
