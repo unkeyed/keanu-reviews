@@ -82,6 +82,11 @@ export async function findByRepoNumber(
   return row;
 }
 
+export async function findById(db: Db, id: string): Promise<PullRequestRow | undefined> {
+  const [row] = await db.select().from(pullRequests).where(eq(pullRequests.id, id)).limit(1);
+  return row;
+}
+
 /** CI mapping (U7): resolve a check's head_sha to its tracked PR. */
 export async function findByHeadSha(db: Db, headSha: string): Promise<PullRequestRow | undefined> {
   const [row] = await db
