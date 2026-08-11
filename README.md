@@ -54,6 +54,13 @@ interactivity plus the signing secret.
 
 ## Status
 
-Implemented incrementally per the plan's Implementation Units (U1–U9). U1
-(service scaffold, config, health) is in place; subsequent units add the
-database layer, webhook ingestion, channel lifecycle, and the rest.
+All nine Implementation Units (U1–U9) are implemented and unit/integration
+tested against an in-memory Postgres (PGlite) and a fake Slack client:
+scaffold, database layer, webhook ingestion + auth, PR→channel lifecycle,
+reviewer invites + identity, comment/permalink mirroring, CI reporting, the
+12h reminder scheduler, and the `/link-github` identity population path.
+
+Two live gates from the plan's Verification Contract remain and require real
+credentials: applying migrations to a PlanetScale branch, and the end-to-end
+smoke against a real Slack workspace + GitHub App. The offline end-to-end test
+(`src/integration.test.ts`) exercises the full webhook → worker → Slack wiring.
