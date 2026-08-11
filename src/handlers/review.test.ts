@@ -108,7 +108,7 @@ describe("handleReview (U6, R5)", () => {
     await db.delete(pullRequests);
     await handleReview(deps(), review("approved"));
     expect(slack.channels).toHaveLength(1);
-    expect(slack.messages.at(-1)?.threadTs).toBeDefined();
+    expect(slack.messages.at(-1)?.channel).toBeDefined();
   });
 });
 

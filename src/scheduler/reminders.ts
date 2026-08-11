@@ -108,7 +108,6 @@ export function createReminderScheduler(deps: ReminderDeps) {
           {
             channel: pr.channelId,
             text: "Reminder: this PR is still waiting for review",
-            threadTs: pr.rootMessageTs ?? undefined,
             blocks: [
               {
                 type: "section",

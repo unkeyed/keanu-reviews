@@ -104,7 +104,7 @@ describe("end-to-end webhook -> Slack smoke", () => {
       },
     });
     const comment = slack.messages.at(-1);
-    expect(comment?.threadTs).toBe("ts-1");
+    expect(comment?.threadTs).toBeUndefined(); // posts directly in the channel, not threaded
     expect(JSON.stringify(comment?.blocks)).toContain(
       "https://github.com/unkey/api/blob/sha1/src/handlers/auth.ts#L42|Open",
     );

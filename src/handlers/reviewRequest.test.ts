@@ -105,7 +105,7 @@ describe("handleReviewRequest (U5)", () => {
     await db.delete(pullRequests);
     await handleReviewRequest(deps({ fetchGithubEmail: async () => undefined }), payload());
     expect(slack.channels).toHaveLength(1);
-    expect(slack.messages.at(-1)?.threadTs).toBeDefined();
+    expect(slack.messages.at(-1)?.channel).toBeDefined();
   });
 
   it("retries the request after a failed Slack post without duplicating the invite", async () => {

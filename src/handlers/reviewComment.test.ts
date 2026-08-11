@@ -58,11 +58,11 @@ const seedChannel = async () => {
 };
 
 describe("handleReviewComment (U6)", () => {
-  it("threads a comment with an Open-at-line permalink under the root ts", async () => {
+  it("posts a comment with an Open-at-line permalink directly in the channel", async () => {
     await seedChannel();
     await handleReviewComment(deps(), payload());
     const msg = slack.messages.at(-1);
-    expect(msg?.threadTs).toBe("ts-root");
+    expect(msg?.threadTs).toBeUndefined(); // direct channel post, not threaded
     const text = JSON.stringify(msg?.blocks);
     expect(text).toContain(
       "https://github.com/unkey/api/blob/abc123/src/handlers/auth.ts#L42|Open",
@@ -87,7 +87,7 @@ describe("handleReviewComment (U6)", () => {
     await handleReviewComment(deps(), payload());
     expect(slack.channels).toHaveLength(1); // lazily created
     // The last message is the threaded comment, not a null-target post.
-    expect(slack.messages.at(-1)?.threadTs).toBeDefined();
+    expect(slack.messages.at(-1)?.channel).toBeDefined();
   });
 
   it("does not double-post a re-delivered comment", async () => {

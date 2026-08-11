@@ -69,7 +69,6 @@ export async function handleReview(
     {
       channel: row.channelId,
       text: sanitizeMrkdwn(`Review ${r.state} by ${r.user.login}`),
-      threadTs: row.rootMessageTs ?? undefined,
       blocks: reviewSummaryBlocks({
         state: r.state,
         body: r.body ?? "",
@@ -114,7 +113,6 @@ export async function handleIssueComment(
     {
       channel: row.channelId,
       text: sanitizeMrkdwn(`Comment by ${c.user.login}`),
-      threadTs: row.rootMessageTs ?? undefined,
       blocks: issueCommentBlocks({
         body: c.body,
         htmlUrl: c.html_url,

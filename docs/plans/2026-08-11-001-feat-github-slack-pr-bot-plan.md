@@ -43,7 +43,7 @@ The build-vs-buy question is already settled: the team trialed axolo in producti
 - R4. Inline review comments are mirrored into the PR's channel with the file path, line number, and an "Open" link that opens the file at that exact line.
 - R5. Review submissions (approved / changes requested / commented) are mirrored into the channel.
 - R6. CI/CD results (GitHub Checks) are reported in the channel.
-- R7. PR lifecycle activity (opened, ready-for-review, converted-to-draft, closed, merged, reopened) is reported in the channel, with follow-up activity threaded under the PR's root message.
+- R7. PR lifecycle activity (opened, ready-for-review, converted-to-draft, closed, merged, reopened) and all mirrored activity are reported as top-level messages directly in the channel — not as thread replies. The channel itself is the per-PR conversation, so every update is a normal channel message.
 
 **Reviewers**
 - R8. The PR author is invited to the channel when it is created, and each requested reviewer is invited when the review is requested. Invites resolve the GitHub user to a linked Slack account (identity map, U9) and are idempotent; an unlinked user is skipped and retried on later events.
@@ -261,7 +261,7 @@ U1 → U2 are the foundation. U3 depends on U1/U2. U4 depends on U3. U5, U6, U7 
 - **Requirements:** R4, R5, R7.
 - **Dependencies:** U3, U4.
 - **Files:** `src/handlers/reviewComment.ts`, `src/handlers/review.ts`, `src/github/permalink.ts`, `src/slack/blocks.ts`, `src/handlers/reviewComment.test.ts`, `src/github/permalink.test.ts`, `src/slack/blocks.test.ts`.
-- **Approach:** On `pull_request_review_comment.created`, build the SHA-pinned blob permalink from `comment.commit_id` / `comment.path` / `comment.line` (KTD5), and compose a Block Kit message: a `section` with the comment body and a `context` block with `<permalink|Open> · \`path:line\` · by <@slackId>` (mirroring the image). The comment body is untrusted GitHub text, so escape/sanitize it before it enters the `mrkdwn` block (KTD11) — strip Slack control sequences (`<!channel>`, `<!here>`, `<!subteam^…>`) and escape `&`/`<`/`>`, or render as `plain_text`. Post as a threaded reply under the PR root `ts` (parent ts only, never a reply's). Always set a top-level `text` fallback. **Out-of-order handling (KTD4):** if the PR row / `root_message_ts` doesn't exist yet (a child event overtook the `opened` event), lazily reconcile the channel and root message from the child payload's embedded `pull_request` object before threading, or requeue the job until the root exists. On `pull_request_review.submitted`, post an approved/changes-requested/commented summary (same sanitization). `issue_comment` filtered to PRs via `issue.pull_request`.
+- **Approach:** On `pull_request_review_comment.created`, build the SHA-pinned blob permalink from `comment.commit_id` / `comment.path` / `comment.line` (KTD5), and compose a Block Kit message: a `section` with the comment body and a `context` block with `<permalink|Open> · \`path:line\` · by <@slackId>` (mirroring the image). The comment body is untrusted GitHub text, so escape/sanitize it before it enters the `mrkdwn` block (KTD11) — strip Slack control sequences (`<!channel>`, `<!here>`, `<!subteam^…>`) and escape `&`/`<`/`>`, or render as `plain_text`. Post directly in the channel as a top-level message (not a thread reply). Always set a top-level `text` fallback. **Out-of-order handling (KTD4):** if the PR row / `root_message_ts` doesn't exist yet (a child event overtook the `opened` event), lazily reconcile the channel and root message from the child payload's embedded `pull_request` object before threading, or requeue the job until the root exists. On `pull_request_review.submitted`, post an approved/changes-requested/commented summary (same sanitization). `issue_comment` filtered to PRs via `issue.pull_request`.
 - **Execution note:** Implement permalink construction and body sanitization test-first — the permalink is the feature's core (ranged anchors, path encoding) and sanitization is security-critical.
 - **Test scenarios:**
   - Permalink builds as `.../blob/<sha>/<path>#L<line>` from a sample comment payload.
@@ -269,11 +269,11 @@ U1 → U2 are the foundation. U3 depends on U1/U2. U4 depends on U3. U5, U6, U7 
   - Path with spaces/special chars is URL-encoded correctly.
   - A comment body containing `<!channel>` / `<!here>` / crafted `<url|text>` cannot produce a broadcast or injected link (sanitized/escaped).
   - A `review_comment` job that arrives before the PR's `opened` event reconciles the channel + root from the child payload (or requeues), never posting to a null thread target.
-  - Comment message threads under the stored PR root ts, with author rendered as a Slack mention when mapped and plain login when not.
+  - Comment message posts directly in the channel, with author rendered as a Slack mention when mapped and plain login when not.
   - `pull_request_review.submitted` with state `changes_requested` posts a distinct summary from `approved`.
   - `issue_comment` on a non-PR issue is ignored.
   - Fallback `text` is present on every posted message.
-- **Verification:** A real review comment appears in-thread with an "Open" link that lands on the exact file and line at the reviewed commit, and a body with Slack control sequences renders inert.
+- **Verification:** A real review comment appears as a channel message with an "Open" link that lands on the exact file and line at the reviewed commit, and a body with Slack control sequences renders inert.
 
 ### U7. CI/CD status reporting
 

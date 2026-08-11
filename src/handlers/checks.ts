@@ -70,7 +70,6 @@ export async function handleCheckRun(deps: ChecksDeps, payload: CheckRunPayload)
       {
         channel: row.channelId,
         text: sanitizeMrkdwn(`CI ${run.conclusion}: ${run.name}`),
-        threadTs: row.rootMessageTs ?? undefined,
         blocks: [
           {
             type: "context",

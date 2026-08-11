@@ -88,7 +88,6 @@ export async function handleReviewRequest(
       {
         channel: channelId,
         text: sanitizeMrkdwn(`Review requested from ${reviewer.login}`),
-        threadTs: row.rootMessageTs ?? undefined,
         blocks: [
           {
             type: "section",
@@ -107,7 +106,6 @@ export async function handleReviewRequest(
       {
         channel: channelId,
         text: sanitizeMrkdwn(`Review requested from ${reviewer.login}`),
-        threadTs: row.rootMessageTs ?? undefined,
         blocks: [
           {
             type: "section",

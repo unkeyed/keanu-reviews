@@ -61,7 +61,6 @@ export async function handleReviewComment(
     {
       channel: row.channelId,
       text: sanitizeMrkdwn(`New review comment on ${c.path}${c.line ? `:${c.line}` : ""}`),
-      threadTs: row.rootMessageTs ?? undefined,
       blocks: reviewCommentBlocks({
         body: c.body,
         permalink,

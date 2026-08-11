@@ -167,7 +167,6 @@ export async function handlePullRequest(
         {
           channel: channelId,
           text: sanitizeMrkdwn(`PR opened by ${pr.user.login}`),
-          threadTs: current.rootMessageTs ?? undefined,
           blocks: [
             {
               type: "section",
@@ -245,7 +244,6 @@ async function postLifecycleNote(
     {
       channel: channelId,
       text: sanitizeMrkdwn(`PR #${pr.number} ${payload.action}`),
-      threadTs: row.rootMessageTs,
       blocks: lifecycleBlocks(pr, state),
     },
   );
