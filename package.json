@@ -15,12 +15,15 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "biome check .",
-    "format": "biome format --write ."
+    "format": "biome format --write .",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
     "@octokit/auth-app": "^8.3.0",
-    "@octokit/request": "^10.0.13",
     "@slack/web-api": "^8.0.0",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.6.14",

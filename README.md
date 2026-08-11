@@ -33,6 +33,9 @@ curl localhost:3000/health   # -> {"status":"ok",...}
 | `pnpm typecheck` | TypeScript check (`tsc --noEmit`) |
 | `pnpm test` | Run the Vitest suite |
 | `pnpm lint` | Biome lint + format check |
+| `pnpm db:generate` | Generate a Drizzle migration from `src/db/schema.ts` |
+| `pnpm db:migrate` | Apply migrations to `DATABASE_URL` (drizzle-kit) |
+| `pnpm db:push` | Push the schema directly (dev shortcut) |
 
 ## Configuration
 

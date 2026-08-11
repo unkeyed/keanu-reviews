@@ -335,7 +335,7 @@ Commands are established in U1 (greenfield repo); use the repo-standard toolchai
 | Type check | `pnpm typecheck` | all units |
 | Lint/format | `pnpm biome check` | all units |
 | Unit + integration tests | `pnpm test` (Vitest) | all feature units (U2–U9) |
-| DB migration check | `pnpm drizzle migrate` against a PlanetScale test branch | U2 |
+| DB migration check | `pnpm db:migrate` (drizzle-kit) against a PlanetScale test branch | U2 |
 | Local end-to-end smoke | Replay signed sample webhook fixtures (opened → review_requested → review_comment → check_run → merged) against a test Slack workspace | U3–U9 |
 
 - Each unit's enumerated Test Scenarios must pass.
