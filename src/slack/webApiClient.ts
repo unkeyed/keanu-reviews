@@ -195,13 +195,17 @@ export function createWebApiSlackClient(
       return undefined;
     },
     renameChannel: (channelId, name) =>
-      call(async () => {
-        await web.conversations.rename({ channel: channelId, name });
-      }),
+      call(() =>
+        withChannelMembership(channelId, async () => {
+          await web.conversations.rename({ channel: channelId, name });
+        }),
+      ),
     archiveChannel: (channelId) =>
       call(async () => {
         try {
-          await web.conversations.archive({ channel: channelId });
+          await withChannelMembership(channelId, () =>
+            web.conversations.archive({ channel: channelId }),
+          );
         } catch (error) {
           if (!isSlackChannelAlreadyInState(error, "already_archived")) throw error;
         }
@@ -209,7 +213,9 @@ export function createWebApiSlackClient(
     unarchiveChannel: (channelId) =>
       call(async () => {
         try {
-          await web.conversations.unarchive({ channel: channelId });
+          await withChannelMembership(channelId, () =>
+            web.conversations.unarchive({ channel: channelId }),
+          );
         } catch (error) {
           if (!isSlackChannelAlreadyInState(error, "not_archived")) throw error;
         }
