@@ -17,9 +17,14 @@ interface SlackUserLookupApi {
   lookupByEmail(input: { email: string }): Promise<{ user?: { id?: string } }>;
 }
 
+function slackErrorCode(error: unknown): string | undefined {
+  return (error as { data?: { error?: string } })?.data?.error;
+}
+
 interface SlackWebApi {
   conversations: {
     create(input: { name: string }): Promise<{ channel?: { id?: string } }>;
+    join(input: { channel: string }): Promise<unknown>;
     rename(input: { channel: string; name: string }): Promise<unknown>;
     archive(input: { channel: string }): Promise<unknown>;
     unarchive(input: { channel: string }): Promise<unknown>;
@@ -108,6 +113,19 @@ export function createWebApiSlackClient(
       },
     );
 
+  // The bot must be a member of any channel it posts to or invites into. A
+  // channel recovered by name (or one the bot was removed from) yields
+  // `not_in_channel`; join it once and retry. Requires the `channels:join` scope.
+  const withChannelMembership = async <T>(channel: string, op: () => Promise<T>): Promise<T> => {
+    try {
+      return await op();
+    } catch (error) {
+      if (slackErrorCode(error) !== "not_in_channel") throw error;
+      await web.conversations.join({ channel });
+      return op();
+    }
+  };
+
   return {
     createChannel: (name) =>
       createPacer.run("create", () =>
@@ -180,25 +198,28 @@ export function createWebApiSlackClient(
       call(async () => {
         if (userIds.length > 0) {
           try {
-            await web.conversations.invite({ channel: channelId, users: userIds.join(",") });
+            await withChannelMembership(channelId, () =>
+              web.conversations.invite({ channel: channelId, users: userIds.join(",") }),
+            );
           } catch (error) {
-            const slackError = error as { data?: { error?: string } };
             // An ambiguous earlier invite may have succeeded. Treat Slack's
             // already-present response as the idempotent success it represents.
-            if (slackError.data?.error !== "already_in_channel") throw error;
+            if (slackErrorCode(error) !== "already_in_channel") throw error;
           }
         }
       }),
     postMessage: (msg: SlackMessage) =>
       postPacer.run(msg.channel, () =>
         call(async () => {
-          const res = (await web.apiCall("chat.postMessage", {
-            channel: msg.channel,
-            text: msg.text,
-            blocks: msg.blocks,
-            thread_ts: msg.threadTs,
-            client_msg_id: msg.clientMsgId,
-          })) as { ts?: unknown };
+          const res = (await withChannelMembership(msg.channel, () =>
+            web.apiCall("chat.postMessage", {
+              channel: msg.channel,
+              text: msg.text,
+              blocks: msg.blocks,
+              thread_ts: msg.threadTs,
+              client_msg_id: msg.clientMsgId,
+            }),
+          )) as { ts?: unknown };
           return { ts: requireNonEmptyString(res.ts, "chat.postMessage timestamp") };
         }),
       ),

@@ -12,6 +12,7 @@ function fakeWebApi() {
       create: vi.fn(
         async (): Promise<{ channel?: { id?: string } }> => ({ channel: { id: "C123" } }),
       ),
+      join: vi.fn(async () => ({})),
       rename: vi.fn(async () => ({})),
       archive: vi.fn(async () => ({})),
       unarchive: vi.fn(async () => ({})),
@@ -129,6 +130,32 @@ describe("Slack Web API adapter", () => {
     await expect(slack.postMessage({ channel: "C999", text: "missing ts" })).rejects.toThrow(
       "chat.postMessage timestamp",
     );
+  });
+
+  it("joins the channel and retries when a post hits not_in_channel", async () => {
+    const web = fakeWebApi();
+    web.apiCall
+      .mockRejectedValueOnce({ data: { error: "not_in_channel" } })
+      .mockResolvedValueOnce({ ts: "171234.5678" });
+    const slack = createWebApiSlackClient("unused", { web });
+
+    await expect(slack.postMessage({ channel: "C123", text: "CI passed" })).resolves.toEqual({
+      ts: "171234.5678",
+    });
+    expect(web.conversations.join).toHaveBeenCalledWith({ channel: "C123" });
+    expect(web.apiCall).toHaveBeenCalledTimes(2);
+  });
+
+  it("joins the channel and retries when an invite hits not_in_channel", async () => {
+    const web = fakeWebApi();
+    web.conversations.invite
+      .mockRejectedValueOnce({ data: { error: "not_in_channel" } })
+      .mockResolvedValueOnce({});
+    const slack = createWebApiSlackClient("unused", { web });
+
+    await slack.inviteUsers("C123", ["U7"]);
+    expect(web.conversations.join).toHaveBeenCalledWith({ channel: "C123" });
+    expect(web.conversations.invite).toHaveBeenCalledTimes(2);
   });
 
   it("rejects successful-looking responses that omit required identifiers", async () => {

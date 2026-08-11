@@ -111,11 +111,17 @@ idempotent and safe to rerun; invalid files or invocations exit nonzero.
 
 ### Slack app scopes
 
-`channels:manage`, `channels:read`, `channels:write.invites`, `chat:write`, `users:read.email`
-(add `chat:write.public` if the bot does not auto-join channels; `groups:*` for
-private channels, deferred). The `/link-github` command needs slash-command
-interactivity plus the signing secret; its request URL is
+`channels:manage`, `channels:read`, `channels:join`, `channels:write.invites`,
+`chat:write`, `users:read.email` (`groups:*` for private channels, deferred).
+`channels:join` lets the bot re-join a channel it manages but was removed from,
+or one recovered by name, so posting/inviting there recovers from
+`not_in_channel` instead of failing. The `/link-github` command needs
+slash-command interactivity plus the signing secret; its request URL is
 `${PUBLIC_URL}/slack/commands`.
+
+> **After adding or changing scopes you must reinstall the app** to the
+> workspace, or Slack keeps issuing the old token without the new scope
+> (`missing_scope` errors).
 
 ## Status
 
