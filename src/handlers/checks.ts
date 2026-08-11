@@ -2,6 +2,7 @@ import { type PrForShaFetcher, conclusionLabel } from "../ci/status.ts";
 import { findAllByRepoHeadSha, findAllByRepoNumbers } from "../db/repositories/pullRequests.ts";
 import { sanitizeLinkLabel, sanitizeMrkdwn } from "../slack/blocks.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
+import { RetryableError } from "../worker/retryable.ts";
 import type { PrHandlerDeps } from "./pullRequest.ts";
 
 export interface CheckRunPayload {
@@ -51,7 +52,10 @@ export async function handleCheckRun(deps: ChecksDeps, payload: CheckRunPayload)
 
   if (rows.length === 0) {
     if (hasMissingAssociations) {
-      throw new Error(`PR channel is not ready for every check_run association in ${repoFullName}`);
+      throw new RetryableError(
+        `PR channel is not ready for every check_run association in ${repoFullName}`,
+        { sha: run.head_sha, associations: [...associatedNumbers] },
+      );
     }
     deps.logger.debug("check_run maps to no tracked PR", { sha: run.head_sha });
     return;
@@ -85,6 +89,9 @@ export async function handleCheckRun(deps: ChecksDeps, payload: CheckRunPayload)
   // Preserve progress for mapped PRs. Retries dedupe those effects while
   // delivering to associations whose channel mappings became ready meanwhile.
   if (hasMissingAssociations || hasUnreadyAssociations) {
-    throw new Error(`PR channel is not ready for every check_run association in ${repoFullName}`);
+    throw new RetryableError(
+      `PR channel is not ready for every check_run association in ${repoFullName}`,
+      { sha: run.head_sha, associations: [...associatedNumbers] },
+    );
   }
 }

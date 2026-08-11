@@ -1,6 +1,7 @@
 import { type GithubEmailFetcher, resolveSlackUser } from "../identity/resolve.ts";
 import { sanitizeInlineCode, sanitizeMrkdwn } from "../slack/blocks.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
+import { RetryableError } from "../worker/retryable.ts";
 import {
   type PrHandlerDeps,
   type PullRequestPayload,
@@ -51,7 +52,7 @@ export async function handleReviewRequest(
 ): Promise<void> {
   const { db, slack, logger } = deps;
   const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
-  if (!row.channelId) throw new Error(`PR channel is not ready for ${row.id}`);
+  if (!row.channelId) throw new RetryableError(`PR channel is not ready for ${row.id}`);
   const channelId = row.channelId;
 
   if (payload.requested_team && !payload.requested_reviewer) {

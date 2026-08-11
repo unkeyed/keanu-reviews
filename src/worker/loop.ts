@@ -1,6 +1,7 @@
 import type { Db } from "../db/client.ts";
 import { claimNextJob, completeJob, rescheduleOrFailJob } from "../db/repositories/jobs.ts";
 import type { Logger } from "../logger.ts";
+import { RetryableError } from "./retryable.ts";
 import type { Router } from "./router.ts";
 
 export interface WorkerDeps {
@@ -41,11 +42,20 @@ export function createWorker(deps: WorkerDeps) {
       await deps.router(job);
       await completeJob(deps.db, job);
     } catch (err) {
-      deps.logger.error("job failed", {
-        jobId: job.id,
-        event: job.event,
-        err: err instanceof Error ? err.message : String(err),
-      });
+      const message = err instanceof Error ? err.message : String(err);
+      const willRetry = job.attempts < maxAttempts;
+      if (err instanceof RetryableError) {
+        // Expected transient condition (e.g. out-of-order delivery). Retry
+        // quietly; only escalate to warn once it stops being transient.
+        const fields = { jobId: job.id, event: job.event, attempt: job.attempts, ...err.details };
+        if (willRetry) {
+          deps.logger.info("job deferred, will retry", { ...fields, reason: message });
+        } else {
+          deps.logger.warn("job gave up after retries", { ...fields, reason: message });
+        }
+      } else {
+        deps.logger.error("job failed", { jobId: job.id, event: job.event, err: message });
+      }
       const retryDelay = retryBaseMs * 2 ** Math.max(0, job.attempts - 1);
       await rescheduleOrFailJob(deps.db, job, {
         maxAttempts,

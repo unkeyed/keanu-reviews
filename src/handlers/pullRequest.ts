@@ -15,6 +15,7 @@ import { sanitizeLinkLabel, sanitizeMrkdwn } from "../slack/blocks.ts";
 import type { SlackBlock, SlackClient } from "../slack/client.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { channelName } from "../slack/naming.ts";
+import { RetryableError } from "../worker/retryable.ts";
 
 export interface PullRequestPayload {
   action: string;
@@ -235,7 +236,9 @@ export async function ensurePullRequestChannel(
     row = await findByRepoNumber(deps.db, repository.full_name, pullRequest.number);
   }
   if (!row?.channelId || !row.rootMessageTs) {
-    throw new Error(`PR channel is not ready for ${repository.full_name}#${pullRequest.number}`);
+    throw new RetryableError(
+      `PR channel is not ready for ${repository.full_name}#${pullRequest.number}`,
+    );
   }
   return row;
 }

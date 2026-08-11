@@ -2,6 +2,7 @@ import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
 import { resolveSlackUser } from "../identity/resolve.ts";
 import { issueCommentBlocks, reviewSummaryBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
+import { RetryableError } from "../worker/retryable.ts";
 import {
   type PrHandlerDeps,
   type PullRequestPayload,
@@ -46,7 +47,7 @@ export async function handleReview(
 ): Promise<void> {
   if (payload.action !== "submitted") return;
   const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
-  if (!row.channelId) throw new Error(`PR channel is not ready for ${row.id}`);
+  if (!row.channelId) throw new RetryableError(`PR channel is not ready for ${row.id}`);
 
   const r = payload.review;
   // GitHub is the source of truth: cancel before enrichment or Slack delivery,
@@ -95,7 +96,7 @@ export async function handleIssueComment(
   if (!payload.issue.pull_request) return; // not a PR — ignore
   const row = await findByRepoNumber(deps.db, payload.repository.full_name, payload.issue.number);
   if (!row?.channelId) {
-    throw new Error(
+    throw new RetryableError(
       `PR channel is not ready for ${payload.repository.full_name}#${payload.issue.number}`,
     );
   }
