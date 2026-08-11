@@ -1,10 +1,8 @@
 import { Hono } from "hono";
-import type { Config } from "./config.ts";
 import type { Logger } from "./logger.ts";
 import { health } from "./routes/health.ts";
 
 export interface AppDeps {
-  config: Config;
   logger: Logger;
   /** Feature routes composed in index.ts (GitHub webhook U3, Slack command U9). */
   mounts?: Hono[];

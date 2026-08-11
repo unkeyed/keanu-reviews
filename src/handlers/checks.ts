@@ -1,10 +1,8 @@
 import { type PrForShaFetcher, conclusionLabel } from "../ci/status.ts";
-import type { Db } from "../db/client.ts";
-import { findAllByRepoHeadSha, findByRepoNumber } from "../db/repositories/pullRequests.ts";
-import type { Logger } from "../logger.ts";
+import { findAllByRepoHeadSha, findAllByRepoNumbers } from "../db/repositories/pullRequests.ts";
 import { sanitizeLinkLabel, sanitizeMrkdwn } from "../slack/blocks.ts";
-import type { SlackClient } from "../slack/client.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
+import type { PrHandlerDeps } from "./pullRequest.ts";
 
 export interface CheckRunPayload {
   action: string;
@@ -20,10 +18,7 @@ export interface CheckRunPayload {
   };
 }
 
-export interface ChecksDeps {
-  db: Db;
-  slack: SlackClient;
-  logger: Logger;
+export interface ChecksDeps extends PrHandlerDeps {
   /** Fallback PR resolution for a head_sha not stored locally (e.g. fork checks). */
   fetchPrForSha?: PrForShaFetcher;
 }
@@ -41,22 +36,14 @@ export async function handleCheckRun(deps: ChecksDeps, payload: CheckRunPayload)
   const associatedNumbers = new Set(run.pull_requests?.map((pr) => pr.number) ?? []);
   let rows =
     associatedNumbers.size > 0
-      ? (
-          await Promise.all(
-            [...associatedNumbers].map((number) => findByRepoNumber(deps.db, repoFullName, number)),
-          )
-        ).filter((row) => row !== undefined)
+      ? await findAllByRepoNumbers(deps.db, repoFullName, [...associatedNumbers])
       : await findAllByRepoHeadSha(deps.db, repoFullName, run.head_sha);
 
   if (rows.length === 0 && associatedNumbers.size === 0 && deps.fetchPrForSha) {
     for (const number of await deps.fetchPrForSha(repoFullName, run.head_sha)) {
       associatedNumbers.add(number);
     }
-    rows = (
-      await Promise.all(
-        [...associatedNumbers].map((number) => findByRepoNumber(deps.db, repoFullName, number)),
-      )
-    ).filter((row) => row !== undefined);
+    rows = await findAllByRepoNumbers(deps.db, repoFullName, [...associatedNumbers]);
   }
 
   if (associatedNumbers.size > rows.length) {

@@ -106,12 +106,3 @@ export async function findMessageEffect(
     .limit(1);
   return row;
 }
-
-export async function findRootTs(db: Db, prId: string): Promise<string | undefined> {
-  const [row] = await db
-    .select()
-    .from(messages)
-    .where(and(eq(messages.prId, prId), eq(messages.kind, "root"), eq(messages.status, "sent")))
-    .limit(1);
-  return row?.slackTs ?? undefined;
-}

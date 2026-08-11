@@ -1,7 +1,6 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "./client.ts";
-import { markDeliverySeen } from "./repositories/deliveries.ts";
 import { findByGithubId, upsertIdentity } from "./repositories/identities.ts";
 import {
   claimNextJob,
@@ -19,6 +18,7 @@ import {
 } from "./repositories/messages.ts";
 import {
   findAllByRepoHeadSha,
+  findAllByRepoNumbers,
   findByRepoNumber,
   prId,
   upsertPullRequest,
@@ -102,14 +102,33 @@ describe("pull_requests", () => {
     expect(await findByRepoNumber(db, "unkey/api", 1423)).toBeUndefined();
     expect((await findByRepoNumber(db, "unkey/platform", 1423))?.id).toBe(original.id);
   });
+
+  it("finds repository-scoped PR numbers in caller order", async () => {
+    await upsertPullRequest(db, {
+      repoFullName: "unkey/api",
+      number: 7,
+      githubPrId: 700,
+      currentState: "pr",
+    });
+    await upsertPullRequest(db, {
+      repoFullName: "unkey/api",
+      number: 9,
+      githubPrId: 900,
+      currentState: "pr",
+    });
+    await upsertPullRequest(db, {
+      repoFullName: "other/api",
+      number: 7,
+      githubPrId: 701,
+      currentState: "pr",
+    });
+
+    const rows = await findAllByRepoNumbers(db, "unkey/api", [9, 404, 7]);
+    expect(rows.map((row) => row.number)).toEqual([9, 7]);
+  });
 });
 
 describe("dedupe", () => {
-  it("recording a delivery id twice is a no-op after the first", async () => {
-    expect(await markDeliverySeen(db, "delivery-1")).toBe(true);
-    expect(await markDeliverySeen(db, "delivery-1")).toBe(false);
-  });
-
   it("persists the delivery marker and durable job in one transaction", async () => {
     const result = await enqueueDeliveryJob(db, {
       deliveryId: "delivery-atomic",

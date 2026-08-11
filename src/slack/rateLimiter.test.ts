@@ -58,4 +58,21 @@ describe("Pacer", () => {
 
     expect(sleep).not.toHaveBeenCalled();
   });
+
+  it("forgets an idle key after its pacing window", async () => {
+    vi.useFakeTimers();
+    try {
+      const sleep = vi.fn(async () => {});
+      const pacer = new Pacer(250, sleep, () => 1_000);
+
+      await pacer.run("channel", async () => undefined);
+      await vi.advanceTimersByTimeAsync(250);
+      await pacer.run("channel", async () => undefined);
+
+      expect(sleep).not.toHaveBeenCalled();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
 });

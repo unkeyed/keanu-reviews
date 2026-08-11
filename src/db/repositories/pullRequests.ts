@@ -1,4 +1,5 @@
-import { and, eq, isNull, lte, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, lte, or } from "drizzle-orm";
+import type { PrState } from "../../domain/prState.ts";
 import type { Db } from "../client.ts";
 import { type PullRequestRow, pullRequests } from "../schema.ts";
 
@@ -8,7 +9,7 @@ export interface UpsertPrInput {
   repoFullName: string;
   number: number;
   githubPrId: number;
-  currentState: "draft" | "pr" | "closed" | "merged";
+  currentState: PrState;
   headSha?: string | null;
   channelId?: string | null;
   rootMessageTs?: string | null;
@@ -94,11 +95,7 @@ export async function setChannel(
     .where(eq(pullRequests.id, id));
 }
 
-export async function updateState(
-  db: Db,
-  id: string,
-  state: "draft" | "pr" | "closed" | "merged",
-): Promise<void> {
+export async function updateState(db: Db, id: string, state: PrState): Promise<void> {
   await db
     .update(pullRequests)
     .set({ currentState: state, updatedAt: new Date() })
@@ -108,7 +105,7 @@ export async function updateState(
 export async function markSlackStateApplied(
   db: Db,
   id: string,
-  state: "draft" | "pr" | "closed" | "merged",
+  state: PrState,
   appliedChannelName: string,
 ): Promise<void> {
   await db
@@ -128,6 +125,24 @@ export async function findByRepoNumber(
     .where(and(eq(pullRequests.repoFullName, repoFullName), eq(pullRequests.number, number)))
     .limit(1);
   return row;
+}
+
+/** Resolve repository-scoped PR numbers in caller order with one query. */
+export async function findAllByRepoNumbers(
+  db: Db,
+  repoFullName: string,
+  numbers: number[],
+): Promise<PullRequestRow[]> {
+  if (numbers.length === 0) return [];
+  const rows = await db
+    .select()
+    .from(pullRequests)
+    .where(and(eq(pullRequests.repoFullName, repoFullName), inArray(pullRequests.number, numbers)));
+  const byNumber = new Map(rows.map((row) => [row.number, row]));
+  return numbers.flatMap((number) => {
+    const row = byNumber.get(number);
+    return row ? [row] : [];
+  });
 }
 
 export async function findByGithubPrId(

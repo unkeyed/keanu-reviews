@@ -51,6 +51,21 @@ export class Pacer {
     this.now = now;
   }
 
+  private cleanupWhenIdle(key: string, tail: Promise<unknown>): void {
+    if (this.chains.get(key) !== tail) return;
+    this.chains.delete(key);
+
+    const lastAt = this.lastAt.get(key);
+    if (lastAt === undefined) return;
+    const remainingMs = Math.max(0, lastAt + this.minIntervalMs - this.now());
+    const timer = setTimeout(() => {
+      if (!this.chains.has(key) && this.lastAt.get(key) === lastAt) {
+        this.lastAt.delete(key);
+      }
+    }, remainingMs);
+    timer.unref?.();
+  }
+
   run<T>(key: string, fn: () => Promise<T>): Promise<T> {
     const prior = this.chains.get(key) ?? Promise.resolve();
     const next = prior.then(async () => {
@@ -62,10 +77,9 @@ export class Pacer {
       this.lastAt.set(key, this.now());
       return fn();
     });
-    this.chains.set(
-      key,
-      next.catch(() => undefined),
-    );
+    const tail = next.catch(() => undefined);
+    this.chains.set(key, tail);
+    void tail.then(() => this.cleanupWhenIdle(key, tail));
     return next;
   }
 }

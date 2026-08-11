@@ -1,20 +1,13 @@
 import type { PrForShaFetcher } from "../ci/status.ts";
-import type { Db } from "../db/client.ts";
 import type { JobRow } from "../db/schema.ts";
 import { handleCheckRun } from "../handlers/checks.ts";
-import { handlePullRequest } from "../handlers/pullRequest.ts";
+import { type PrHandlerDeps, handlePullRequest } from "../handlers/pullRequest.ts";
 import { handleIssueComment, handleReview } from "../handlers/review.ts";
 import { handleReviewComment } from "../handlers/reviewComment.ts";
 import { handleReviewRequest } from "../handlers/reviewRequest.ts";
 import type { GithubEmailFetcher } from "../identity/resolve.ts";
-import type { Logger } from "../logger.ts";
-import type { SlackClient } from "../slack/client.ts";
 
-export interface RouterDeps {
-  db: Db;
-  slack: SlackClient;
-  logger: Logger;
-  reminderHours: number;
+export interface RouterDeps extends PrHandlerDeps {
   fetchGithubEmail?: GithubEmailFetcher;
   onReviewRequested?: (prId: string, reviewerGithubId: number) => Promise<void>;
   onReviewRequestRemoved?: (prId: string, reviewerGithubId: number) => Promise<void>;

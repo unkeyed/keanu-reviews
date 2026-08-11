@@ -18,7 +18,7 @@ export type MintFn = (installationId: string) => Promise<MintedToken>;
 const REFRESH_SKEW_MS = 5 * 60_000; // refresh 5 min before expiry
 
 export interface InstallationAuth {
-  getToken(installationId: string, opts?: { forceRefresh?: boolean }): Promise<string>;
+  getToken(installationId: string): Promise<string>;
   invalidate(installationId: string): void;
 }
 
@@ -29,10 +29,9 @@ export function createInstallationAuth(
   const cache = new Map<string, MintedToken>();
 
   return {
-    async getToken(installationId, opts) {
+    async getToken(installationId) {
       const cached = cache.get(installationId);
-      const fresh =
-        cached && cached.expiresAt.getTime() - REFRESH_SKEW_MS > now() && !opts?.forceRefresh;
+      const fresh = cached && cached.expiresAt.getTime() - REFRESH_SKEW_MS > now();
       if (fresh && cached) return cached.token;
 
       const minted = await mint(installationId);

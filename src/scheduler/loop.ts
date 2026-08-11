@@ -10,13 +10,26 @@ export function startReminderLoop(
   intervalMs: number,
   logger: Logger,
 ): { stop: () => void } {
+  let running = false;
+  let stopped = false;
   const timer = setInterval(() => {
-    processDue().catch((err) => {
-      logger.error("reminder scan failed", {
-        err: err instanceof Error ? err.message : String(err),
+    if (running || stopped) return;
+    running = true;
+    processDue()
+      .catch((err) => {
+        logger.error("reminder scan failed", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      })
+      .finally(() => {
+        running = false;
       });
-    });
   }, intervalMs);
   timer.unref?.();
-  return { stop: () => clearInterval(timer) };
+  return {
+    stop: () => {
+      stopped = true;
+      clearInterval(timer);
+    },
+  };
 }

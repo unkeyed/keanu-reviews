@@ -1,10 +1,11 @@
-import type { Db } from "../db/client.ts";
 import { type GithubEmailFetcher, resolveSlackUser } from "../identity/resolve.ts";
-import type { Logger } from "../logger.ts";
 import { sanitizeInlineCode, sanitizeMrkdwn } from "../slack/blocks.ts";
-import type { SlackClient } from "../slack/client.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
-import { type PullRequestPayload, ensurePullRequestChannel } from "./pullRequest.ts";
+import {
+  type PrHandlerDeps,
+  type PullRequestPayload,
+  ensurePullRequestChannel,
+} from "./pullRequest.ts";
 
 export interface ReviewRequestPayload {
   action: "review_requested" | "review_request_removed" | string;
@@ -14,10 +15,7 @@ export interface ReviewRequestPayload {
   requested_team?: { id: number; slug: string };
 }
 
-export interface ReviewRequestDeps {
-  db: Db;
-  slack: SlackClient;
-  logger: Logger;
+export interface ReviewRequestDeps extends PrHandlerDeps {
   fetchGithubEmail?: GithubEmailFetcher;
   /** U8 wires these to schedule / cancel the 12h reminder. */
   onReviewRequested?: (prId: string, reviewerGithubId: number) => Promise<void>;

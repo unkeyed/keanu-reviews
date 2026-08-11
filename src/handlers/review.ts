@@ -1,16 +1,14 @@
-import type { Db } from "../db/client.ts";
-import { findByGithubId } from "../db/repositories/identities.ts";
 import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
-import type { Logger } from "../logger.ts";
+import { resolveSlackUser } from "../identity/resolve.ts";
 import { issueCommentBlocks, reviewSummaryBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
-import type { SlackClient } from "../slack/client.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
-import { type PullRequestPayload, ensurePullRequestChannel } from "./pullRequest.ts";
+import {
+  type PrHandlerDeps,
+  type PullRequestPayload,
+  ensurePullRequestChannel,
+} from "./pullRequest.ts";
 
-export interface ReviewDeps {
-  db: Db;
-  slack: SlackClient;
-  logger: Logger;
+export interface ReviewDeps extends PrHandlerDeps {
   /** U8 wires this to cancel a reviewer's pending reminder once they review. */
   onReviewSubmitted?: (prId: string, reviewerGithubId: number) => Promise<void>;
 }
@@ -35,7 +33,10 @@ export async function handleReview(deps: ReviewDeps, payload: ReviewPayload): Pr
   if (!row.channelId) throw new Error(`PR channel is not ready for ${row.id}`);
 
   const r = payload.review;
-  const mapped = await findByGithubId(deps.db, r.user.id);
+  const slackUserId = await resolveSlackUser(
+    { db: deps.db, slack: deps.slack },
+    { githubId: r.user.id, login: r.user.login },
+  );
   await deliverSlackMessage(
     deps.db,
     deps.slack,
@@ -48,7 +49,7 @@ export async function handleReview(deps: ReviewDeps, payload: ReviewPayload): Pr
         state: r.state,
         body: r.body ?? "",
         htmlUrl: r.html_url,
-        authorMention: mapped ? `<@${mapped.slackUserId}>` : sanitizeMrkdwn(r.user.login),
+        authorMention: slackUserId ? `<@${slackUserId}>` : sanitizeMrkdwn(r.user.login),
       }),
     },
   );
@@ -78,8 +79,11 @@ export async function handleIssueComment(
   }
 
   const c = payload.comment;
-  const mapped = await findByGithubId(deps.db, c.user.id);
-  const authorMention = mapped ? `<@${mapped.slackUserId}>` : sanitizeMrkdwn(c.user.login);
+  const slackUserId = await resolveSlackUser(
+    { db: deps.db, slack: deps.slack },
+    { githubId: c.user.id, login: c.user.login },
+  );
+  const authorMention = slackUserId ? `<@${slackUserId}>` : sanitizeMrkdwn(c.user.login);
   await deliverSlackMessage(
     deps.db,
     deps.slack,

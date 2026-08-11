@@ -35,7 +35,6 @@ beforeEach(async () => {
     db,
     slack,
     logger,
-    reminderHours: 12,
     onReviewRequested: scheduler.onReviewRequested,
     onReviewSubmitted: scheduler.onReviewSubmitted,
     onReviewRequestRemoved: scheduler.onReviewRequestRemoved,

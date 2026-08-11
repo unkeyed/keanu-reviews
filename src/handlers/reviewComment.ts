@@ -1,9 +1,6 @@
-import type { Db } from "../db/client.ts";
-import { findByGithubId } from "../db/repositories/identities.ts";
 import { buildBlobPermalink } from "../github/permalink.ts";
-import type { Logger } from "../logger.ts";
+import { resolveSlackUser } from "../identity/resolve.ts";
 import { reviewCommentBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
-import type { SlackClient } from "../slack/client.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import {
   type PrHandlerDeps,
@@ -27,19 +24,13 @@ export interface ReviewCommentPayload {
   };
 }
 
-export interface ReviewCommentDeps extends PrHandlerDeps {
-  db: Db;
-  slack: SlackClient;
-  logger: Logger;
-}
-
 /**
  * Mirror an inline review comment into the PR channel (U6, R4). Handles the
  * out-of-order case (KTD4): if the comment arrives before the PR's `opened`
  * event, reconcile the channel + root from the comment's embedded pull_request.
  */
 export async function handleReviewComment(
-  deps: ReviewCommentDeps,
+  deps: PrHandlerDeps,
   payload: ReviewCommentPayload,
 ): Promise<void> {
   if (payload.action !== "created") return;
@@ -56,8 +47,11 @@ export async function handleReviewComment(
         startLine: c.start_line ?? null,
       })
     : c.html_url;
-  const mapped = await findByGithubId(deps.db, c.user.id);
-  const authorMention = mapped ? `<@${mapped.slackUserId}>` : sanitizeMrkdwn(c.user.login);
+  const slackUserId = await resolveSlackUser(
+    { db: deps.db, slack: deps.slack },
+    { githubId: c.user.id, login: c.user.login },
+  );
+  const authorMention = slackUserId ? `<@${slackUserId}>` : sanitizeMrkdwn(c.user.login);
 
   await deliverSlackMessage(
     deps.db,

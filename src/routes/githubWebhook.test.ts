@@ -1,5 +1,4 @@
 import { createHmac } from "node:crypto";
-import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "../db/client.ts";
 import { jobs } from "../db/schema.ts";

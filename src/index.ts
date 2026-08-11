@@ -52,7 +52,6 @@ function boot(): void {
     db,
     slack,
     logger,
-    reminderHours: config.REMINDER_HOURS,
     fetchGithubEmail: createGithubEmailFetcher(auth, installationId),
     fetchPrForSha: createPrForShaFetcher(auth, installationId),
     onReviewRequested: scheduler.onReviewRequested,
@@ -89,7 +88,7 @@ function boot(): void {
     githubOauthCallbackUrl,
   });
 
-  const app = createApp({ config, logger, mounts: [githubWebhook, githubOauth, slackCommand] });
+  const app = createApp({ logger, mounts: [githubWebhook, githubOauth, slackCommand] });
 
   // Background loops (single active writer, KTD10)
   startWorkerLoop(worker, 1000, logger);

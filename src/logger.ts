@@ -62,6 +62,3 @@ export function createLogger(level: LogLevel = "info", base: Record<string, unkn
     child: (bindings) => createLogger(level, { ...base, ...bindings }),
   };
 }
-
-/** Exposed for tests. */
-export const _internal = { redact };
