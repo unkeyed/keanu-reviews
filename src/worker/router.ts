@@ -1,5 +1,7 @@
+import type { PrForShaFetcher } from "../ci/status.ts";
 import type { Db } from "../db/client.ts";
 import type { JobRow } from "../db/schema.ts";
+import { handleCheckRun } from "../handlers/checks.ts";
 import { handlePullRequest } from "../handlers/pullRequest.ts";
 import { handleIssueComment, handleReview } from "../handlers/review.ts";
 import { handleReviewComment } from "../handlers/reviewComment.ts";
@@ -17,6 +19,7 @@ export interface RouterDeps {
   onReviewRequested?: (prId: string, reviewerGithubId: number) => Promise<void>;
   onReviewRequestRemoved?: (prId: string, reviewerGithubId: number) => Promise<void>;
   onReviewSubmitted?: (prId: string, reviewerGithubId: number) => Promise<void>;
+  fetchPrForSha?: PrForShaFetcher;
 }
 
 export type Router = (job: JobRow) => Promise<void>;
@@ -45,6 +48,9 @@ export function createRouter(deps: RouterDeps): Router {
         return;
       case "issue_comment":
         await handleIssueComment(deps, payload);
+        return;
+      case "check_run":
+        await handleCheckRun(deps, payload);
         return;
       default:
         deps.logger.debug("unhandled event", { event: job.event, action: job.action });
