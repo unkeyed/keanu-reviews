@@ -1,0 +1,92 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Db } from "../db/client.ts";
+import { setChannel, upsertPullRequest } from "../db/repositories/pullRequests.ts";
+import { createTestDb } from "../db/testDb.ts";
+import { createLogger } from "../logger.ts";
+import { FakeSlackClient } from "../testing/fakeSlack.ts";
+import {
+  type IssueCommentPayload,
+  type ReviewPayload,
+  handleIssueComment,
+  handleReview,
+} from "./review.ts";
+
+let db: Db;
+let slack: FakeSlackClient;
+let close: () => Promise<void>;
+
+beforeEach(async () => {
+  const t = await createTestDb();
+  db = t.db;
+  close = () => t.client.close();
+  slack = new FakeSlackClient();
+  const row = await upsertPullRequest(db, {
+    repoFullName: "unkey/api",
+    number: 1,
+    githubPrId: 1,
+    currentState: "pr",
+  });
+  await setChannel(db, row.id, "C1", "ts-root");
+});
+afterEach(() => close());
+
+const deps = (over = {}) => ({ db, slack, logger: createLogger("error"), ...over });
+
+const review = (state: string): ReviewPayload => ({
+  action: "submitted",
+  repository: { full_name: "unkey/api" },
+  pull_request: { number: 1 },
+  review: {
+    id: 1,
+    state,
+    body: "looks good",
+    html_url: "https://github.com/unkey/api/pull/1#pullrequestreview-1",
+    user: { id: 7, login: "flo" },
+  },
+});
+
+describe("handleReview (U6, R5)", () => {
+  it("posts a distinct summary for changes_requested vs approved", async () => {
+    await handleReview(deps(), review("approved"));
+    const approved = JSON.stringify(slack.messages.at(-1)?.blocks);
+    slack.messages.length = 0;
+    await handleReview(deps(), {
+      ...review("changes_requested"),
+      review: { ...review("changes_requested").review, id: 2 },
+    });
+    const changes = JSON.stringify(slack.messages.at(-1)?.blocks);
+    expect(approved).toContain("approved");
+    expect(changes).toContain("requested changes");
+    expect(approved).not.toBe(changes);
+  });
+
+  it("fires the reminder-cancel hook for the reviewer", async () => {
+    const onReviewSubmitted = vi.fn(async () => {});
+    await handleReview(deps({ onReviewSubmitted }), review("approved"));
+    expect(onReviewSubmitted).toHaveBeenCalledWith("unkey/api#1", 7);
+  });
+});
+
+describe("handleIssueComment (U6)", () => {
+  const issueComment = (isPr: boolean): IssueCommentPayload => ({
+    action: "created",
+    repository: { full_name: "unkey/api" },
+    issue: { number: 1, pull_request: isPr ? {} : undefined },
+    comment: {
+      id: 3,
+      body: "thoughts?",
+      html_url: "https://github.com/unkey/api/pull/1#issuecomment-3",
+      user: { id: 7, login: "flo" },
+    },
+  });
+
+  it("mirrors a PR conversation comment", async () => {
+    await handleIssueComment(deps(), issueComment(true));
+    expect(slack.messages.at(-1)?.text).toContain("flo");
+  });
+
+  it("ignores a comment on a non-PR issue", async () => {
+    await handleIssueComment(deps(), issueComment(false));
+    expect(slack.messages).toHaveLength(0);
+  });
+});

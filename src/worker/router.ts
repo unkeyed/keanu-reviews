@@ -1,6 +1,8 @@
 import type { Db } from "../db/client.ts";
 import type { JobRow } from "../db/schema.ts";
 import { handlePullRequest } from "../handlers/pullRequest.ts";
+import { handleIssueComment, handleReview } from "../handlers/review.ts";
+import { handleReviewComment } from "../handlers/reviewComment.ts";
 import { handleReviewRequest } from "../handlers/reviewRequest.ts";
 import type { GithubEmailFetcher } from "../identity/resolve.ts";
 import type { Logger } from "../logger.ts";
@@ -14,6 +16,7 @@ export interface RouterDeps {
   fetchGithubEmail?: GithubEmailFetcher;
   onReviewRequested?: (prId: string, reviewerGithubId: number) => Promise<void>;
   onReviewRequestRemoved?: (prId: string, reviewerGithubId: number) => Promise<void>;
+  onReviewSubmitted?: (prId: string, reviewerGithubId: number) => Promise<void>;
 }
 
 export type Router = (job: JobRow) => Promise<void>;
@@ -33,6 +36,15 @@ export function createRouter(deps: RouterDeps): Router {
         if (job.action === "review_requested" || job.action === "review_request_removed") {
           await handleReviewRequest(deps, payload);
         }
+        return;
+      case "pull_request_review_comment":
+        await handleReviewComment(deps, payload);
+        return;
+      case "pull_request_review":
+        await handleReview(deps, payload);
+        return;
+      case "issue_comment":
+        await handleIssueComment(deps, payload);
         return;
       default:
         deps.logger.debug("unhandled event", { event: job.event, action: job.action });
