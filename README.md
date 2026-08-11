@@ -45,7 +45,7 @@ environment — on Unkey Deploy, from the platform secret store — and are neve
 written to logs. See [`.env.example`](.env.example) for the full list.
 
 Required secrets: `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`,
-`GITHUB_WEBHOOK_SECRET`, `GITHUB_INSTALLATION_IDS` (allowlist),
+`GITHUB_WEBHOOK_SECRET`, `GITHUB_INSTALLATION_ID` (one installation),
 `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `DATABASE_URL`.
 
 ### Slack app scopes

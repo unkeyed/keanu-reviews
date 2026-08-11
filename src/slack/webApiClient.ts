@@ -2,6 +2,13 @@ import { WebClient } from "@slack/web-api";
 import type { SlackClient, SlackMessage } from "./client.ts";
 import { Pacer, withRetry } from "./rateLimiter.ts";
 
+export function isSlackChannelAlreadyInState(
+  error: unknown,
+  expectedCode: "already_archived" | "not_archived",
+): boolean {
+  return (error as { data?: { error?: string } })?.data?.error === expectedCode;
+}
+
 /**
  * Real Slack client (KTD9). Wraps @slack/web-api, retries on 429 honoring
  * Retry-After, and paces posts to ~1/sec per channel. Channel creation is
@@ -40,11 +47,19 @@ export function createWebApiSlackClient(token: string): SlackClient {
       }),
     archiveChannel: (channelId) =>
       call(async () => {
-        await web.conversations.archive({ channel: channelId });
+        try {
+          await web.conversations.archive({ channel: channelId });
+        } catch (error) {
+          if (!isSlackChannelAlreadyInState(error, "already_archived")) throw error;
+        }
       }),
     unarchiveChannel: (channelId) =>
       call(async () => {
-        await web.conversations.unarchive({ channel: channelId });
+        try {
+          await web.conversations.unarchive({ channel: channelId });
+        } catch (error) {
+          if (!isSlackChannelAlreadyInState(error, "not_archived")) throw error;
+        }
       }),
     inviteUsers: (channelId, userIds) =>
       call(async () => {

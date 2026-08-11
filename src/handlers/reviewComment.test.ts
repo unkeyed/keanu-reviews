@@ -33,6 +33,7 @@ const payload = (over: Partial<ReviewCommentPayload["comment"]> = {}): ReviewCom
     html_url: "https://github.com/unkey/api/pull/1423",
     user: { login: "oz" },
     head: { sha: "sha1" },
+    updated_at: "2026-08-11T12:00:00Z",
   },
   comment: {
     id: 55,

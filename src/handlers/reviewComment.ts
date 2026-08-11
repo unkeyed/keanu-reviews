@@ -5,21 +5,16 @@ import type { Logger } from "../logger.ts";
 import { reviewCommentBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
 import type { SlackClient } from "../slack/client.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
-import { type PrHandlerDeps, ensurePullRequestChannel } from "./pullRequest.ts";
+import {
+  type PrHandlerDeps,
+  type PullRequestPayload,
+  ensurePullRequestChannel,
+} from "./pullRequest.ts";
 
 export interface ReviewCommentPayload {
   action: string;
   repository: { full_name: string };
-  pull_request: {
-    number: number;
-    id: number;
-    draft?: boolean;
-    merged?: boolean;
-    title: string;
-    html_url: string;
-    user: { login: string };
-    head: { sha: string };
-  };
+  pull_request: PullRequestPayload["pull_request"];
   comment: {
     id: number;
     commit_id: string;

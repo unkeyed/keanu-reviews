@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, lte, or } from "drizzle-orm";
 import type { Db } from "../client.ts";
 import { type PullRequestRow, pullRequests } from "../schema.ts";
 
@@ -12,10 +12,19 @@ export interface UpsertPrInput {
   headSha?: string | null;
   channelId?: string | null;
   rootMessageTs?: string | null;
+  sourceUpdatedAt?: Date | null;
 }
 
-/** Idempotent on (repo, number): a second upsert updates the row, never duplicates. */
-export async function upsertPullRequest(db: Db, input: UpsertPrInput): Promise<PullRequestRow> {
+interface PullRequestSourceInput extends UpsertPrInput {
+  sourceUpdatedAt: Date;
+}
+
+interface UpsertResult {
+  row: PullRequestRow;
+  sourceAccepted: boolean;
+}
+
+async function upsert(db: Db, input: UpsertPrInput): Promise<UpsertResult> {
   const id = prId(input.repoFullName, input.number);
   const now = new Date();
   const values = {
@@ -27,23 +36,50 @@ export async function upsertPullRequest(db: Db, input: UpsertPrInput): Promise<P
     headSha: input.headSha ?? null,
     channelId: input.channelId ?? null,
     rootMessageTs: input.rootMessageTs ?? null,
+    sourceUpdatedAt: input.sourceUpdatedAt ?? null,
     updatedAt: now,
   };
+  const sourceGuard = input.sourceUpdatedAt
+    ? or(
+        isNull(pullRequests.sourceUpdatedAt),
+        lte(pullRequests.sourceUpdatedAt, input.sourceUpdatedAt),
+      )
+    : undefined;
   const [row] = await db
     .insert(pullRequests)
     .values(values)
     .onConflictDoUpdate({
-      target: pullRequests.id,
+      target: pullRequests.githubPrId,
       set: {
-        githubPrId: values.githubPrId,
+        repoFullName: values.repoFullName,
+        number: values.number,
         currentState: values.currentState,
+        ...(input.sourceUpdatedAt !== undefined ? { sourceUpdatedAt: values.sourceUpdatedAt } : {}),
         // Only overwrite headSha when a new one is supplied (synchronize/opened).
         ...(input.headSha !== undefined ? { headSha: input.headSha } : {}),
         updatedAt: now,
       },
+      ...(sourceGuard ? { setWhere: sourceGuard } : {}),
     })
     .returning();
-  return row as PullRequestRow;
+  if (row) return { row: row as PullRequestRow, sourceAccepted: true };
+
+  const existing = await findByGithubPrId(db, input.githubPrId);
+  if (!existing) throw new Error(`PR upsert returned no row for GitHub PR ${input.githubPrId}`);
+  return { row: existing, sourceAccepted: false };
+}
+
+/** Idempotent on GitHub's immutable PR id; preserves the stable internal row id. */
+export async function upsertPullRequest(db: Db, input: UpsertPrInput): Promise<PullRequestRow> {
+  return (await upsert(db, input)).row;
+}
+
+/** Apply a versioned GitHub snapshot, rejecting snapshots older than the stored source version. */
+export async function applyPullRequestSource(
+  db: Db,
+  input: PullRequestSourceInput,
+): Promise<UpsertResult> {
+  return upsert(db, input);
 }
 
 export async function setChannel(
@@ -69,6 +105,18 @@ export async function updateState(
     .where(eq(pullRequests.id, id));
 }
 
+export async function markSlackStateApplied(
+  db: Db,
+  id: string,
+  state: "draft" | "pr" | "closed" | "merged",
+  appliedChannelName: string,
+): Promise<void> {
+  await db
+    .update(pullRequests)
+    .set({ appliedState: state, appliedChannelName, updatedAt: new Date() })
+    .where(eq(pullRequests.id, id));
+}
+
 export async function findByRepoNumber(
   db: Db,
   repoFullName: string,
@@ -77,7 +125,19 @@ export async function findByRepoNumber(
   const [row] = await db
     .select()
     .from(pullRequests)
-    .where(eq(pullRequests.id, prId(repoFullName, number)))
+    .where(and(eq(pullRequests.repoFullName, repoFullName), eq(pullRequests.number, number)))
+    .limit(1);
+  return row;
+}
+
+export async function findByGithubPrId(
+  db: Db,
+  githubPrId: number,
+): Promise<PullRequestRow | undefined> {
+  const [row] = await db
+    .select()
+    .from(pullRequests)
+    .where(eq(pullRequests.githubPrId, githubPrId))
     .limit(1);
   return row;
 }

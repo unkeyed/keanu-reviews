@@ -8,12 +8,6 @@ import { z } from "zod";
  * are never emitted by the logger (see `logger.ts`).
  */
 
-const csv = (val: string): string[] =>
-  val
-    .split(",")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-
 const ConfigSchema = z.object({
   // Runtime
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -24,12 +18,13 @@ const ConfigSchema = z.object({
   GITHUB_APP_ID: z.string().min(1, "GITHUB_APP_ID is required"),
   GITHUB_APP_PRIVATE_KEY: z.string().min(1, "GITHUB_APP_PRIVATE_KEY is required"),
   GITHUB_WEBHOOK_SECRET: z.string().min(1, "GITHUB_WEBHOOK_SECRET is required"),
-  // Installation allowlist (U3): one or more numeric installation ids, comma-separated.
-  GITHUB_INSTALLATION_IDS: z
+  // The first release deliberately supports exactly one GitHub installation.
+  GITHUB_INSTALLATION_ID: z
     .string()
-    .min(1, "GITHUB_INSTALLATION_IDS is required")
-    .transform(csv)
-    .pipe(z.array(z.string().regex(/^\d+$/, "installation ids must be numeric")).min(1)),
+    .min(1, "GITHUB_INSTALLATION_ID is required")
+    .transform((value) => value.trim())
+    .refine((value) => !value.includes(","), "configure a single GitHub installation")
+    .refine((value) => /^\d+$/.test(value), "installation id must be numeric"),
 
   // Slack (U4-U9)
   SLACK_BOT_TOKEN: z.string().min(1, "SLACK_BOT_TOKEN is required"),

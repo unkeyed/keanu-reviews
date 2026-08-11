@@ -83,6 +83,25 @@ describe("pull_requests", () => {
     expect(byHead.map((row) => row.number)).toEqual([1423]);
     expect(await findAllByRepoHeadSha(db, "unkey/api", "abc123")).toEqual([]);
   });
+
+  it("preserves the row id and foreign-key identity when a repository is renamed", async () => {
+    const original = await upsertPullRequest(db, {
+      repoFullName: "unkey/api",
+      number: 1423,
+      githubPrId: 999,
+      currentState: "pr",
+    });
+    const renamed = await upsertPullRequest(db, {
+      repoFullName: "unkey/platform",
+      number: 1423,
+      githubPrId: 999,
+      currentState: "pr",
+    });
+
+    expect(renamed.id).toBe(original.id);
+    expect(await findByRepoNumber(db, "unkey/api", 1423)).toBeUndefined();
+    expect((await findByRepoNumber(db, "unkey/platform", 1423))?.id).toBe(original.id);
+  });
 });
 
 describe("dedupe", () => {

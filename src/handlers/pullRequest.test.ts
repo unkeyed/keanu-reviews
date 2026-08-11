@@ -18,10 +18,14 @@ beforeEach(async () => {
 });
 afterEach(() => close());
 
-const payload = (action: string, over: Partial<PullRequestPayload["pull_request"]> = {}) =>
+const payload = (
+  action: string,
+  over: Partial<PullRequestPayload["pull_request"]> = {},
+  repoFullName = "unkey/api",
+) =>
   ({
     action,
-    repository: { full_name: "unkey/api" },
+    repository: { full_name: repoFullName },
     pull_request: {
       number: 1423,
       id: 999,
@@ -31,6 +35,7 @@ const payload = (action: string, over: Partial<PullRequestPayload["pull_request"
       html_url: "https://github.com/unkey/api/pull/1423",
       user: { login: "oz" },
       head: { sha: "sha1" },
+      updated_at: "2026-08-11T12:00:00Z",
       ...over,
     },
   }) satisfies PullRequestPayload;
@@ -117,5 +122,132 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     expect(slack.channels).toHaveLength(1);
     expect(slack.messages).toHaveLength(1);
     expect(slack.messages[0]?.clientMsgId).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("retries Slack reconciliation after a rename failure without regressing source state", async () => {
+    await handlePullRequest(deps(), payload("opened", { draft: true }));
+    const rename = slack.renameChannel.bind(slack);
+    let fail = true;
+    slack.renameChannel = async (channelId, name) => {
+      if (fail) {
+        fail = false;
+        throw new Error("rename failed");
+      }
+      return rename(channelId, name);
+    };
+
+    const ready = payload("ready_for_review", {
+      draft: false,
+      updated_at: "2026-08-11T12:01:00Z",
+    });
+    await expect(handlePullRequest(deps(), ready)).rejects.toThrow("rename failed");
+    const pending = await findByRepoNumber(db, "unkey/api", 1423);
+    expect(pending?.currentState).toBe("pr");
+    expect(pending?.appliedState).toBe("draft");
+    await handlePullRequest(deps(), ready);
+
+    expect(slack.channel("C1")?.name).toBe("pr-api-1423");
+  });
+
+  it("retries archive after rename succeeded but archive failed", async () => {
+    await handlePullRequest(deps(), payload("opened"));
+    const archive = slack.archiveChannel.bind(slack);
+    let fail = true;
+    slack.archiveChannel = async (channelId) => {
+      if (fail) {
+        fail = false;
+        throw new Error("archive failed");
+      }
+      return archive(channelId);
+    };
+
+    const closed = payload("closed", {
+      updated_at: "2026-08-11T12:01:00Z",
+    });
+    await expect(handlePullRequest(deps(), closed)).rejects.toThrow("archive failed");
+    const pending = await findByRepoNumber(db, "unkey/api", 1423);
+    expect(pending?.currentState).toBe("closed");
+    expect(pending?.appliedState).toBe("pr");
+    await handlePullRequest(deps(), closed);
+
+    expect(slack.channel("C1")?.name).toBe("closed-api-1423");
+    expect(slack.channel("C1")?.archived).toBe(true);
+  });
+
+  it("archives a terminal-first event after a root-post failure and retry", async () => {
+    const operations: string[] = [];
+    const post = slack.postMessage.bind(slack);
+    const rename = slack.renameChannel.bind(slack);
+    const archive = slack.archiveChannel.bind(slack);
+    let fail = true;
+    slack.postMessage = async (message) => {
+      if (fail) {
+        fail = false;
+        throw new Error("root failed");
+      }
+      return post(message);
+    };
+    slack.renameChannel = async (channelId, name) => {
+      operations.push("rename");
+      return rename(channelId, name);
+    };
+    slack.archiveChannel = async (channelId) => {
+      operations.push("archive");
+      return archive(channelId);
+    };
+
+    const closed = payload("closed", {
+      merged: true,
+      updated_at: "2026-08-11T12:01:00Z",
+    });
+    await expect(handlePullRequest(deps(), closed)).rejects.toThrow("root failed");
+    expect((await findByRepoNumber(db, "unkey/api", 1423))?.appliedState).toBeNull();
+    await handlePullRequest(deps(), closed);
+
+    expect(slack.channels).toHaveLength(1);
+    expect(slack.channel("C1")?.name).toBe("merged-api-1423");
+    expect(slack.channel("C1")?.archived).toBe(true);
+    expect(operations).toEqual(["rename", "archive"]);
+  });
+
+  it("ignores an older lifecycle event after a newer terminal state", async () => {
+    await handlePullRequest(
+      deps(),
+      payload("closed", {
+        merged: true,
+        updated_at: "2026-08-11T12:02:00Z",
+      }),
+    );
+    await handlePullRequest(
+      deps(),
+      payload("opened", {
+        merged: false,
+        updated_at: "2026-08-11T12:01:00Z",
+      }),
+    );
+
+    const row = await findByRepoNumber(db, "unkey/api", 1423);
+    expect(row?.currentState).toBe("merged");
+    expect(row?.sourceUpdatedAt?.toISOString()).toBe("2026-08-11T12:02:00.000Z");
+    expect(slack.channel("C1")?.name).toBe("merged-api-1423");
+    expect(slack.channel("C1")?.archived).toBe(true);
+  });
+
+  it("reuses the PR row and channel after a repository rename", async () => {
+    await handlePullRequest(deps(), payload("opened"));
+    const original = await findByRepoNumber(db, "unkey/api", 1423);
+
+    await handlePullRequest(
+      deps(),
+      payload("edited", { updated_at: "2026-08-11T12:01:00Z" }, "unkey/platform"),
+    );
+
+    const renamed = await findByRepoNumber(db, "unkey/platform", 1423);
+    expect(renamed?.id).toBe(original?.id);
+    expect(renamed?.channelId).toBe("C1");
+    expect(renamed?.appliedChannelName).toBe("pr-platform-1423");
+    expect(await findByRepoNumber(db, "unkey/api", 1423)).toBeUndefined();
+    expect(slack.channels).toHaveLength(1);
+    expect(slack.channel("C1")?.name).toBe("pr-platform-1423");
   });
 });

@@ -79,6 +79,7 @@ const pr = (over: object = {}) => ({
   html_url: `https://github.com/${REPO}/pull/1423`,
   user: { login: "oz" },
   head: { sha: "sha1" },
+  updated_at: "2026-08-11T12:00:00Z",
   ...over,
 });
 

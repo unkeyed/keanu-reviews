@@ -43,18 +43,26 @@ export const installations = pgTable("installations", {
 export const pullRequests = pgTable(
   "pull_requests",
   {
-    id: text("id").primaryKey(), // `${repoFullName}#${number}`
+    // Stable internal/FK identity. It is derived when first observed, then
+    // deliberately preserved across repository renames and transfers.
+    id: text("id").primaryKey(),
     repoFullName: text("repo_full_name").notNull(),
     number: integer("number").notNull(),
     githubPrId: bigint("github_pr_id", { mode: "number" }).notNull(),
     channelId: text("channel_id"),
+    // GitHub's latest desired state is distinct from the state successfully
+    // applied to Slack so partial external failures remain retryable.
     currentState: prStateEnum("current_state").notNull(),
+    appliedState: prStateEnum("applied_state"),
+    appliedChannelName: text("applied_channel_name"),
+    sourceUpdatedAt: timestamp("source_updated_at", { withTimezone: true }),
     headSha: text("head_sha"), // CI mapping join key (U7), refreshed on opened/synchronize
     rootMessageTs: text("root_message_ts"), // Slack thread root for follow-up activity (R7)
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
+    githubPrIdUnique: uniqueIndex("pr_github_id_unique").on(t.githubPrId),
     repoNumberUnique: uniqueIndex("pr_repo_number_unique").on(t.repoFullName, t.number),
     headShaIdx: index("pr_head_sha_idx").on(t.headSha),
   }),

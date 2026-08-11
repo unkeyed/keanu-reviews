@@ -1,9 +1,10 @@
 import type { Db } from "../db/client.ts";
 import {
+  applyPullRequestSource,
+  findByGithubPrId,
   findByRepoNumber,
+  markSlackStateApplied,
   setChannel,
-  updateState,
-  upsertPullRequest,
 } from "../db/repositories/pullRequests.ts";
 import { cancelForPr } from "../db/repositories/reminders.ts";
 import { type PrState, computeTargetState, isTerminal } from "../domain/prState.ts";
@@ -24,6 +25,7 @@ export interface PullRequestPayload {
     html_url: string;
     user: { login: string };
     head: { sha: string };
+    updated_at: string;
   };
   repository: { full_name: string };
 }
@@ -51,28 +53,43 @@ export async function handlePullRequest(
     merged: pr.merged ?? false,
   });
 
-  const existing = await findByRepoNumber(db, repoFullName, pr.number);
+  const sourceUpdatedAt = new Date(pr.updated_at);
+  if (Number.isNaN(sourceUpdatedAt.getTime())) {
+    throw new Error(`Invalid pull_request.updated_at for GitHub PR ${pr.id}`);
+  }
+
+  const existing = await findByGithubPrId(db, pr.id);
   const state: PrState = target ?? existing?.currentState ?? (pr.draft ? "draft" : "pr");
 
-  const row = await upsertPullRequest(db, {
+  const source = await applyPullRequestSource(db, {
     repoFullName,
     number: pr.number,
     githubPrId: pr.id,
     currentState: state,
     headSha: pr.head.sha, // refreshed on opened/synchronize (U7 mapping)
+    sourceUpdatedAt,
   });
+  if (!source.sourceAccepted) {
+    logger.info("stale PR lifecycle event ignored", {
+      githubPrId: pr.id,
+      incomingUpdatedAt: pr.updated_at,
+      storedUpdatedAt: source.row.sourceUpdatedAt?.toISOString(),
+    });
+    return;
+  }
+  const row = source.row;
 
   let current = row;
   let channelCreated = false;
   let rootReconciled = false;
   // Persist the channel immediately so a root-post failure cannot orphan it.
   if (!row.channelId) {
-    const name = channelName(state, repoFullName, pr.number);
+    const name = channelName(row.currentState, row.repoFullName, row.number);
     const { channelId } = await slack.createChannel(name);
     await setChannel(db, row.id, channelId, null);
     current = { ...row, channelId, rootMessageTs: null };
     channelCreated = true;
-    logger.info("channel created", { prId: row.id, channelId, state });
+    logger.info("channel created", { prId: row.id, channelId, state: row.currentState });
   }
 
   const channelId = current.channelId;
@@ -87,28 +104,37 @@ export async function handlePullRequest(
       {
         channel: channelId,
         text: sanitizeMrkdwn(`PR #${pr.number}: ${pr.title}`),
-        blocks: lifecycleBlocks(pr, state),
+        blocks: lifecycleBlocks(pr, row.currentState),
       },
     );
     await setChannel(db, current.id, channelId, root.slackTs);
     current = { ...current, rootMessageTs: root.slackTs };
   }
 
-  const prevState = existing?.currentState;
+  const desiredState = current.currentState;
+  const desiredChannelName = channelName(desiredState, current.repoFullName, current.number);
+  const needsSlackReconciliation =
+    current.appliedState !== desiredState || current.appliedChannelName !== desiredChannelName;
 
-  if (target && target !== prevState) {
-    const name = channelName(target, repoFullName, pr.number);
-    if (payload.action === "reopened" && prevState && isTerminal(prevState)) {
+  if (needsSlackReconciliation) {
+    // Either side being terminal can mean the real channel is archived after a
+    // partial prior attempt. Make it writable before the idempotent rename.
+    if (isTerminal(desiredState) || (current.appliedState && isTerminal(current.appliedState))) {
       await slack.unarchiveChannel(channelId);
     }
-    await slack.renameChannel(channelId, name); // rename first, always (KTD8)
-    await updateState(db, current.id, target);
+    await slack.renameChannel(channelId, desiredChannelName); // rename first, always (KTD8)
 
-    if (isTerminal(target)) {
+    if (isTerminal(desiredState)) {
       await slack.archiveChannel(channelId); // ...then archive
       await cancelForPr(db, current.id); // stop pending reminders on close/merge
     }
-    logger.info("channel state reconciled", { prId: current.id, from: prevState, to: target });
+    await markSlackStateApplied(db, current.id, desiredState, desiredChannelName);
+    logger.info("channel state reconciled", {
+      prId: current.id,
+      from: current.appliedState,
+      to: desiredState,
+      channelName: desiredChannelName,
+    });
   }
 
   // Thread a lifecycle note under the root for notable transitions.
@@ -119,13 +145,13 @@ export async function handlePullRequest(
       {
         prId: current.id,
         kind: "lifecycle",
-        githubEventRef: `${payload.action}:${state}:${pr.head.sha}`,
+        githubEventRef: `${payload.action}:${desiredState}:${pr.head.sha}:${pr.updated_at}`,
       },
       {
         channel: channelId,
         text: sanitizeMrkdwn(`PR #${pr.number} ${payload.action}`),
         threadTs: current.rootMessageTs,
-        blocks: lifecycleBlocks(pr, state),
+        blocks: lifecycleBlocks(pr, desiredState),
       },
     );
   }

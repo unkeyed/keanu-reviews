@@ -41,8 +41,7 @@ function boot(): void {
   const auth = createInstallationAuth(
     octokitMintFn(config.GITHUB_APP_ID, config.GITHUB_APP_PRIVATE_KEY),
   );
-  // Single configured installation for the first release.
-  const installationId = config.GITHUB_INSTALLATION_IDS[0] ?? "";
+  const installationId = config.GITHUB_INSTALLATION_ID;
 
   // Scheduler + router + worker
   const scheduler = createReminderScheduler({
@@ -69,7 +68,7 @@ function boot(): void {
     db,
     logger,
     webhookSecret: config.GITHUB_WEBHOOK_SECRET,
-    allowedInstallationIds: config.GITHUB_INSTALLATION_IDS,
+    allowedInstallationIds: [installationId],
   });
   const slackCommand = createSlackCommandRoute({
     db,

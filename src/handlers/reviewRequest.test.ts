@@ -39,6 +39,7 @@ const payload = (over: Partial<ReviewRequestPayload> = {}): ReviewRequestPayload
     html_url: "https://github.com/unkey/api/pull/1",
     user: { login: "oz" },
     head: { sha: "sha-1" },
+    updated_at: "2026-08-11T12:00:00Z",
   },
   requested_reviewer: { id: 7, login: "flo" },
   ...over,
