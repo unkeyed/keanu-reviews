@@ -38,6 +38,20 @@ const body = (overrides: object = {}) =>
   JSON.stringify({ action: "opened", installation: { id: 42 }, number: 1, ...overrides });
 
 describe("github webhook route", () => {
+  it("rejects payloads larger than 1 MiB before signature verification or persistence", async () => {
+    const oversized = "x".repeat(1024 * 1024 + 1);
+    const res = await post(oversized, {
+      "x-hub-signature-256": sign(oversized),
+      "x-github-event": "pull_request",
+      "x-github-delivery": "d-oversized",
+      "content-type": "application/json",
+    });
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: "payload_too_large" });
+    expect(await jobCount()).toBe(0);
+  });
+
   it("accepts a valid, allowlisted delivery and enqueues exactly one job", async () => {
     const b = body();
     const res = await post(b, {

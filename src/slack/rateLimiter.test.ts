@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { withRetry } from "./rateLimiter.ts";
+import { Pacer, withRetry } from "./rateLimiter.ts";
 
 describe("withRetry (429 Retry-After, KTD9)", () => {
   it("retries after Retry-After on a 429 then succeeds", async () => {
@@ -31,5 +31,31 @@ describe("withRetry (429 Retry-After, KTD9)", () => {
     });
     await expect(withRetry(fn)).rejects.toThrow("boom");
     expect(fn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Pacer", () => {
+  it("preserves the last-send timestamp across sequential calls for a key", async () => {
+    let currentTime = 1_000;
+    const sleep = vi.fn(async (ms: number) => {
+      currentTime += ms;
+    });
+    const pacer = new Pacer(250, sleep, () => currentTime);
+
+    await pacer.run("channel", async () => "first");
+    await pacer.run("channel", async () => "second");
+
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalledWith(250);
+  });
+
+  it("tracks pacing independently per key", async () => {
+    const sleep = vi.fn(async () => {});
+    const pacer = new Pacer(250, sleep, () => 1_000);
+
+    await pacer.run("channel-a", async () => undefined);
+    await pacer.run("channel-b", async () => undefined);
+
+    expect(sleep).not.toHaveBeenCalled();
   });
 });

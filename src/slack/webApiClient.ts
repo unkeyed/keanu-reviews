@@ -9,6 +9,26 @@ export function isSlackChannelAlreadyInState(
   return (error as { data?: { error?: string } })?.data?.error === expectedCode;
 }
 
+interface SlackUserLookupApi {
+  lookupByEmail(input: { email: string }): Promise<{ user?: { id?: string } }>;
+}
+
+/** Slack uses `users_not_found` for a legitimate lookup miss; all other errors are operational. */
+export async function lookupSlackUserByEmail(
+  users: SlackUserLookupApi,
+  email: string,
+): Promise<string | undefined> {
+  try {
+    const result = await users.lookupByEmail({ email });
+    return result.user?.id;
+  } catch (error) {
+    if ((error as { data?: { error?: string } })?.data?.error === "users_not_found") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 /**
  * Real Slack client (KTD9). Wraps @slack/web-api, retries on 429 honoring
  * Retry-After, and paces posts to ~1/sec per channel. Channel creation is
@@ -91,12 +111,7 @@ export function createWebApiSlackClient(token: string): SlackClient {
       ),
     lookupUserByEmail: (email) =>
       call(async () => {
-        try {
-          const res = await web.users.lookupByEmail({ email });
-          return res.user?.id;
-        } catch {
-          return undefined; // users_not_found -> miss
-        }
+        return lookupSlackUserByEmail(web.users, email);
       }),
   };
 }

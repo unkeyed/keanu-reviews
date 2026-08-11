@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import type { Db } from "../db/client.ts";
 import { enqueueDeliveryJob } from "../db/repositories/jobs.ts";
 import { verifySignature } from "../github/verify.ts";
@@ -19,6 +20,14 @@ export interface WebhookDeps {
  */
 export function createGithubWebhookRoute(deps: WebhookDeps): Hono {
   const app = new Hono();
+
+  app.use(
+    "/webhooks/github",
+    bodyLimit({
+      maxSize: 1024 * 1024,
+      onError: (c) => c.json({ error: "payload_too_large" }, 413),
+    }),
+  );
 
   app.post("/webhooks/github", async (c) => {
     const raw = await c.req.text(); // exact bytes GitHub signed — do not parse-then-restringify

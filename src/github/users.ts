@@ -2,6 +2,19 @@ import type { PrForShaFetcher } from "../ci/status.ts";
 import type { GithubUserFetcher } from "../identity/link.ts";
 import type { GithubEmailFetcher } from "../identity/resolve.ts";
 import type { InstallationAuth } from "./auth.ts";
+import { GithubApiError, type GithubRequestOptions, githubGetJson } from "./http.ts";
+
+export { GithubApiError } from "./http.ts";
+
+type GithubUserResponse = { id?: unknown; login?: unknown };
+type GithubEmailResponse = { email?: unknown };
+
+function invalidResponse(path: string): GithubApiError {
+  return new GithubApiError("GitHub API returned an unexpected response shape", {
+    kind: "invalid_response",
+    url: `https://api.github.com${path}`,
+  });
+}
 
 /**
  * Production GitHub email fetcher (U5). Reads a user's public profile via
@@ -11,19 +24,15 @@ import type { InstallationAuth } from "./auth.ts";
 export function createGithubEmailFetcher(
   auth: InstallationAuth,
   installationId: string,
+  options: GithubRequestOptions = {},
 ): GithubEmailFetcher {
   return async (login: string): Promise<string | undefined> => {
-    const token = await auth.getToken(installationId);
-    const res = await fetch(`https://api.github.com/users/${encodeURIComponent(login)}`, {
-      headers: {
-        authorization: `Bearer ${token}`,
-        accept: "application/vnd.github+json",
-        "user-agent": "unkey-slack-pr-bot",
-      },
-    });
-    if (!res.ok) return undefined;
-    const body = (await res.json()) as { email?: string | null };
-    return body.email ?? undefined;
+    const path = `/users/${encodeURIComponent(login)}`;
+    const body = await githubGetJson<GithubEmailResponse>(auth, installationId, path, options);
+    if (body === undefined) return undefined;
+    if (body.email === null) return undefined;
+    if (typeof body.email !== "string") throw invalidResponse(path);
+    return body.email;
   };
 }
 
@@ -31,19 +40,16 @@ export function createGithubEmailFetcher(
 export function createGithubUserFetcher(
   auth: InstallationAuth,
   installationId: string,
+  options: GithubRequestOptions = {},
 ): GithubUserFetcher {
   return async (login: string) => {
-    const token = await auth.getToken(installationId);
-    const res = await fetch(`https://api.github.com/users/${encodeURIComponent(login)}`, {
-      headers: {
-        authorization: `Bearer ${token}`,
-        accept: "application/vnd.github+json",
-        "user-agent": "unkey-slack-pr-bot",
-      },
-    });
-    if (!res.ok) return undefined;
-    const body = (await res.json()) as { id?: number; login?: string };
-    return body.id && body.login ? { id: body.id, login: body.login } : undefined;
+    const path = `/users/${encodeURIComponent(login)}`;
+    const body = await githubGetJson<GithubUserResponse>(auth, installationId, path, options);
+    if (body === undefined) return undefined;
+    if (!Number.isInteger(body.id) || typeof body.login !== "string" || body.login.length === 0) {
+      throw invalidResponse(path);
+    }
+    return { id: body.id as number, login: body.login };
   };
 }
 
@@ -51,20 +57,26 @@ export function createGithubUserFetcher(
 export function createPrForShaFetcher(
   auth: InstallationAuth,
   installationId: string,
+  options: GithubRequestOptions = {},
 ): PrForShaFetcher {
   return async (repoFullName: string, sha: string) => {
-    const token = await auth.getToken(installationId);
-    const res = await fetch(`https://api.github.com/repos/${repoFullName}/commits/${sha}/pulls`, {
-      headers: {
-        authorization: `Bearer ${token}`,
-        accept: "application/vnd.github+json",
-        "user-agent": "unkey-slack-pr-bot",
-      },
-    });
-    if (!res.ok) return [];
-    const body = (await res.json()) as { number?: number }[];
-    return body.flatMap((pullRequest) =>
-      pullRequest.number === undefined ? [] : [pullRequest.number],
-    );
+    const repoPath = repoFullName.split("/").map(encodeURIComponent).join("/");
+    const path = `/repos/${repoPath}/commits/${encodeURIComponent(sha)}/pulls`;
+    const body = await githubGetJson<unknown>(auth, installationId, path, options);
+    if (body === undefined) return [];
+    if (!Array.isArray(body)) throw invalidResponse(path);
+
+    const numbers: number[] = [];
+    for (const pullRequest of body) {
+      if (
+        typeof pullRequest !== "object" ||
+        pullRequest === null ||
+        !Number.isInteger((pullRequest as { number?: unknown }).number)
+      ) {
+        throw invalidResponse(path);
+      }
+      numbers.push((pullRequest as { number: number }).number);
+    }
+    return numbers;
   };
 }

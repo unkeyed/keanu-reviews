@@ -40,19 +40,26 @@ export async function withRetry<T>(
 /** Serialize calls sharing a key, enforcing a minimum interval between them. */
 export class Pacer {
   private chains = new Map<string, Promise<unknown>>();
-  constructor(
-    private readonly minIntervalMs: number,
-    private readonly sleep: SleepFn = realSleep,
-    private readonly now: () => number = Date.now,
-  ) {}
+  private lastAt = new Map<string, number>();
+  private readonly minIntervalMs: number;
+  private readonly sleep: SleepFn;
+  private readonly now: () => number;
+
+  constructor(minIntervalMs: number, sleep: SleepFn = realSleep, now: () => number = Date.now) {
+    this.minIntervalMs = minIntervalMs;
+    this.sleep = sleep;
+    this.now = now;
+  }
 
   run<T>(key: string, fn: () => Promise<T>): Promise<T> {
     const prior = this.chains.get(key) ?? Promise.resolve();
-    let lastAt = 0;
     const next = prior.then(async () => {
-      const wait = this.minIntervalMs - (this.now() - lastAt);
-      if (wait > 0) await this.sleep(wait);
-      lastAt = this.now();
+      const lastAt = this.lastAt.get(key);
+      if (lastAt !== undefined) {
+        const wait = this.minIntervalMs - (this.now() - lastAt);
+        if (wait > 0) await this.sleep(wait);
+      }
+      this.lastAt.set(key, this.now());
       return fn();
     });
     this.chains.set(

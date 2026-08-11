@@ -46,6 +46,15 @@ const post = (body: string, sig: string) =>
   });
 
 describe("slash command /link-github (U9)", () => {
+  it("rejects request bodies larger than 64 KiB before command processing", async () => {
+    const oversized = `user_id=U7&text=${"x".repeat(64 * 1024)}`;
+    const res = await post(oversized, sign(oversized));
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: "payload_too_large" });
+    expect(fetchGithubUser).not.toHaveBeenCalled();
+  });
+
   it("links the invoking Slack user to a resolved GitHub login", async () => {
     const body = "user_id=U7&text=octocat";
     const res = await post(body, sign(body));

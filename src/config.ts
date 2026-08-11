@@ -50,9 +50,12 @@ export const SECRET_KEYS = [
 ] as const;
 
 export class ConfigError extends Error {
-  constructor(public readonly issues: string[]) {
+  readonly issues: string[];
+
+  constructor(issues: string[]) {
     super(`Invalid configuration:\n  - ${issues.join("\n  - ")}`);
     this.name = "ConfigError";
+    this.issues = issues;
   }
 }
 

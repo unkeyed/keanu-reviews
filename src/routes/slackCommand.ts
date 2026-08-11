@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { type LinkDeps, linkIdentity } from "../identity/link.ts";
 import type { Logger } from "../logger.ts";
 import { verifySlackSignature } from "../slack/verify.ts";
@@ -15,6 +16,14 @@ export interface SlackCommandDeps extends LinkDeps {
  */
 export function createSlackCommandRoute(deps: SlackCommandDeps): Hono {
   const app = new Hono();
+
+  app.use(
+    "/slack/commands",
+    bodyLimit({
+      maxSize: 64 * 1024,
+      onError: (c) => c.json({ error: "payload_too_large" }, 413),
+    }),
+  );
 
   app.post("/slack/commands", async (c) => {
     const rawBody = await c.req.text();
