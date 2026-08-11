@@ -97,6 +97,64 @@ describe("handleReviewComment (U6)", () => {
     expect(slack.messages.length).toBe(count);
   });
 
+  it("retries a failed Slack delivery without suppressing the comment", async () => {
+    await seedChannel();
+    const post = slack.postMessage.bind(slack);
+    let fail = true;
+    slack.postMessage = async (message) => {
+      if (fail) {
+        fail = false;
+        throw new Error("transient Slack failure");
+      }
+      return post(message);
+    };
+
+    await expect(handleReviewComment(deps(), payload())).rejects.toThrow("transient Slack failure");
+    await handleReviewComment(deps(), payload());
+
+    expect(slack.messages).toHaveLength(1);
+    expect(slack.messages[0]?.clientMsgId).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("deduplicates an ambiguous retry after Slack accepted the first post", async () => {
+    await seedChannel();
+    const post = slack.postMessage.bind(slack);
+    let loseResponse = true;
+    slack.postMessage = async (message) => {
+      const response = await post(message);
+      if (loseResponse) {
+        loseResponse = false;
+        throw new Error("connection closed after send");
+      }
+      return response;
+    };
+
+    await expect(handleReviewComment(deps(), payload())).rejects.toThrow(
+      "connection closed after send",
+    );
+    await handleReviewComment(deps(), payload());
+    expect(slack.messages).toHaveLength(1);
+  });
+
+  it("uses the canonical comment URL when GitHub supplies no current line", async () => {
+    await seedChannel();
+    await handleReviewComment(deps(), payload({ line: null, start_line: null }));
+    const rendered = JSON.stringify(slack.messages.at(-1)?.blocks);
+    expect(rendered).toContain("https://github.com/unkey/api/pull/1423#discussion_r55|Open");
+    expect(rendered).not.toContain(":1`");
+  });
+
+  it("sanitizes untrusted paths and logins in blocks and fallback text", async () => {
+    await seedChannel();
+    await handleReviewComment(
+      deps(),
+      payload({ path: "src/` <!channel>.ts", user: { id: 8, login: "<!everyone>" } }),
+    );
+    const message = slack.messages.at(-1);
+    expect(JSON.stringify(message)).not.toContain("<!channel>");
+    expect(JSON.stringify(message)).not.toContain("<!everyone>");
+  });
+
   it("sets a top-level text fallback on every message", async () => {
     await seedChannel();
     await handleReviewComment(deps(), payload());

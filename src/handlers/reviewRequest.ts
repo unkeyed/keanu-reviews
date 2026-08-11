@@ -1,14 +1,15 @@
 import type { Db } from "../db/client.ts";
-import { recordMessage } from "../db/repositories/messages.ts";
-import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
 import { type GithubEmailFetcher, resolveSlackUser } from "../identity/resolve.ts";
 import type { Logger } from "../logger.ts";
+import { sanitizeInlineCode, sanitizeMrkdwn } from "../slack/blocks.ts";
 import type { SlackClient } from "../slack/client.ts";
+import { deliverSlackMessage } from "../slack/deliver.ts";
+import { type PullRequestPayload, ensurePullRequestChannel } from "./pullRequest.ts";
 
 export interface ReviewRequestPayload {
   action: "review_requested" | "review_request_removed" | string;
   repository: { full_name: string };
-  pull_request: { number: number };
+  pull_request: PullRequestPayload["pull_request"];
   requested_reviewer?: { id: number; login: string };
   requested_team?: { id: number; slug: string };
 }
@@ -34,14 +35,9 @@ export async function handleReviewRequest(
   payload: ReviewRequestPayload,
 ): Promise<void> {
   const { db, slack, logger } = deps;
-  const row = await findByRepoNumber(db, payload.repository.full_name, payload.pull_request.number);
-  if (!row?.channelId) {
-    logger.warn("review request for PR with no channel yet", {
-      repo: payload.repository.full_name,
-      number: payload.pull_request.number,
-    });
-    return;
-  }
+  const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
+  if (!row.channelId) throw new Error(`PR channel is not ready for ${row.id}`);
+  const channelId = row.channelId;
 
   if (payload.requested_team && !payload.requested_reviewer) {
     logger.info("team review requested; no per-user invite", { team: payload.requested_team.slug });
@@ -56,25 +52,19 @@ export async function handleReviewRequest(
     return;
   }
 
-  // Idempotent invite: record first; a repeat returns false and short-circuits.
-  const firstTime = await recordMessage(db, {
-    prId: row.id,
-    kind: "invite",
-    githubEventRef: String(reviewer.id),
-    slackTs: "-",
-  });
-
   const slackUserId = await resolveSlackUser(deps, {
     githubId: reviewer.id,
     login: reviewer.login,
   });
 
-  if (firstTime) {
-    if (slackUserId) {
-      await slack.inviteUsers(row.channelId, [slackUserId]);
-      await slack.postMessage({
-        channel: row.channelId,
-        text: `Review requested from ${reviewer.login}`,
+  if (slackUserId) {
+    await deliverSlackMessage(
+      db,
+      slack,
+      { prId: row.id, kind: "invite", githubEventRef: String(reviewer.id) },
+      {
+        channel: channelId,
+        text: sanitizeMrkdwn(`Review requested from ${reviewer.login}`),
         threadTs: row.rootMessageTs ?? undefined,
         blocks: [
           {
@@ -82,24 +72,30 @@ export async function handleReviewRequest(
             text: { type: "mrkdwn", text: `👀 Review requested from <@${slackUserId}>` },
           },
         ],
-      });
-    } else {
-      logger.info("reviewer identity unresolved; posting plain login", { login: reviewer.login });
-      await slack.postMessage({
-        channel: row.channelId,
-        text: `Review requested from ${reviewer.login}`,
+      },
+      () => slack.inviteUsers(channelId, [slackUserId]),
+    );
+  } else {
+    logger.info("reviewer identity unresolved; posting plain login", { login: reviewer.login });
+    await deliverSlackMessage(
+      db,
+      slack,
+      { prId: row.id, kind: "invite", githubEventRef: String(reviewer.id) },
+      {
+        channel: channelId,
+        text: sanitizeMrkdwn(`Review requested from ${reviewer.login}`),
         threadTs: row.rootMessageTs ?? undefined,
         blocks: [
           {
             type: "section",
             text: {
               type: "mrkdwn",
-              text: `👀 Review requested from \`${reviewer.login}\` _(no linked Slack user — /link-github to fix)_`,
+              text: `👀 Review requested from \`${sanitizeInlineCode(reviewer.login)}\` _(no linked Slack user — /link-github to fix)_`,
             },
           },
         ],
-      });
-    }
+      },
+    );
   }
 
   await deps.onReviewRequested?.(row.id, reviewer.id);

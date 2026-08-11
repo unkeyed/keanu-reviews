@@ -49,19 +49,29 @@ export function createWebApiSlackClient(token: string): SlackClient {
     inviteUsers: (channelId, userIds) =>
       call(async () => {
         if (userIds.length > 0) {
-          await web.conversations.invite({ channel: channelId, users: userIds.join(",") });
+          try {
+            await web.conversations.invite({ channel: channelId, users: userIds.join(",") });
+          } catch (error) {
+            const slackError = error as { data?: { error?: string } };
+            // An ambiguous earlier invite may have succeeded. Treat Slack's
+            // already-present response as the idempotent success it represents.
+            if (slackError.data?.error !== "already_in_channel") throw error;
+          }
         }
       }),
     postMessage: (msg: SlackMessage) =>
       postPacer.run(msg.channel, () =>
         call(async () => {
-          const res = await web.chat.postMessage({
+          // The Web API accepts client_msg_id even though the generated method
+          // arguments in this SDK version omit it, so use the generic call.
+          const res = (await web.apiCall("chat.postMessage", {
             channel: msg.channel,
             text: msg.text,
             blocks: msg.blocks as never,
             thread_ts: msg.threadTs,
-          });
-          return { ts: res.ts ?? "" };
+            client_msg_id: msg.clientMsgId,
+          })) as { ts?: unknown };
+          return { ts: typeof res.ts === "string" ? res.ts : "" };
         }),
       ),
     lookupUserByEmail: (email) =>

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../db/client.ts";
 import { setChannel, upsertPullRequest } from "../db/repositories/pullRequests.ts";
+import { pullRequests } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createLogger } from "../logger.ts";
 import { FakeSlackClient } from "../testing/fakeSlack.ts";
@@ -35,7 +36,16 @@ const deps = (over = {}) => ({ db, slack, logger: createLogger("error"), ...over
 const review = (state: string): ReviewPayload => ({
   action: "submitted",
   repository: { full_name: "unkey/api" },
-  pull_request: { number: 1 },
+  pull_request: {
+    number: 1,
+    id: 1,
+    draft: false,
+    merged: false,
+    title: "Review me",
+    html_url: "https://github.com/unkey/api/pull/1",
+    user: { login: "oz" },
+    head: { sha: "sha-1" },
+  },
   review: {
     id: 1,
     state,
@@ -65,6 +75,13 @@ describe("handleReview (U6, R5)", () => {
     await handleReview(deps({ onReviewSubmitted }), review("approved"));
     expect(onReviewSubmitted).toHaveBeenCalledWith("unkey/api#1", 7);
   });
+
+  it("reconciles the parent channel when a review arrives before opened", async () => {
+    await db.delete(pullRequests);
+    await handleReview(deps(), review("approved"));
+    expect(slack.channels).toHaveLength(1);
+    expect(slack.messages.at(-1)?.threadTs).toBeDefined();
+  });
 });
 
 describe("handleIssueComment (U6)", () => {
@@ -88,5 +105,23 @@ describe("handleIssueComment (U6)", () => {
   it("ignores a comment on a non-PR issue", async () => {
     await handleIssueComment(deps(), issueComment(false));
     expect(slack.messages).toHaveLength(0);
+  });
+
+  it("throws for a PR comment whose parent mapping is not ready", async () => {
+    await db.delete(pullRequests);
+    await expect(handleIssueComment(deps(), issueComment(true))).rejects.toThrow(
+      "PR channel is not ready",
+    );
+  });
+
+  it("keeps the final rendered issue-comment section within Slack's limit", async () => {
+    const input = issueComment(true);
+    input.comment.body = `${"x\n".repeat(2_000)}<!channel>`;
+    input.comment.user.login = "<!everyone>";
+    await handleIssueComment(deps(), input);
+    const block = slack.messages.at(-1)?.blocks?.[0] as { text?: { text?: string } };
+    expect(block.text?.text?.length).toBeLessThanOrEqual(3_000);
+    expect(JSON.stringify(slack.messages.at(-1))).not.toContain("<!channel>");
+    expect(JSON.stringify(slack.messages.at(-1))).not.toContain("<!everyone>");
   });
 });

@@ -30,4 +30,15 @@ describe("reviewCommentBlocks", () => {
     expect(blocks[1]?.elements?.[0]?.text).toContain("`a.ts:5`");
     expect(blocks[1]?.elements?.[0]?.text).toContain("<@U1>");
   });
+
+  it("enforces the section limit after quote prefixes are rendered", () => {
+    const blocks = reviewCommentBlocks({
+      body: "x\n".repeat(2_000),
+      permalink: "https://github.com/o/r/pull/1#discussion_r1",
+      path: "a.ts",
+      line: 5,
+      authorMention: "safe-user",
+    }) as { text?: { text?: string } }[];
+    expect(blocks[0]?.text?.text?.length).toBeLessThanOrEqual(3_000);
+  });
 });

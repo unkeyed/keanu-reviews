@@ -14,5 +14,5 @@ export function conclusionLabel(conclusion: string): string {
   return CONCLUSION[conclusion] ?? conclusion;
 }
 
-/** Fetch the PR number that a commit heads (fallback when head_sha isn't stored). */
-export type PrForShaFetcher = (repoFullName: string, sha: string) => Promise<number | undefined>;
+/** Fetch every PR number that a commit heads (fallback when associations aren't stored). */
+export type PrForShaFetcher = (repoFullName: string, sha: string) => Promise<number[]>;

@@ -8,6 +8,7 @@ export class FakeSlackClient implements SlackClient {
   emailToUser = new Map<string, string>();
   private chanSeq = 0;
   private tsSeq = 0;
+  private clientMessageIds = new Map<string, string>();
 
   async createChannel(name: string): Promise<{ channelId: string }> {
     const id = `C${++this.chanSeq}`;
@@ -27,11 +28,23 @@ export class FakeSlackClient implements SlackClient {
     if (ch) ch.archived = false;
   }
   async inviteUsers(channelId: string, userIds: string[]): Promise<void> {
-    this.invites.push({ channelId, userIds });
+    const missing = userIds.filter(
+      (userId) =>
+        !this.invites.some(
+          (invite) => invite.channelId === channelId && invite.userIds.includes(userId),
+        ),
+    );
+    if (missing.length > 0) this.invites.push({ channelId, userIds: missing });
   }
   async postMessage(msg: SlackMessage): Promise<{ ts: string }> {
+    if (msg.clientMsgId) {
+      const existing = this.clientMessageIds.get(msg.clientMsgId);
+      if (existing) return { ts: existing };
+    }
     this.messages.push(msg);
-    return { ts: `ts-${++this.tsSeq}` };
+    const ts = `ts-${++this.tsSeq}`;
+    if (msg.clientMsgId) this.clientMessageIds.set(msg.clientMsgId, ts);
+    return { ts };
   }
   async lookupUserByEmail(email: string): Promise<string | undefined> {
     return this.emailToUser.get(email);

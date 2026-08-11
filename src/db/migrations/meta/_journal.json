@@ -15,6 +15,13 @@
       "when": 1786470451677,
       "tag": "0001_durable_leases",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786471020519,
+      "tag": "0002_cooing_nehzno",
+      "breakpoints": true
     }
   ]
 }

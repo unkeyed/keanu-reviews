@@ -20,15 +20,18 @@ afterEach(() => close());
 
 const deps = (over = {}) => ({ db, slack, logger: createLogger("error"), ...over });
 
-const seedPr = async (headSha: string) => {
+const seedPr = async (
+  headSha: string,
+  options: { repoFullName?: string; number?: number; channelId?: string } = {},
+) => {
   const row = await upsertPullRequest(db, {
-    repoFullName: "unkey/api",
-    number: 1,
-    githubPrId: 1,
+    repoFullName: options.repoFullName ?? "unkey/api",
+    number: options.number ?? 1,
+    githubPrId: options.number ?? 1,
     currentState: "pr",
     headSha,
   });
-  await setChannel(db, row.id, "C1", "ts-root");
+  await setChannel(db, row.id, options.channelId ?? "C1", "ts-root");
 };
 
 const payload = (over: Partial<CheckRunPayload["check_run"]> = {}): CheckRunPayload => ({
@@ -67,17 +70,44 @@ describe("handleCheckRun (U7, R6)", () => {
     expect(slack.messages).toHaveLength(1);
   });
 
+  it("routes by repository and posts to every associated tracked PR", async () => {
+    await seedPr("sha-1", { repoFullName: "other/api", channelId: "C-other" });
+    await seedPr("sha-1", { number: 1, channelId: "C1" });
+    await seedPr("sha-1", { number: 2, channelId: "C2" });
+
+    await handleCheckRun(
+      deps(),
+      payload({
+        pull_requests: [{ number: 1 }, { number: 2 }],
+      }),
+    );
+
+    expect(slack.messages.map((message) => message.channel).sort()).toEqual(["C1", "C2"]);
+  });
+
+  it("sanitizes an untrusted check name in blocks and fallback text", async () => {
+    await seedPr("sha-1");
+    await handleCheckRun(deps(), payload({ name: "tests <!channel>" }));
+    expect(JSON.stringify(slack.messages.at(-1))).not.toContain("<!channel>");
+  });
+
   it("falls back to REST when head_sha isn't stored, then ignores if unresolved", async () => {
     await seedPr("stored-sha");
-    const fetchPrForSha = vi.fn(async () => 1); // resolves the fork check to PR #1
+    const fetchPrForSha = vi.fn(async () => [1]); // resolves the fork check to PR #1
     await handleCheckRun(deps({ fetchPrForSha }), payload({ head_sha: "fork-sha" }));
     expect(fetchPrForSha).toHaveBeenCalled();
     expect(slack.messages).toHaveLength(1);
   });
 
   it("ignores a check whose head_sha maps to no tracked PR", async () => {
-    const fetchPrForSha = vi.fn(async () => undefined);
+    const fetchPrForSha = vi.fn(async () => []);
     await handleCheckRun(deps({ fetchPrForSha }), payload({ head_sha: "unknown" }));
     expect(slack.messages).toHaveLength(0);
+  });
+
+  it("retries when GitHub associates a PR whose local mapping is not ready", async () => {
+    await expect(
+      handleCheckRun(deps(), payload({ pull_requests: [{ number: 99 }] })),
+    ).rejects.toThrow("PR channel is not ready");
   });
 });

@@ -61,8 +61,10 @@ export function createPrForShaFetcher(
         "user-agent": "unkey-slack-pr-bot",
       },
     });
-    if (!res.ok) return undefined;
+    if (!res.ok) return [];
     const body = (await res.json()) as { number?: number }[];
-    return body[0]?.number;
+    return body.flatMap((pullRequest) =>
+      pullRequest.number === undefined ? [] : [pullRequest.number],
+    );
   };
 }

@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Db } from "../client.ts";
 import { type PullRequestRow, pullRequests } from "../schema.ts";
 
@@ -87,12 +87,14 @@ export async function findById(db: Db, id: string): Promise<PullRequestRow | und
   return row;
 }
 
-/** CI mapping (U7): resolve a check's head_sha to its tracked PR. */
-export async function findByHeadSha(db: Db, headSha: string): Promise<PullRequestRow | undefined> {
-  const [row] = await db
+/** CI mapping (U7): resolve a repository-scoped head SHA to every tracked PR. */
+export async function findAllByRepoHeadSha(
+  db: Db,
+  repoFullName: string,
+  headSha: string,
+): Promise<PullRequestRow[]> {
+  return db
     .select()
     .from(pullRequests)
-    .where(eq(pullRequests.headSha, headSha))
-    .limit(1);
-  return row;
+    .where(and(eq(pullRequests.repoFullName, repoFullName), eq(pullRequests.headSha, headSha)));
 }

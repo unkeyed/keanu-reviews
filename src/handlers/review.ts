@@ -1,10 +1,11 @@
 import type { Db } from "../db/client.ts";
 import { findByGithubId } from "../db/repositories/identities.ts";
-import { recordMessage } from "../db/repositories/messages.ts";
 import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
 import type { Logger } from "../logger.ts";
-import { reviewSummaryBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
+import { issueCommentBlocks, reviewSummaryBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
 import type { SlackClient } from "../slack/client.ts";
+import { deliverSlackMessage } from "../slack/deliver.ts";
+import { type PullRequestPayload, ensurePullRequestChannel } from "./pullRequest.ts";
 
 export interface ReviewDeps {
   db: Db;
@@ -17,7 +18,7 @@ export interface ReviewDeps {
 export interface ReviewPayload {
   action: string;
   repository: { full_name: string };
-  pull_request: { number: number };
+  pull_request: PullRequestPayload["pull_request"];
   review: {
     id: number;
     state: string; // approved | changes_requested | commented
@@ -30,34 +31,27 @@ export interface ReviewPayload {
 /** Mirror a review submission (U6, R5) and cancel the reviewer's reminder (U8 hook). */
 export async function handleReview(deps: ReviewDeps, payload: ReviewPayload): Promise<void> {
   if (payload.action !== "submitted") return;
-  const row = await findByRepoNumber(
-    deps.db,
-    payload.repository.full_name,
-    payload.pull_request.number,
-  );
-  if (!row?.channelId) return;
+  const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
+  if (!row.channelId) throw new Error(`PR channel is not ready for ${row.id}`);
 
   const r = payload.review;
-  const first = await recordMessage(deps.db, {
-    prId: row.id,
-    kind: "review",
-    githubEventRef: String(r.id),
-    slackTs: "-",
-  });
-  if (first) {
-    const mapped = await findByGithubId(deps.db, r.user.id);
-    await deps.slack.postMessage({
+  const mapped = await findByGithubId(deps.db, r.user.id);
+  await deliverSlackMessage(
+    deps.db,
+    deps.slack,
+    { prId: row.id, kind: "review", githubEventRef: String(r.id) },
+    {
       channel: row.channelId,
-      text: `Review ${r.state} by ${r.user.login}`,
+      text: sanitizeMrkdwn(`Review ${r.state} by ${r.user.login}`),
       threadTs: row.rootMessageTs ?? undefined,
       blocks: reviewSummaryBlocks({
         state: r.state,
         body: r.body ?? "",
         htmlUrl: r.html_url,
-        authorMention: mapped ? `<@${mapped.slackUserId}>` : r.user.login,
+        authorMention: mapped ? `<@${mapped.slackUserId}>` : sanitizeMrkdwn(r.user.login),
       }),
-    });
-  }
+    },
+  );
 
   await deps.onReviewSubmitted?.(row.id, r.user.id);
 }
@@ -77,30 +71,28 @@ export async function handleIssueComment(
   if (payload.action !== "created") return;
   if (!payload.issue.pull_request) return; // not a PR — ignore
   const row = await findByRepoNumber(deps.db, payload.repository.full_name, payload.issue.number);
-  if (!row?.channelId) return;
+  if (!row?.channelId) {
+    throw new Error(
+      `PR channel is not ready for ${payload.repository.full_name}#${payload.issue.number}`,
+    );
+  }
 
   const c = payload.comment;
-  const first = await recordMessage(deps.db, {
-    prId: row.id,
-    kind: "issue_comment",
-    githubEventRef: String(c.id),
-    slackTs: "-",
-  });
-  if (!first) return;
-
   const mapped = await findByGithubId(deps.db, c.user.id);
-  await deps.slack.postMessage({
-    channel: row.channelId,
-    text: `Comment by ${c.user.login}`,
-    threadTs: row.rootMessageTs ?? undefined,
-    blocks: [
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `💬 <${c.html_url}|comment> by ${mapped ? `<@${mapped.slackUserId}>` : c.user.login}\n${sanitizeMrkdwn(c.body)}`,
-        },
-      },
-    ],
-  });
+  const authorMention = mapped ? `<@${mapped.slackUserId}>` : sanitizeMrkdwn(c.user.login);
+  await deliverSlackMessage(
+    deps.db,
+    deps.slack,
+    { prId: row.id, kind: "issue_comment", githubEventRef: String(c.id) },
+    {
+      channel: row.channelId,
+      text: sanitizeMrkdwn(`Comment by ${c.user.login}`),
+      threadTs: row.rootMessageTs ?? undefined,
+      blocks: issueCommentBlocks({
+        body: c.body,
+        htmlUrl: c.html_url,
+        authorMention,
+      }),
+    },
+  );
 }

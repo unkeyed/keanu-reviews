@@ -8,6 +8,7 @@ export interface SlackMessage {
   text: string; // required notification fallback
   blocks?: unknown[];
   threadTs?: string; // parent ts only, never a reply's (KTD5 threading)
+  clientMsgId?: string; // deterministic idempotency key for ambiguous retries
 }
 
 export interface SlackClient {

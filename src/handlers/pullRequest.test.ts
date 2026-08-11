@@ -87,4 +87,35 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       prId("unkey/api", 1423),
     );
   });
+
+  it("sanitizes untrusted PR titles and logins in blocks and fallback text", async () => {
+    const event = payload("opened", {
+      title: "ship <!channel>",
+      user: { login: "<!everyone>" },
+    });
+    await handlePullRequest(deps(), event);
+    expect(JSON.stringify(slack.messages.at(-1))).not.toContain("<!channel>");
+    expect(JSON.stringify(slack.messages.at(-1))).not.toContain("<!everyone>");
+  });
+
+  it("reuses a persisted channel and effect key after a root-post failure", async () => {
+    const post = slack.postMessage.bind(slack);
+    let fail = true;
+    slack.postMessage = async (message) => {
+      if (fail) {
+        fail = false;
+        throw new Error("transient Slack failure");
+      }
+      return post(message);
+    };
+
+    await expect(handlePullRequest(deps(), payload("opened"))).rejects.toThrow(
+      "transient Slack failure",
+    );
+    await handlePullRequest(deps(), payload("opened"));
+
+    expect(slack.channels).toHaveLength(1);
+    expect(slack.messages).toHaveLength(1);
+    expect(slack.messages[0]?.clientMsgId).toMatch(/^[0-9a-f-]{36}$/);
+  });
 });

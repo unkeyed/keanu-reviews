@@ -1,9 +1,10 @@
 import { type PrForShaFetcher, conclusionLabel } from "../ci/status.ts";
 import type { Db } from "../db/client.ts";
-import { recordMessage } from "../db/repositories/messages.ts";
-import { findByHeadSha, findByRepoNumber } from "../db/repositories/pullRequests.ts";
+import { findAllByRepoHeadSha, findByRepoNumber } from "../db/repositories/pullRequests.ts";
 import type { Logger } from "../logger.ts";
+import { sanitizeLinkLabel, sanitizeMrkdwn } from "../slack/blocks.ts";
 import type { SlackClient } from "../slack/client.ts";
+import { deliverSlackMessage } from "../slack/deliver.ts";
 
 export interface CheckRunPayload {
   action: string;
@@ -15,6 +16,7 @@ export interface CheckRunPayload {
     html_url: string;
     head_sha: string;
     name: string;
+    pull_requests?: { number: number }[];
   };
 }
 
@@ -36,39 +38,58 @@ export async function handleCheckRun(deps: ChecksDeps, payload: CheckRunPayload)
   if (payload.action !== "completed" || run.status !== "completed" || !run.conclusion) return;
 
   const repoFullName = payload.repository.full_name;
-  let row = await findByHeadSha(deps.db, run.head_sha);
-  if (!row && deps.fetchPrForSha) {
-    const number = await deps.fetchPrForSha(repoFullName, run.head_sha);
-    if (number !== undefined) row = await findByRepoNumber(deps.db, repoFullName, number);
+  const associatedNumbers = new Set(run.pull_requests?.map((pr) => pr.number) ?? []);
+  let rows =
+    associatedNumbers.size > 0
+      ? (
+          await Promise.all(
+            [...associatedNumbers].map((number) => findByRepoNumber(deps.db, repoFullName, number)),
+          )
+        ).filter((row) => row !== undefined)
+      : await findAllByRepoHeadSha(deps.db, repoFullName, run.head_sha);
+
+  if (rows.length === 0 && associatedNumbers.size === 0 && deps.fetchPrForSha) {
+    for (const number of await deps.fetchPrForSha(repoFullName, run.head_sha)) {
+      associatedNumbers.add(number);
+    }
+    rows = (
+      await Promise.all(
+        [...associatedNumbers].map((number) => findByRepoNumber(deps.db, repoFullName, number)),
+      )
+    ).filter((row) => row !== undefined);
   }
-  if (!row?.channelId) {
+
+  if (associatedNumbers.size > rows.length) {
+    throw new Error(`PR channel is not ready for every check_run association in ${repoFullName}`);
+  }
+
+  if (rows.length === 0) {
     deps.logger.debug("check_run maps to no tracked PR", { sha: run.head_sha });
     return;
   }
 
-  // Dedup on run id + conclusion so one CI run isn't posted twice.
-  const first = await recordMessage(deps.db, {
-    prId: row.id,
-    kind: "ci",
-    githubEventRef: `${run.id}:${run.conclusion}`,
-    slackTs: "-",
-  });
-  if (!first) return;
-
-  await deps.slack.postMessage({
-    channel: row.channelId,
-    text: `CI ${run.conclusion}: ${run.name}`,
-    threadTs: row.rootMessageTs ?? undefined,
-    blocks: [
+  for (const row of rows) {
+    if (!row.channelId) throw new Error(`PR channel is not ready for ${row.id}`);
+    await deliverSlackMessage(
+      deps.db,
+      deps.slack,
+      { prId: row.id, kind: "ci", githubEventRef: `${run.id}:${run.conclusion}` },
       {
-        type: "context",
-        elements: [
+        channel: row.channelId,
+        text: sanitizeMrkdwn(`CI ${run.conclusion}: ${run.name}`),
+        threadTs: row.rootMessageTs ?? undefined,
+        blocks: [
           {
-            type: "mrkdwn",
-            text: `${conclusionLabel(run.conclusion)} · <${run.html_url}|${run.name}>`,
+            type: "context",
+            elements: [
+              {
+                type: "mrkdwn",
+                text: `${conclusionLabel(run.conclusion)} · <${run.html_url}|${sanitizeLinkLabel(run.name)}>`,
+              },
+            ],
           },
         ],
       },
-    ],
-  });
+    );
+  }
 }

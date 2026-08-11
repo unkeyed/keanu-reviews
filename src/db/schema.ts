@@ -26,6 +26,7 @@ export const reminderStatusEnum = pgEnum("reminder_status", [
   "sent",
   "cancelled",
 ]);
+export const messageStatusEnum = pgEnum("message_status", ["pending", "sending", "sent"]);
 export const jobStatusEnum = pgEnum("job_status", ["pending", "processing", "done", "failed"]);
 export const identitySourceEnum = pgEnum("identity_source", [
   "self-link",
@@ -63,20 +64,21 @@ export const messages = pgTable(
   "messages",
   {
     id: text("id").primaryKey(),
+    naturalKey: text("natural_key").notNull(),
     prId: text("pr_id")
       .notNull()
       .references(() => pullRequests.id),
     githubEventRef: text("github_event_ref"), // e.g. review-comment id, for idempotency
-    slackTs: text("slack_ts").notNull(),
+    slackTs: text("slack_ts"),
     kind: text("kind").notNull(), // root | review_comment | review | ci | reminder | lifecycle
+    status: messageStatusEnum("status").notNull().default("pending"),
+    clientMsgId: text("client_msg_id").notNull(),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
-    prKindEventUnique: uniqueIndex("messages_pr_kind_event_unique").on(
-      t.prId,
-      t.kind,
-      t.githubEventRef,
-    ),
+    naturalKeyUnique: uniqueIndex("messages_natural_key_unique").on(t.naturalKey),
+    statusClaimedIdx: index("messages_status_claimed_idx").on(t.status, t.claimedAt),
   }),
 );
 
@@ -136,3 +138,4 @@ export type PullRequestRow = typeof pullRequests.$inferSelect;
 export type IdentityRow = typeof identities.$inferSelect;
 export type ReminderRow = typeof reminders.$inferSelect;
 export type JobRow = typeof jobs.$inferSelect;
+export type MessageRow = typeof messages.$inferSelect;

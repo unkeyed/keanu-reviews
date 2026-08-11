@@ -1,12 +1,11 @@
 import type { Db } from "../db/client.ts";
 import { findByGithubId } from "../db/repositories/identities.ts";
-import { recordMessage } from "../db/repositories/messages.ts";
-import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
 import { buildBlobPermalink } from "../github/permalink.ts";
 import type { Logger } from "../logger.ts";
-import { reviewCommentBlocks } from "../slack/blocks.ts";
+import { reviewCommentBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
 import type { SlackClient } from "../slack/client.ts";
-import { type PrHandlerDeps, type PullRequestPayload, handlePullRequest } from "./pullRequest.ts";
+import { deliverSlackMessage } from "../slack/deliver.ts";
+import { type PrHandlerDeps, ensurePullRequestChannel } from "./pullRequest.ts";
 
 export interface ReviewCommentPayload {
   action: string;
@@ -49,62 +48,37 @@ export async function handleReviewComment(
   payload: ReviewCommentPayload,
 ): Promise<void> {
   if (payload.action !== "created") return;
-  const row = await ensureChannel(deps, payload);
-  if (!row?.channelId) return;
+  const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
+  if (!row.channelId) throw new Error(`PR channel is not ready for ${row.id}`);
 
   const c = payload.comment;
-  // Idempotent: record before posting; a replay returns false and short-circuits.
-  const firstTime = await recordMessage(deps.db, {
-    prId: row.id,
-    kind: "review_comment",
-    githubEventRef: String(c.id),
-    slackTs: "-",
-  });
-  if (!firstTime) return;
-
-  const permalink = buildBlobPermalink({
-    repoFullName: payload.repository.full_name,
-    sha: c.commit_id,
-    path: c.path,
-    line: c.line ?? 1,
-    startLine: c.start_line ?? null,
-  });
+  const permalink = c.line
+    ? buildBlobPermalink({
+        repoFullName: payload.repository.full_name,
+        sha: c.commit_id,
+        path: c.path,
+        line: c.line,
+        startLine: c.start_line ?? null,
+      })
+    : c.html_url;
   const mapped = await findByGithubId(deps.db, c.user.id);
-  const authorMention = mapped ? `<@${mapped.slackUserId}>` : c.user.login;
+  const authorMention = mapped ? `<@${mapped.slackUserId}>` : sanitizeMrkdwn(c.user.login);
 
-  await deps.slack.postMessage({
-    channel: row.channelId,
-    text: `New review comment on ${c.path}:${c.line ?? 1}`,
-    threadTs: row.rootMessageTs ?? undefined,
-    blocks: reviewCommentBlocks({
-      body: c.body,
-      permalink,
-      path: c.path,
-      line: c.line ?? 1,
-      authorMention,
-    }),
-  });
-}
-
-async function ensureChannel(deps: ReviewCommentDeps, payload: ReviewCommentPayload) {
-  let row = await findByRepoNumber(
+  await deliverSlackMessage(
     deps.db,
-    payload.repository.full_name,
-    payload.pull_request.number,
+    deps.slack,
+    { prId: row.id, kind: "review_comment", githubEventRef: String(c.id) },
+    {
+      channel: row.channelId,
+      text: sanitizeMrkdwn(`New review comment on ${c.path}${c.line ? `:${c.line}` : ""}`),
+      threadTs: row.rootMessageTs ?? undefined,
+      blocks: reviewCommentBlocks({
+        body: c.body,
+        permalink,
+        path: c.path,
+        line: c.line ?? undefined,
+        authorMention,
+      }),
+    },
   );
-  if (!row?.channelId) {
-    // Reconcile lazily from the child payload (out-of-order safeguard).
-    const synthesized: PullRequestPayload = {
-      action: "synchronize",
-      repository: payload.repository,
-      pull_request: payload.pull_request,
-    };
-    await handlePullRequest(deps, synthesized);
-    row = await findByRepoNumber(
-      deps.db,
-      payload.repository.full_name,
-      payload.pull_request.number,
-    );
-  }
-  return row;
 }

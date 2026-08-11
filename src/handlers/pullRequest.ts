@@ -1,5 +1,4 @@
 import type { Db } from "../db/client.ts";
-import { recordMessage } from "../db/repositories/messages.ts";
 import {
   findByRepoNumber,
   setChannel,
@@ -9,7 +8,9 @@ import {
 import { cancelForPr } from "../db/repositories/reminders.ts";
 import { type PrState, computeTargetState, isTerminal } from "../domain/prState.ts";
 import type { Logger } from "../logger.ts";
+import { sanitizeLinkLabel, sanitizeMrkdwn } from "../slack/blocks.ts";
 import type { SlackClient } from "../slack/client.ts";
+import { deliverSlackMessage } from "../slack/deliver.ts";
 import { channelName } from "../slack/naming.ts";
 
 export interface PullRequestPayload {
@@ -61,22 +62,38 @@ export async function handlePullRequest(
     headSha: pr.head.sha, // refreshed on opened/synchronize (U7 mapping)
   });
 
-  // Create the channel exactly once (idempotent on the stored mapping).
+  let current = row;
+  let channelCreated = false;
+  let rootReconciled = false;
+  // Persist the channel immediately so a root-post failure cannot orphan it.
   if (!row.channelId) {
     const name = channelName(state, repoFullName, pr.number);
     const { channelId } = await slack.createChannel(name);
-    const root = await slack.postMessage({
-      channel: channelId,
-      text: `PR #${pr.number}: ${pr.title}`,
-      blocks: lifecycleBlocks(pr, state),
-    });
-    await setChannel(db, row.id, channelId, root.ts);
-    await recordMessage(db, { prId: row.id, kind: "root", githubEventRef: null, slackTs: root.ts });
+    await setChannel(db, row.id, channelId, null);
+    current = { ...row, channelId, rootMessageTs: null };
+    channelCreated = true;
     logger.info("channel created", { prId: row.id, channelId, state });
-    return;
   }
 
-  const channelId = row.channelId;
+  const channelId = current.channelId;
+  if (!channelId) throw new Error(`PR channel mapping is missing for ${current.id}`);
+
+  if (!current.rootMessageTs) {
+    rootReconciled = true;
+    const root = await deliverSlackMessage(
+      db,
+      slack,
+      { prId: current.id, kind: "root", githubEventRef: "root" },
+      {
+        channel: channelId,
+        text: sanitizeMrkdwn(`PR #${pr.number}: ${pr.title}`),
+        blocks: lifecycleBlocks(pr, state),
+      },
+    );
+    await setChannel(db, current.id, channelId, root.slackTs);
+    current = { ...current, rootMessageTs: root.slackTs };
+  }
+
   const prevState = existing?.currentState;
 
   if (target && target !== prevState) {
@@ -85,24 +102,53 @@ export async function handlePullRequest(
       await slack.unarchiveChannel(channelId);
     }
     await slack.renameChannel(channelId, name); // rename first, always (KTD8)
-    await updateState(db, row.id, target);
+    await updateState(db, current.id, target);
 
     if (isTerminal(target)) {
       await slack.archiveChannel(channelId); // ...then archive
-      await cancelForPr(db, row.id); // stop pending reminders on close/merge
+      await cancelForPr(db, current.id); // stop pending reminders on close/merge
     }
-    logger.info("channel state reconciled", { prId: row.id, from: prevState, to: target });
+    logger.info("channel state reconciled", { prId: current.id, from: prevState, to: target });
   }
 
   // Thread a lifecycle note under the root for notable transitions.
-  if (target && row.rootMessageTs) {
-    await slack.postMessage({
-      channel: channelId,
-      text: `PR #${pr.number} ${payload.action}`,
-      threadTs: row.rootMessageTs,
-      blocks: lifecycleBlocks(pr, state),
-    });
+  if (!channelCreated && !rootReconciled && target && current.rootMessageTs) {
+    await deliverSlackMessage(
+      db,
+      slack,
+      {
+        prId: current.id,
+        kind: "lifecycle",
+        githubEventRef: `${payload.action}:${state}:${pr.head.sha}`,
+      },
+      {
+        channel: channelId,
+        text: sanitizeMrkdwn(`PR #${pr.number} ${payload.action}`),
+        threadTs: current.rootMessageTs,
+        blocks: lifecycleBlocks(pr, state),
+      },
+    );
   }
+}
+
+export async function ensurePullRequestChannel(
+  deps: PrHandlerDeps,
+  repository: { full_name: string },
+  pullRequest: PullRequestPayload["pull_request"],
+) {
+  let row = await findByRepoNumber(deps.db, repository.full_name, pullRequest.number);
+  if (!row?.channelId || !row.rootMessageTs) {
+    await handlePullRequest(deps, {
+      action: "synchronize",
+      repository,
+      pull_request: pullRequest,
+    });
+    row = await findByRepoNumber(deps.db, repository.full_name, pullRequest.number);
+  }
+  if (!row?.channelId || !row.rootMessageTs) {
+    throw new Error(`PR channel is not ready for ${repository.full_name}#${pullRequest.number}`);
+  }
+  return row;
 }
 
 function lifecycleBlocks(pr: PullRequestPayload["pull_request"], state: PrState): unknown[] {
@@ -111,7 +157,7 @@ function lifecycleBlocks(pr: PullRequestPayload["pull_request"], state: PrState)
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `*<${pr.html_url}|#${pr.number} ${pr.title}>* — \`${state}\` · by ${pr.user.login}`,
+        text: `*<${pr.html_url}|#${pr.number} ${sanitizeLinkLabel(pr.title)}>* — \`${state}\` · by ${sanitizeMrkdwn(pr.user.login)}`,
       },
     },
   ];

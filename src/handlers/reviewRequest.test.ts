@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../db/client.ts";
 import { upsertIdentity } from "../db/repositories/identities.ts";
 import { setChannel, upsertPullRequest } from "../db/repositories/pullRequests.ts";
+import { pullRequests } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createLogger } from "../logger.ts";
 import { FakeSlackClient } from "../testing/fakeSlack.ts";
@@ -29,7 +30,16 @@ afterEach(() => close());
 const payload = (over: Partial<ReviewRequestPayload> = {}): ReviewRequestPayload => ({
   action: "review_requested",
   repository: { full_name: "unkey/api" },
-  pull_request: { number: 1 },
+  pull_request: {
+    number: 1,
+    id: 1,
+    draft: false,
+    merged: false,
+    title: "Review me",
+    html_url: "https://github.com/unkey/api/pull/1",
+    user: { login: "oz" },
+    head: { sha: "sha-1" },
+  },
   requested_reviewer: { id: 7, login: "flo" },
   ...over,
 });
@@ -56,7 +66,7 @@ describe("handleReviewRequest (U5)", () => {
     // cached: a second request needs no email lookup
     await handleReviewRequest(
       deps({ fetchGithubEmail }),
-      payload({ requested_reviewer: { id: 7, login: "flo" }, pull_request: { number: 1 } }),
+      payload({ requested_reviewer: { id: 7, login: "flo" } }),
     );
     expect(fetchGithubEmail).toHaveBeenCalledTimes(1);
   });
@@ -88,6 +98,44 @@ describe("handleReviewRequest (U5)", () => {
     await handleReviewRequest(deps(), payload());
     await handleReviewRequest(deps(), payload());
     expect(slack.invites).toHaveLength(1);
+  });
+
+  it("reconciles the parent channel when a review request arrives first", async () => {
+    await db.delete(pullRequests);
+    await handleReviewRequest(deps({ fetchGithubEmail: async () => undefined }), payload());
+    expect(slack.channels).toHaveLength(1);
+    expect(slack.messages.at(-1)?.threadTs).toBeDefined();
+  });
+
+  it("retries the request after a failed Slack post without duplicating the invite", async () => {
+    await upsertIdentity(db, {
+      githubUserId: 7,
+      githubLogin: "flo",
+      slackUserId: "U7",
+      source: "self-link",
+    });
+    const post = slack.postMessage.bind(slack);
+    let fail = true;
+    slack.postMessage = async (message) => {
+      if (fail) {
+        fail = false;
+        throw new Error("transient Slack failure");
+      }
+      return post(message);
+    };
+
+    await expect(handleReviewRequest(deps(), payload())).rejects.toThrow("transient Slack failure");
+    await handleReviewRequest(deps(), payload());
+    expect(slack.invites).toHaveLength(1);
+    expect(slack.messages).toHaveLength(1);
+  });
+
+  it("sanitizes an unresolved reviewer's login", async () => {
+    await handleReviewRequest(
+      deps({ fetchGithubEmail: async () => undefined }),
+      payload({ requested_reviewer: { id: 8, login: "<!channel>" } }),
+    );
+    expect(JSON.stringify(slack.messages.at(-1))).not.toContain("<!channel>");
   });
 
   it("fires the reminder schedule hook on request and cancel hook on removal", async () => {
