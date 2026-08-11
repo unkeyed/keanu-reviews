@@ -1,3 +1,8 @@
+import type { ChatPostMessageArguments } from "@slack/web-api";
+
+type ChatPostMessageWithBlocks = Extract<ChatPostMessageArguments, { blocks: unknown[] }>;
+export type SlackBlock = ChatPostMessageWithBlocks["blocks"][number];
+
 /**
  * Slack surface the bot depends on (U4-U9). Defined as an interface so handlers
  * are testable with a fake and the real Web API client stays at the edge. All
@@ -6,7 +11,7 @@
 export interface SlackMessage {
   channel: string;
   text: string; // required notification fallback
-  blocks?: unknown[];
+  blocks?: SlackBlock[];
   threadTs?: string; // parent ts only, never a reply's (KTD5 threading)
   clientMsgId?: string; // deterministic idempotency key for ambiguous retries
 }

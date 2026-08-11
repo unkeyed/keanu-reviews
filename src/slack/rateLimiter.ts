@@ -15,12 +15,13 @@ const isRateLimited = (e: unknown): e is RateLimitedError =>
 export type SleepFn = (ms: number) => Promise<void>;
 const realSleep: SleepFn = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** Retry a call up to `maxRetries` times when Slack reports 429, honoring Retry-After. */
+/** Retry bounded 429 responses while honoring Retry-After; defer long waits to the durable job. */
 export async function withRetry<T>(
   fn: () => Promise<T>,
-  opts: { maxRetries?: number; sleep?: SleepFn } = {},
+  opts: { maxRetries?: number; maxRetryDelayMs?: number; sleep?: SleepFn } = {},
 ): Promise<T> {
   const maxRetries = opts.maxRetries ?? 3;
+  const maxRetryDelayMs = opts.maxRetryDelayMs ?? Number.POSITIVE_INFINITY;
   const sleep = opts.sleep ?? realSleep;
   let attempt = 0;
   for (;;) {
@@ -28,8 +29,12 @@ export async function withRetry<T>(
       return await fn();
     } catch (err) {
       if (isRateLimited(err) && attempt < maxRetries) {
+        const retryDelayMs = err.retryAfterSeconds * 1000;
+        // A very long Retry-After belongs at the durable job layer. Keeping it
+        // here would hold a DB lease while the process is doing no useful work.
+        if (retryDelayMs > maxRetryDelayMs) throw err;
         attempt += 1;
-        await sleep(err.retryAfterSeconds * 1000);
+        await sleep(retryDelayMs);
         continue;
       }
       throw err;

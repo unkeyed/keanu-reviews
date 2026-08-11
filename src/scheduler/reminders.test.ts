@@ -109,6 +109,20 @@ describe("reminder scheduler (U8, R9)", () => {
     expect(await s.processDue()).toBe(0);
   });
 
+  it("does not let an older cancellation erase a newer re-request", async () => {
+    const s = scheduler();
+    const firstRequest = new Date(clock);
+    const newerRequest = new Date(clock + 60 * 60_000);
+    await s.onReviewRequested(PR, 7, firstRequest);
+    await s.onReviewRequested(PR, 7, newerRequest);
+
+    await s.onReviewSubmitted(PR, 7, new Date(clock + 30 * 60_000));
+
+    const [row] = await db.select().from(reminders).where(eq(reminders.prId, PR));
+    expect(row?.status).toBe("pending");
+    expect(row?.dueAt.getTime()).toBe(newerRequest.getTime() + HOURS * 60 * 60_000);
+  });
+
   it("posts exactly one reminder under two concurrent scanners (atomic claim)", async () => {
     const s = scheduler();
     await s.onReviewRequested(PR, 7);

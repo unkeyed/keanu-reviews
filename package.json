@@ -19,7 +19,9 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "admin:import-identities": "node --experimental-strip-types src/admin/importIdentities.ts",
+    "jobs:replay": "node --experimental-strip-types src/admin/replayJob.ts"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.0",

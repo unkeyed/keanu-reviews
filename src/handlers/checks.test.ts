@@ -110,4 +110,32 @@ describe("handleCheckRun (U7, R6)", () => {
       handleCheckRun(deps(), payload({ pull_requests: [{ number: 99 }] })),
     ).rejects.toThrow("PR channel is not ready");
   });
+
+  it("posts mapped associations before retrying a missing one", async () => {
+    await seedPr("sha-1", { number: 1, channelId: "C1" });
+    const event = payload({ pull_requests: [{ number: 1 }, { number: 2 }] });
+
+    await expect(handleCheckRun(deps(), event)).rejects.toThrow("PR channel is not ready");
+    expect(slack.messages.map((message) => message.channel)).toEqual(["C1"]);
+
+    await seedPr("sha-1", { number: 2, channelId: "C2" });
+    await handleCheckRun(deps(), event);
+    expect(slack.messages.map((message) => message.channel).sort()).toEqual(["C1", "C2"]);
+  });
+
+  it("posts ready associations before retrying an unready mapping", async () => {
+    await seedPr("sha-1", { number: 1, channelId: "C1" });
+    await upsertPullRequest(db, {
+      repoFullName: "unkey/api",
+      number: 2,
+      githubPrId: 2,
+      currentState: "pr",
+      headSha: "sha-1",
+    });
+
+    await expect(
+      handleCheckRun(deps(), payload({ pull_requests: [{ number: 1 }, { number: 2 }] })),
+    ).rejects.toThrow("PR channel is not ready");
+    expect(slack.messages.map((message) => message.channel)).toEqual(["C1"]);
+  });
 });

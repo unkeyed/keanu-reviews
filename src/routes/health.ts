@@ -1,17 +1,34 @@
 import { Hono } from "hono";
+import type { ReadyCheck } from "../db/readiness.ts";
 
 /**
- * Health endpoint (U1). Returns 200 with basic service status so Unkey Deploy
- * (and local smoke checks) can confirm the process is up.
+ * Liveness and readiness endpoints (U1). Liveness reports that the process is
+ * serving; readiness additionally protects traffic from an unavailable or
+ * unmigrated database.
  */
-export const health = new Hono();
-
 const startedAt = Date.now();
 
-health.get("/health", (c) =>
-  c.json({
-    status: "ok",
-    service: "unkey-slack-pr-bot",
-    uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
-  }),
-);
+export function createHealthRoutes(checkReady: ReadyCheck): Hono {
+  const health = new Hono();
+
+  // Liveness deliberately has no external dependencies: it answers whether
+  // this process can serve requests, even while a database incident is active.
+  health.get("/health", (c) =>
+    c.json({
+      status: "ok",
+      service: "unkey-slack-pr-bot",
+      uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
+    }),
+  );
+
+  health.get("/ready", async (c) => {
+    try {
+      await checkReady();
+      return c.json({ status: "ready", service: "unkey-slack-pr-bot" });
+    } catch {
+      return c.json({ status: "unavailable", service: "unkey-slack-pr-bot" }, 503);
+    }
+  });
+
+  return health;
+}

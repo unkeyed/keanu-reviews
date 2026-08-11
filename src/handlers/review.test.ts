@@ -1,9 +1,11 @@
+import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../db/client.ts";
 import { setChannel, upsertPullRequest } from "../db/repositories/pullRequests.ts";
-import { pullRequests } from "../db/schema.ts";
+import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createLogger } from "../logger.ts";
+import { createReminderScheduler } from "../scheduler/reminders.ts";
 import { FakeSlackClient } from "../testing/fakeSlack.ts";
 import {
   type IssueCommentPayload,
@@ -74,7 +76,31 @@ describe("handleReview (U6, R5)", () => {
   it("fires the reminder-cancel hook for the reviewer", async () => {
     const onReviewSubmitted = vi.fn(async () => {});
     await handleReview(deps({ onReviewSubmitted }), review("approved"));
-    expect(onReviewSubmitted).toHaveBeenCalledWith("unkey/api#1", 7);
+    expect(onReviewSubmitted).toHaveBeenCalledWith(
+      "unkey/api#1",
+      7,
+      new Date("2026-08-11T12:00:00Z"),
+    );
+  });
+
+  it("cancels the reminder before a fallible Slack delivery", async () => {
+    const scheduler = createReminderScheduler({
+      db,
+      slack,
+      logger: createLogger("error"),
+      reminderHours: 12,
+      now: () => Date.parse("2026-08-11T11:00:00Z"),
+    });
+    await scheduler.onReviewRequested("unkey/api#1", 7, new Date("2026-08-11T11:00:00Z"));
+    slack.postMessage = async () => {
+      throw new Error("Slack unavailable");
+    };
+
+    await expect(
+      handleReview(deps({ onReviewSubmitted: scheduler.onReviewSubmitted }), review("approved")),
+    ).rejects.toThrow("Slack unavailable");
+    const [reminder] = await db.select().from(reminders).where(eq(reminders.prId, "unkey/api#1"));
+    expect(reminder?.status).toBe("cancelled");
   });
 
   it("reconciles the parent channel when a review arrives before opened", async () => {

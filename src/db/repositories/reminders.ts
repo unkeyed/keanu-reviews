@@ -111,6 +111,7 @@ export async function cancelForReviewer(
   db: Db,
   prId: string,
   reviewerGithubId: number,
+  requestedThrough?: Date,
 ): Promise<void> {
   await db
     .update(reminders)
@@ -119,6 +120,7 @@ export async function cancelForReviewer(
       and(
         eq(reminders.id, reminderId(prId, reviewerGithubId)),
         or(eq(reminders.status, "pending"), eq(reminders.status, "sending")),
+        requestedThrough ? lte(reminders.dueAt, requestedThrough) : undefined,
       ),
     );
 }

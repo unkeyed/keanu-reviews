@@ -1,9 +1,11 @@
 import { Hono } from "hono";
+import type { ReadyCheck } from "./db/readiness.ts";
 import type { Logger } from "./logger.ts";
-import { health } from "./routes/health.ts";
+import { createHealthRoutes } from "./routes/health.ts";
 
 export interface AppDeps {
   logger: Logger;
+  checkReady: ReadyCheck;
   /** Feature routes composed in index.ts (GitHub webhook U3, Slack command U9). */
   mounts?: Hono[];
 }
@@ -11,7 +13,7 @@ export interface AppDeps {
 /** Build the Hono application: health plus whatever feature routes are mounted. */
 export function createApp(deps: AppDeps): Hono {
   const app = new Hono();
-  app.route("/", health);
+  app.route("/", createHealthRoutes(deps.checkReady));
   for (const m of deps.mounts ?? []) app.route("/", m);
 
   app.onError((err, c) => {

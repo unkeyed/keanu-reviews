@@ -25,6 +25,18 @@ describe("withRetry (429 Retry-After, KTD9)", () => {
     expect(fn).toHaveBeenCalledTimes(3); // initial + 2 retries
   });
 
+  it("does not hold a caller lease for an excessive Retry-After", async () => {
+    const sleep = vi.fn(async () => {});
+    const rateLimit = { status: 429 as const, retryAfterSeconds: 30 };
+    const fn = vi.fn(async () => {
+      throw rateLimit;
+    });
+
+    await expect(withRetry(fn, { maxRetryDelayMs: 5_000, sleep })).rejects.toBe(rateLimit);
+    expect(fn).toHaveBeenCalledOnce();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
   it("does not retry a non-429 error", async () => {
     const fn = vi.fn(async () => {
       throw new Error("boom");

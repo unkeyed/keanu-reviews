@@ -143,11 +143,50 @@ describe("handleReviewRequest (U5)", () => {
     const onReviewRequested = vi.fn(async () => {});
     const onReviewRequestRemoved = vi.fn(async () => {});
     await handleReviewRequest(deps({ onReviewRequested, onReviewRequestRemoved }), payload());
-    expect(onReviewRequested).toHaveBeenCalledWith("unkey/api#1", 7);
+    expect(onReviewRequested).toHaveBeenCalledWith(
+      "unkey/api#1",
+      7,
+      new Date("2026-08-11T12:00:00Z"),
+    );
     await handleReviewRequest(
       deps({ onReviewRequested, onReviewRequestRemoved }),
       payload({ action: "review_request_removed" }),
     );
-    expect(onReviewRequestRemoved).toHaveBeenCalledWith("unkey/api#1", 7);
+    expect(onReviewRequestRemoved).toHaveBeenCalledWith(
+      "unkey/api#1",
+      7,
+      new Date("2026-08-11T12:00:00Z"),
+    );
+  });
+
+  it("converges the invite again for a later review request", async () => {
+    await upsertIdentity(db, {
+      githubUserId: 7,
+      githubLogin: "flo",
+      slackUserId: "U7",
+      source: "self-link",
+    });
+    await handleReviewRequest(deps(), payload(), "delivery-request-1");
+    await handleReviewRequest(
+      deps(),
+      payload({
+        action: "review_request_removed",
+        pull_request: { ...payload().pull_request, updated_at: "2026-08-11T12:01:00Z" },
+      }),
+      "delivery-remove-1",
+    );
+
+    // Model the reviewer no longer being in the channel after the first request.
+    slack.invites.length = 0;
+    await handleReviewRequest(
+      deps(),
+      payload({
+        pull_request: { ...payload().pull_request, updated_at: "2026-08-11T12:02:00Z" },
+      }),
+      "delivery-request-2",
+    );
+
+    expect(slack.invites).toEqual([{ channelId: "C1", userIds: ["U7"] }]);
+    expect(slack.messages).toHaveLength(2);
   });
 });

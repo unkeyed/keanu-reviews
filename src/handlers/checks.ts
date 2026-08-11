@@ -46,17 +46,19 @@ export async function handleCheckRun(deps: ChecksDeps, payload: CheckRunPayload)
     rows = await findAllByRepoNumbers(deps.db, repoFullName, [...associatedNumbers]);
   }
 
-  if (associatedNumbers.size > rows.length) {
-    throw new Error(`PR channel is not ready for every check_run association in ${repoFullName}`);
-  }
+  const hasMissingAssociations = associatedNumbers.size > rows.length;
+  const hasUnreadyAssociations = rows.some((row) => !row.channelId);
 
   if (rows.length === 0) {
+    if (hasMissingAssociations) {
+      throw new Error(`PR channel is not ready for every check_run association in ${repoFullName}`);
+    }
     deps.logger.debug("check_run maps to no tracked PR", { sha: run.head_sha });
     return;
   }
 
   for (const row of rows) {
-    if (!row.channelId) throw new Error(`PR channel is not ready for ${row.id}`);
+    if (!row.channelId) continue;
     await deliverSlackMessage(
       deps.db,
       deps.slack,
@@ -78,5 +80,11 @@ export async function handleCheckRun(deps: ChecksDeps, payload: CheckRunPayload)
         ],
       },
     );
+  }
+
+  // Preserve progress for mapped PRs. Retries dedupe those effects while
+  // delivering to associations whose channel mappings became ready meanwhile.
+  if (hasMissingAssociations || hasUnreadyAssociations) {
+    throw new Error(`PR channel is not ready for every check_run association in ${repoFullName}`);
   }
 }

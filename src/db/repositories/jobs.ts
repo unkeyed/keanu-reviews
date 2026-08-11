@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, eq, isNull, lte, or } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull, lte, or } from "drizzle-orm";
 import type { Db } from "../client.ts";
 import { type JobRow, jobs, processedDeliveries } from "../schema.ts";
 
@@ -103,7 +103,9 @@ export async function rescheduleOrFailJob(
   if (job.attempts >= options.maxAttempts) {
     await db
       .update(jobs)
-      .set({ status: "failed", raw: null, claimedAt: null })
+      // Retain terminal failures for an explicit, targeted admin replay.
+      // Successful completion remains the raw-payload purge boundary.
+      .set({ status: "failed", claimedAt: null })
       .where(currentClaim(job));
     return "failed";
   }
@@ -113,4 +115,18 @@ export async function rescheduleOrFailJob(
     .set({ status: "pending", claimedAt: null, availableAt: options.retryAt })
     .where(currentClaim(job));
   return "pending";
+}
+
+/** Reset one terminal failed job only when its replay payload is still present. */
+export async function resetFailedJob(
+  db: Db,
+  id: string,
+  availableAt = new Date(),
+): Promise<boolean> {
+  const rows = await db
+    .update(jobs)
+    .set({ status: "pending", attempts: 0, claimedAt: null, availableAt })
+    .where(and(eq(jobs.id, id), eq(jobs.status, "failed"), isNotNull(jobs.raw)))
+    .returning({ id: jobs.id });
+  return rows.length > 0;
 }

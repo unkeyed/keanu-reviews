@@ -9,6 +9,10 @@ export interface MessageEffectInput {
   githubEventRef: string;
 }
 
+// The worker's default job lease is 60 seconds. Keep an in-flight external
+// effect fenced beyond that boundary so a reclaimed job cannot post it twice.
+export const MESSAGE_EFFECT_LEASE_MS = 2 * 60_000;
+
 /** Collision-safe, durable identity for one externally visible Slack effect. */
 export function messageNaturalKey(input: MessageEffectInput): string {
   return [input.prId, input.kind, input.githubEventRef]
@@ -36,9 +40,7 @@ export async function claimMessageEffect(
 ): Promise<MessageRow | undefined> {
   const naturalKey = messageNaturalKey(input);
   const now = options.now ?? new Date();
-  // Match the job lease so a reclaimed job can also reclaim an abandoned
-  // Slack effect instead of exhausting retries behind a longer inner lease.
-  const leaseExpiredAt = new Date(now.getTime() - (options.leaseMs ?? 60_000));
+  const leaseExpiredAt = new Date(now.getTime() - (options.leaseMs ?? MESSAGE_EFFECT_LEASE_MS));
 
   await db
     .insert(messages)

@@ -18,8 +18,21 @@ export interface ReviewRequestPayload {
 export interface ReviewRequestDeps extends PrHandlerDeps {
   fetchGithubEmail?: GithubEmailFetcher;
   /** U8 wires these to schedule / cancel the 12h reminder. */
-  onReviewRequested?: (prId: string, reviewerGithubId: number) => Promise<void>;
-  onReviewRequestRemoved?: (prId: string, reviewerGithubId: number) => Promise<void>;
+  onReviewRequested?: (
+    prId: string,
+    reviewerGithubId: number,
+    sourceUpdatedAt?: Date,
+  ) => Promise<void>;
+  onReviewRequestRemoved?: (
+    prId: string,
+    reviewerGithubId: number,
+    sourceUpdatedAt?: Date,
+  ) => Promise<void>;
+}
+
+function sourceDate(value: string): Date | undefined {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 }
 
 /**
@@ -31,6 +44,7 @@ export interface ReviewRequestDeps extends PrHandlerDeps {
 export async function handleReviewRequest(
   deps: ReviewRequestDeps,
   payload: ReviewRequestPayload,
+  eventRef = payload.pull_request.updated_at,
 ): Promise<void> {
   const { db, slack, logger } = deps;
   const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
@@ -46,9 +60,15 @@ export async function handleReviewRequest(
   if (!reviewer) return;
 
   if (payload.action === "review_request_removed") {
-    await deps.onReviewRequestRemoved?.(row.id, reviewer.id);
+    await deps.onReviewRequestRemoved?.(
+      row.id,
+      reviewer.id,
+      sourceDate(payload.pull_request.updated_at),
+    );
     return;
   }
+
+  const effectRef = `${reviewer.id}:${eventRef}`;
 
   const slackUserId = await resolveSlackUser(deps, {
     githubId: reviewer.id,
@@ -59,7 +79,7 @@ export async function handleReviewRequest(
     await deliverSlackMessage(
       db,
       slack,
-      { prId: row.id, kind: "invite", githubEventRef: String(reviewer.id) },
+      { prId: row.id, kind: "invite", githubEventRef: effectRef },
       {
         channel: channelId,
         text: sanitizeMrkdwn(`Review requested from ${reviewer.login}`),
@@ -78,7 +98,7 @@ export async function handleReviewRequest(
     await deliverSlackMessage(
       db,
       slack,
-      { prId: row.id, kind: "invite", githubEventRef: String(reviewer.id) },
+      { prId: row.id, kind: "invite", githubEventRef: effectRef },
       {
         channel: channelId,
         text: sanitizeMrkdwn(`Review requested from ${reviewer.login}`),
@@ -96,5 +116,5 @@ export async function handleReviewRequest(
     );
   }
 
-  await deps.onReviewRequested?.(row.id, reviewer.id);
+  await deps.onReviewRequested?.(row.id, reviewer.id, sourceDate(payload.pull_request.updated_at));
 }

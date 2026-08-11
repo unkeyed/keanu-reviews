@@ -1,3 +1,5 @@
+import type { SlackBlock } from "./client.ts";
+
 /**
  * Block Kit builders + sanitization (U6). Comment bodies are untrusted GitHub
  * text (KTD11): escaping `&`, `<`, `>` before they enter an mrkdwn block
@@ -32,7 +34,7 @@ export interface ReviewCommentBlockInput {
 }
 
 /** Mirror of a GitHub review comment: quoted body + an "Open at line" context row. */
-export function reviewCommentBlocks(input: ReviewCommentBlockInput): unknown[] {
+export function reviewCommentBlocks(input: ReviewCommentBlockInput): SlackBlock[] {
   const quoted = clipSlackText(
     sanitizeMrkdwn(input.body)
       .split("\n")
@@ -69,9 +71,9 @@ const STATE_LABEL: Record<string, string> = {
   commented: "💬 commented",
 };
 
-export function reviewSummaryBlocks(input: ReviewSummaryInput): unknown[] {
+export function reviewSummaryBlocks(input: ReviewSummaryInput): SlackBlock[] {
   const label = STATE_LABEL[input.state] ?? input.state;
-  const blocks: unknown[] = [
+  const blocks: SlackBlock[] = [
     {
       type: "section",
       text: { type: "mrkdwn", text: `<${input.htmlUrl}|${label}> by ${input.authorMention}` },
@@ -90,7 +92,7 @@ export function issueCommentBlocks(input: {
   body: string;
   htmlUrl: string;
   authorMention: string;
-}): unknown[] {
+}): SlackBlock[] {
   const prefix = `💬 <${input.htmlUrl}|comment> by ${input.authorMention}\n`;
   return [
     {

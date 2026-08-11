@@ -1,6 +1,6 @@
 # Unkey Slack PR Bot
 
-A self-hosted, one-way **GitHub → Slack** bot (axolo.co-style): one Slack channel per pull request, with state-tracking channel names, auto-archiving, reviewer invites, review-comment mirroring with file/line deep links, CI reporting, and 12-hour review reminders. Nothing typed in Slack is ever written back to GitHub — the PR stays the system of record.
+A self-hosted, one-way **GitHub → Slack** bot (axolo.co-style): one Slack channel per pull request, with state-tracking channel names, auto-archiving, reviewer invites, review-comment mirroring with file/line deep links, CI reporting, and 12-hour review reminders. The bot writes to Slack and makes read-only GitHub REST/OAuth calls; it never mutates GitHub. Nothing typed in Slack is written back to GitHub — the PR stays the system of record.
 
 Full design: [`docs/plans/2026-08-11-001-feat-github-slack-pr-bot-plan.md`](docs/plans/2026-08-11-001-feat-github-slack-pr-bot-plan.md).
 
@@ -9,7 +9,7 @@ Full design: [`docs/plans/2026-08-11-001-feat-github-slack-pr-bot-plan.md`](docs
 - **Runtime:** TypeScript + [Hono](https://hono.dev), a long-running Node service on **Unkey Deploy**.
 - **Storage:** PlanetScale Postgres (via Drizzle — added in U2).
 - **Inbound:** GitHub App webhooks; a Slack `/link-github` slash command (U9).
-- **Outbound:** Slack Web API only.
+- **Outbound:** Slack Web API writes and user lookup; read-only GitHub REST/OAuth calls.
 
 ## Getting started
 
@@ -22,7 +22,8 @@ pnpm dev               # start with reload
 Verify the service is up:
 
 ```bash
-curl localhost:3000/health   # -> {"status":"ok",...}
+curl localhost:3000/health   # process liveness -> {"status":"ok",...}
+curl localhost:3000/ready    # database + required-schema readiness
 ```
 
 ## Commands
@@ -36,6 +37,8 @@ curl localhost:3000/health   # -> {"status":"ok",...}
 | `pnpm db:generate` | Generate a Drizzle migration from `src/db/schema.ts` |
 | `pnpm db:migrate` | Apply migrations to `DATABASE_URL` (drizzle-kit) |
 | `pnpm db:push` | Push the schema directly (dev shortcut) |
+| `pnpm admin:import-identities -- <file.csv\|file.json>` | Import verified GitHub-to-Slack identities |
+| `pnpm jobs:replay <failed-job-id>` | Reset one failed job with retained payload for retry |
 
 ## Configuration
 
@@ -51,6 +54,23 @@ Required secrets: `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`,
 OAuth client ID, its public origin, and the one allowed Slack workspace ID; see
 `.env.example` for their variable names.
 
+### GitHub App setup
+
+Configure the GitHub App webhook URL as `${PUBLIC_URL}/webhooks/github`, choose
+`application/json` as the content type, and enter the same random signing secret
+stored in `GITHUB_WEBHOOK_SECRET`. Subscribe to these events:
+
+- Pull requests
+- Pull request reviews
+- Pull request review comments
+- Issue comments
+- Check runs
+
+Grant read-only repository permissions for **Pull requests**, **Issues**, and
+**Checks** (plus GitHub's mandatory read-only **Metadata** permission). The bot
+does not need any GitHub write permission. Set the installation ID in
+`GITHUB_INSTALLATION_ID`; events from other installations are rejected.
+
 ### GitHub account linking
 
 `/link-github` never trusts a typed GitHub username. It immediately returns an
@@ -64,6 +84,26 @@ exactly `${PUBLIC_URL}/oauth/github/callback` (for example,
 origin with no path (HTTP is accepted only for loopback development), and
 generate a separate random `OAUTH_STATE_SECRET` of at least 32 characters. Set
 `SLACK_TEAM_ID` to the `T…` workspace ID that owns the slash command.
+
+Administrators can also seed mappings from a UTF-8 CSV or JSON file after all
+production environment variables are set:
+
+```csv
+github_login,slack_email,slack_user_id
+octocat,octocat@example.com,
+hubot,,U01234567
+```
+
+```bash
+pnpm admin:import-identities -- ./identities.csv
+```
+
+JSON input is an array with the same `github_login`, `slack_email`, and
+`slack_user_id` string fields. Each row needs a GitHub login and either a Slack
+email or user ID. The command resolves the login through GitHub to store its
+immutable account ID, resolves email through Slack when needed, and prints JSON
+counts for imported and skipped rows without echoing identity data. Imports are
+idempotent and safe to rerun; invalid files or invocations exit nonzero.
 
 ### Slack app scopes
 

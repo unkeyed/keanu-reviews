@@ -10,7 +10,11 @@ import {
 
 export interface ReviewDeps extends PrHandlerDeps {
   /** U8 wires this to cancel a reviewer's pending reminder once they review. */
-  onReviewSubmitted?: (prId: string, reviewerGithubId: number) => Promise<void>;
+  onReviewSubmitted?: (
+    prId: string,
+    reviewerGithubId: number,
+    sourceUpdatedAt?: Date,
+  ) => Promise<void>;
 }
 
 export interface ReviewPayload {
@@ -22,8 +26,15 @@ export interface ReviewPayload {
     state: string; // approved | changes_requested | commented
     body: string | null;
     html_url: string;
+    submitted_at?: string;
     user: { id: number; login: string };
   };
+}
+
+function sourceDate(value: string | undefined): Date | undefined {
+  if (!value) return undefined;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 }
 
 /** Mirror a review submission (U6, R5) and cancel the reviewer's reminder (U8 hook). */
@@ -33,6 +44,13 @@ export async function handleReview(deps: ReviewDeps, payload: ReviewPayload): Pr
   if (!row.channelId) throw new Error(`PR channel is not ready for ${row.id}`);
 
   const r = payload.review;
+  // GitHub is the source of truth: cancel before enrichment or Slack delivery,
+  // so a downstream failure cannot leave an obsolete reminder live.
+  await deps.onReviewSubmitted?.(
+    row.id,
+    r.user.id,
+    sourceDate(r.submitted_at ?? payload.pull_request.updated_at),
+  );
   const slackUserId = await resolveSlackUser(
     { db: deps.db, slack: deps.slack },
     { githubId: r.user.id, login: r.user.login },
@@ -53,8 +71,6 @@ export async function handleReview(deps: ReviewDeps, payload: ReviewPayload): Pr
       }),
     },
   );
-
-  await deps.onReviewSubmitted?.(row.id, r.user.id);
 }
 
 export interface IssueCommentPayload {

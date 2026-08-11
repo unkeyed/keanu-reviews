@@ -9,9 +9,21 @@ import type { GithubEmailFetcher } from "../identity/resolve.ts";
 
 export interface RouterDeps extends PrHandlerDeps {
   fetchGithubEmail?: GithubEmailFetcher;
-  onReviewRequested?: (prId: string, reviewerGithubId: number) => Promise<void>;
-  onReviewRequestRemoved?: (prId: string, reviewerGithubId: number) => Promise<void>;
-  onReviewSubmitted?: (prId: string, reviewerGithubId: number) => Promise<void>;
+  onReviewRequested?: (
+    prId: string,
+    reviewerGithubId: number,
+    sourceUpdatedAt?: Date,
+  ) => Promise<void>;
+  onReviewRequestRemoved?: (
+    prId: string,
+    reviewerGithubId: number,
+    sourceUpdatedAt?: Date,
+  ) => Promise<void>;
+  onReviewSubmitted?: (
+    prId: string,
+    reviewerGithubId: number,
+    sourceUpdatedAt?: Date,
+  ) => Promise<void>;
   fetchPrForSha?: PrForShaFetcher;
 }
 
@@ -30,7 +42,7 @@ export function createRouter(deps: RouterDeps): Router {
         await handlePullRequest(deps, payload);
         // review_requested / review_request_removed arrive as pull_request actions.
         if (job.action === "review_requested" || job.action === "review_request_removed") {
-          await handleReviewRequest(deps, payload);
+          await handleReviewRequest(deps, payload, job.deliveryId);
         }
         return;
       case "pull_request_review_comment":

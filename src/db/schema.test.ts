@@ -8,6 +8,7 @@ import {
   enqueueDeliveryJob,
   enqueueJob,
   rescheduleOrFailJob,
+  resetFailedJob,
 } from "./repositories/jobs.ts";
 import {
   claimMessageEffect,
@@ -303,7 +304,7 @@ describe("jobs", () => {
     expect(row?.status).toBe("done");
   });
 
-  it("purges raw payload when retries are exhausted", async () => {
+  it("retains a terminal payload for one explicit safe replay", async () => {
     const job = await enqueueJob(db, {
       deliveryId: "terminal-job",
       event: "pull_request",
@@ -321,7 +322,15 @@ describe("jobs", () => {
 
     const [row] = await db.select().from(jobs).where(eq(jobs.id, job.id));
     expect(row?.status).toBe("failed");
-    expect(row?.raw).toBeNull();
+    expect(row?.raw).toEqual({ secret: "private-repo-diff" });
+
+    expect(await resetFailedJob(db, job.id, new Date(now + 2_000))).toBe(true);
+    const [reset] = await db.select().from(jobs).where(eq(jobs.id, job.id));
+    expect(reset?.status).toBe("pending");
+    expect(reset?.attempts).toBe(0);
+    expect(reset?.raw).toEqual({ secret: "private-repo-diff" });
+    expect(reset?.availableAt.getTime()).toBe(now + 2_000);
+    expect(await resetFailedJob(db, job.id)).toBe(false);
   });
 });
 
@@ -371,6 +380,20 @@ describe("messages", () => {
     expect(await completeMessageEffect(db, current, "real-ts")).toBe(true);
     expect((await findMessageEffect(db, input))?.slackTs).toBe("real-ts");
     expect(await claimMessageEffect(db, input)).toBeUndefined();
+  });
+
+  it("keeps a message effect fenced beyond the worker's default job lease", async () => {
+    await seedPr();
+    const input = {
+      prId: prId("unkey/api", 1),
+      kind: "review",
+      githubEventRef: "77",
+    };
+    const first = await claimMessageEffect(db, input, { now: new Date(1_000) });
+    expect(first).toBeDefined();
+
+    expect(await claimMessageEffect(db, input, { now: new Date(61_000) })).toBeUndefined();
+    expect(await claimMessageEffect(db, input, { now: new Date(121_000) })).toBeDefined();
   });
 
   it("keeps primary keys database-safe while natural keys deduplicate effects", async () => {

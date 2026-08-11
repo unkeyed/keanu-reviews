@@ -35,16 +35,26 @@ export function createReminderScheduler(deps: ReminderDeps) {
   const windowMs = deps.reminderHours * 60 * 60_000;
   const leaseMs = deps.reminderLeaseMs ?? 5 * 60_000;
 
-  const onReviewRequested = async (prId: string, reviewerGithubId: number): Promise<void> => {
+  const onReviewRequested = async (
+    prId: string,
+    reviewerGithubId: number,
+    sourceUpdatedAt?: Date,
+  ): Promise<void> => {
+    const requestedAt = sourceUpdatedAt?.getTime() ?? now();
     await scheduleReminder(deps.db, {
       prId,
       reviewerGithubId,
-      dueAt: new Date(now() + windowMs),
+      dueAt: new Date(requestedAt + windowMs),
     });
   };
 
-  const cancel = (prId: string, reviewerGithubId: number) =>
-    cancelForReviewer(deps.db, prId, reviewerGithubId);
+  const cancel = (prId: string, reviewerGithubId: number, sourceUpdatedAt?: Date) =>
+    cancelForReviewer(
+      deps.db,
+      prId,
+      reviewerGithubId,
+      sourceUpdatedAt ? new Date(sourceUpdatedAt.getTime() + windowMs) : undefined,
+    );
 
   const processDue = async (): Promise<number> => {
     const scanTime = new Date(now());

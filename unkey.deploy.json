@@ -3,7 +3,7 @@
   "runtime": "node",
   "entrypoint": "src/index.ts",
   "healthCheck": {
-    "path": "/health",
+    "path": "/ready",
     "port": 3000
   },
   "instances": {

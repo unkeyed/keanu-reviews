@@ -10,7 +10,7 @@ import { cancelForPr } from "../db/repositories/reminders.ts";
 import { type PrState, computeTargetState, isTerminal } from "../domain/prState.ts";
 import type { Logger } from "../logger.ts";
 import { sanitizeLinkLabel, sanitizeMrkdwn } from "../slack/blocks.ts";
-import type { SlackClient } from "../slack/client.ts";
+import type { SlackBlock, SlackClient } from "../slack/client.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { channelName } from "../slack/naming.ts";
 
@@ -177,7 +177,7 @@ export async function ensurePullRequestChannel(
   return row;
 }
 
-function lifecycleBlocks(pr: PullRequestPayload["pull_request"], state: PrState): unknown[] {
+function lifecycleBlocks(pr: PullRequestPayload["pull_request"], state: PrState): SlackBlock[] {
   return [
     {
       type: "section",

@@ -1,6 +1,10 @@
-import { WebClient } from "@slack/web-api";
+import { ErrorCode, WebClient, type WebClientOptions } from "@slack/web-api";
 import type { SlackClient, SlackMessage } from "./client.ts";
-import { Pacer, withRetry } from "./rateLimiter.ts";
+import { Pacer, type SleepFn, withRetry } from "./rateLimiter.ts";
+
+const REQUEST_TIMEOUT_MS = 10_000;
+const MAX_RATE_LIMIT_RETRIES = 1;
+const MAX_RATE_LIMIT_DELAY_MS = 5_000;
 
 export function isSlackChannelAlreadyInState(
   error: unknown,
@@ -13,6 +17,33 @@ interface SlackUserLookupApi {
   lookupByEmail(input: { email: string }): Promise<{ user?: { id?: string } }>;
 }
 
+interface SlackWebApi {
+  conversations: {
+    create(input: { name: string }): Promise<{ channel?: { id?: string } }>;
+    rename(input: { channel: string; name: string }): Promise<unknown>;
+    archive(input: { channel: string }): Promise<unknown>;
+    unarchive(input: { channel: string }): Promise<unknown>;
+    invite(input: { channel: string; users: string }): Promise<unknown>;
+  };
+  users: SlackUserLookupApi;
+  apiCall(method: string, options?: Record<string, unknown>): Promise<unknown>;
+}
+
+export interface WebApiSlackClientOptions {
+  /** Injected by offline adapter tests; production creates the official WebClient. */
+  web?: SlackWebApi;
+  webFactory?: (token: string, options: WebClientOptions) => SlackWebApi;
+  sleep?: SleepFn;
+  now?: () => number;
+}
+
+function requireNonEmptyString(value: unknown, description: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`Slack ${description} response did not include a value`);
+  }
+  return value;
+}
+
 /** Slack uses `users_not_found` for a legitimate lookup miss; all other errors are operational. */
 export async function lookupSlackUserByEmail(
   users: SlackUserLookupApi,
@@ -20,7 +51,7 @@ export async function lookupSlackUserByEmail(
 ): Promise<string | undefined> {
   try {
     const result = await users.lookupByEmail({ email });
-    return result.user?.id;
+    return requireNonEmptyString(result.user?.id, "users.lookupByEmail user ID");
   } catch (error) {
     if ((error as { data?: { error?: string } })?.data?.error === "users_not_found") {
       return undefined;
@@ -34,23 +65,41 @@ export async function lookupSlackUserByEmail(
  * Retry-After, and paces posts to ~1/sec per channel. Channel creation is
  * serialized under one key so a PR flood queues within the Tier-2 limit.
  */
-export function createWebApiSlackClient(token: string): SlackClient {
-  const web = new WebClient(token);
-  const postPacer = new Pacer(1000);
-  const createPacer = new Pacer(3000); // ~20/min Tier-2 headroom
+export function createWebApiSlackClient(
+  token: string,
+  options: WebApiSlackClientOptions = {},
+): SlackClient {
+  const webFactory = options.webFactory ?? ((apiToken, config) => new WebClient(apiToken, config));
+  const web: SlackWebApi =
+    options.web ??
+    webFactory(token, {
+      // Durable jobs own retries. SDK defaults can otherwise retry for roughly
+      // 30 minutes, far beyond the worker and message-effect leases.
+      retryConfig: { retries: 0 },
+      rejectRateLimitedCalls: true,
+      timeout: REQUEST_TIMEOUT_MS,
+    });
+  const postPacer = new Pacer(1000, options.sleep, options.now);
+  const createPacer = new Pacer(3000, options.sleep, options.now); // ~20/min Tier-2 headroom
 
   const toRetryable = (e: unknown): unknown => {
     const err = e as { code?: string; retryAfter?: number };
-    if (err?.code === "slack_webapi_rate_limited") {
+    if (err?.code === ErrorCode.RateLimitedError) {
       return { status: 429, retryAfterSeconds: err.retryAfter ?? 1 };
     }
     return e;
   };
   const call = <T>(fn: () => Promise<T>): Promise<T> =>
-    withRetry(() =>
-      fn().catch((e) => {
-        throw toRetryable(e);
-      }),
+    withRetry(
+      () =>
+        fn().catch((e) => {
+          throw toRetryable(e);
+        }),
+      {
+        maxRetries: MAX_RATE_LIMIT_RETRIES,
+        maxRetryDelayMs: MAX_RATE_LIMIT_DELAY_MS,
+        sleep: options.sleep,
+      },
     );
 
   return {
@@ -58,7 +107,9 @@ export function createWebApiSlackClient(token: string): SlackClient {
       createPacer.run("create", () =>
         call(async () => {
           const res = await web.conversations.create({ name });
-          return { channelId: res.channel?.id ?? "" };
+          return {
+            channelId: requireNonEmptyString(res.channel?.id, "conversations.create channel ID"),
+          };
         }),
       ),
     renameChannel: (channelId, name) =>
@@ -97,16 +148,14 @@ export function createWebApiSlackClient(token: string): SlackClient {
     postMessage: (msg: SlackMessage) =>
       postPacer.run(msg.channel, () =>
         call(async () => {
-          // The Web API accepts client_msg_id even though the generated method
-          // arguments in this SDK version omit it, so use the generic call.
           const res = (await web.apiCall("chat.postMessage", {
             channel: msg.channel,
             text: msg.text,
-            blocks: msg.blocks as never,
+            blocks: msg.blocks,
             thread_ts: msg.threadTs,
             client_msg_id: msg.clientMsgId,
           })) as { ts?: unknown };
-          return { ts: typeof res.ts === "string" ? res.ts : "" };
+          return { ts: requireNonEmptyString(res.ts, "chat.postMessage timestamp") };
         }),
       ),
     lookupUserByEmail: (email) =>

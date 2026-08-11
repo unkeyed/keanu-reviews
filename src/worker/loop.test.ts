@@ -22,7 +22,7 @@ afterEach(async () => {
 });
 
 describe("worker retries", () => {
-  it("backs off a failed job, then purges its payload after the final attempt", async () => {
+  it("backs off a failed job, then retains its payload for admin replay", async () => {
     const job = await enqueueJob(db, {
       deliveryId: "retry-job",
       event: "pull_request",
@@ -54,7 +54,7 @@ describe("worker retries", () => {
     expect(await worker.tick()).toBe(true);
     [row] = await db.select().from(jobs).where(eq(jobs.id, job.id));
     expect(row?.status).toBe("failed");
-    expect(row?.raw).toBeNull();
+    expect(row?.raw).toEqual({ private: "payload" });
   });
 
   it("does not run a handler beyond the retry budget when reclaiming a crashed attempt", async () => {
@@ -81,7 +81,7 @@ describe("worker retries", () => {
     expect(router).not.toHaveBeenCalled();
     const [row] = await db.select().from(jobs).where(eq(jobs.id, job.id));
     expect(row?.status).toBe("failed");
-    expect(row?.raw).toBeNull();
+    expect(row?.raw).toEqual({ private: "payload" });
   });
 });
 
