@@ -1,3 +1,4 @@
+import type { PrForShaFetcher } from "../ci/status.ts";
 import type { GithubUserFetcher } from "../identity/link.ts";
 import type { GithubEmailFetcher } from "../identity/resolve.ts";
 import type { InstallationAuth } from "./auth.ts";
@@ -43,5 +44,25 @@ export function createGithubUserFetcher(
     if (!res.ok) return undefined;
     const body = (await res.json()) as { id?: number; login?: string };
     return body.id && body.login ? { id: body.id, login: body.login } : undefined;
+  };
+}
+
+/** Production fallback PR resolver (U7): the PR a commit heads, via the Checks-safe read API. */
+export function createPrForShaFetcher(
+  auth: InstallationAuth,
+  installationId: string,
+): PrForShaFetcher {
+  return async (repoFullName: string, sha: string) => {
+    const token = await auth.getToken(installationId);
+    const res = await fetch(`https://api.github.com/repos/${repoFullName}/commits/${sha}/pulls`, {
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: "application/vnd.github+json",
+        "user-agent": "unkey-slack-pr-bot",
+      },
+    });
+    if (!res.ok) return undefined;
+    const body = (await res.json()) as { number?: number }[];
+    return body[0]?.number;
   };
 }

@@ -41,3 +41,20 @@ export function createWorker(deps: WorkerDeps) {
 
   return { tick, drain };
 }
+
+/** Continuously drain the job queue on an interval (production loop). */
+export function startWorkerLoop(
+  worker: { drain: () => Promise<number> },
+  intervalMs: number,
+  logger: Logger,
+): { stop: () => void } {
+  const timer = setInterval(() => {
+    worker.drain().catch((err) => {
+      logger.error("worker drain failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }, intervalMs);
+  timer.unref?.();
+  return { stop: () => clearInterval(timer) };
+}

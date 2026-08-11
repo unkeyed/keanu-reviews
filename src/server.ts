@@ -6,16 +6,15 @@ import { health } from "./routes/health.ts";
 export interface AppDeps {
   config: Config;
   logger: Logger;
+  /** Feature routes composed in index.ts (GitHub webhook U3, Slack command U9). */
+  mounts?: Hono[];
 }
 
-/**
- * Build the Hono application. Routes for webhook ingestion (U3) and the Slack
- * slash command (U9) mount here as those units land; U1 wires only health.
- */
+/** Build the Hono application: health plus whatever feature routes are mounted. */
 export function createApp(deps: AppDeps): Hono {
   const app = new Hono();
-
   app.route("/", health);
+  for (const m of deps.mounts ?? []) app.route("/", m);
 
   app.onError((err, c) => {
     deps.logger.error("unhandled request error", { err: err.message, path: c.req.path });
