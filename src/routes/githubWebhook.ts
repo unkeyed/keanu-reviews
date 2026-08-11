@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import type { Db } from "../db/client.ts";
-import { markDeliverySeen } from "../db/repositories/deliveries.ts";
-import { enqueueJob } from "../db/repositories/jobs.ts";
+import { enqueueDeliveryJob } from "../db/repositories/jobs.ts";
 import { verifySignature } from "../github/verify.ts";
 import type { Logger } from "../logger.ts";
 
@@ -55,18 +54,16 @@ export function createGithubWebhookRoute(deps: WebhookDeps): Hono {
     }
 
     // Dedupe: delivery is at-least-once; retries/redeliveries reuse the GUID (KTD4).
-    const isNew = await markDeliverySeen(deps.db, deliveryId);
-    if (!isNew) {
-      deps.logger.info("duplicate delivery ignored", { deliveryId });
-      return c.json({ ok: true, deduped: true }, 200);
-    }
-
-    await enqueueJob(deps.db, {
+    const accepted = await enqueueDeliveryJob(deps.db, {
       deliveryId,
       event,
       action: payload.action ?? null,
       raw: payload,
     });
+    if (!accepted.isNew) {
+      deps.logger.info("duplicate delivery ignored", { deliveryId });
+      return c.json({ ok: true, deduped: true }, 200);
+    }
 
     return c.json({ ok: true }, 202);
   });

@@ -1,8 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import type { Db } from "../client.ts";
 import { messages } from "../schema.ts";
-
-let seq = 0;
 
 /**
  * Record a posted Slack message, keyed to its PR + kind + source event so a
@@ -15,7 +14,7 @@ export async function recordMessage(
 ): Promise<boolean> {
   const inserted = await db
     .insert(messages)
-    .values({ id: `${input.prId}:${input.kind}:${seq++}`, ...input })
+    .values({ id: randomUUID(), ...input })
     .onConflictDoNothing({
       target: [messages.prId, messages.kind, messages.githubEventRef],
     })

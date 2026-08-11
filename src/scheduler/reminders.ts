@@ -3,8 +3,12 @@ import { findByGithubId } from "../db/repositories/identities.ts";
 import { findById } from "../db/repositories/pullRequests.ts";
 import {
   cancelForReviewer,
+  cancelReminderClaim,
   claimReminder,
+  isReminderClaimCurrent,
   listDue,
+  markReminderSent,
+  releaseReminderClaim,
   scheduleReminder,
 } from "../db/repositories/reminders.ts";
 import { isTerminal } from "../domain/prState.ts";
@@ -16,6 +20,7 @@ export interface ReminderDeps {
   slack: SlackClient;
   logger: Logger;
   reminderHours: number;
+  reminderLeaseMs?: number;
   now?: () => number;
 }
 
@@ -28,6 +33,7 @@ export interface ReminderDeps {
 export function createReminderScheduler(deps: ReminderDeps) {
   const now = deps.now ?? Date.now;
   const windowMs = deps.reminderHours * 60 * 60_000;
+  const leaseMs = deps.reminderLeaseMs ?? 5 * 60_000;
 
   const onReviewRequested = async (prId: string, reviewerGithubId: number): Promise<void> => {
     await scheduleReminder(deps.db, {
@@ -41,31 +47,47 @@ export function createReminderScheduler(deps: ReminderDeps) {
     cancelForReviewer(deps.db, prId, reviewerGithubId);
 
   const processDue = async (): Promise<number> => {
-    const due = await listDue(deps.db, new Date(now()));
+    const scanTime = new Date(now());
+    const due = await listDue(deps.db, scanTime, leaseMs);
     let posted = 0;
     for (const r of due) {
-      const claimed = await claimReminder(deps.db, r.id); // atomic pending -> sent (KTD10)
+      const claimed = await claimReminder(deps.db, r.id, scanTime, leaseMs);
       if (!claimed) continue; // lost the race to another scanner
 
       const pr = await findById(deps.db, r.prId);
-      if (!pr?.channelId || isTerminal(pr.currentState)) continue; // safety net
+      if (!pr?.channelId) {
+        await releaseReminderClaim(deps.db, claimed);
+        continue;
+      }
+      if (isTerminal(pr.currentState)) {
+        await cancelReminderClaim(deps.db, claimed);
+        continue;
+      }
 
       const mapped = await findByGithubId(deps.db, r.reviewerGithubId);
       const mention = mapped ? `<@${mapped.slackUserId}>` : "the requested reviewer";
-      await deps.slack.postMessage({
-        channel: pr.channelId,
-        text: "Reminder: this PR is still waiting for review",
-        threadTs: pr.rootMessageTs ?? undefined,
-        blocks: [
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: `⏰ ${mention} — this PR has been waiting ~${deps.reminderHours}h for your review.`,
+      if (!(await isReminderClaimCurrent(deps.db, claimed))) continue;
+
+      try {
+        await deps.slack.postMessage({
+          channel: pr.channelId,
+          text: "Reminder: this PR is still waiting for review",
+          threadTs: pr.rootMessageTs ?? undefined,
+          blocks: [
+            {
+              type: "section",
+              text: {
+                type: "mrkdwn",
+                text: `⏰ ${mention} — this PR has been waiting ~${deps.reminderHours}h for your review.`,
+              },
             },
-          },
-        ],
-      });
+          ],
+        });
+      } catch (err) {
+        await releaseReminderClaim(deps.db, claimed);
+        throw err;
+      }
+      await markReminderSent(deps.db, claimed);
       posted += 1;
     }
     return posted;

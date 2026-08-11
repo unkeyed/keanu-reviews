@@ -3,7 +3,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "./client.ts";
 import { markDeliverySeen } from "./repositories/deliveries.ts";
 import { findByGithubId, upsertIdentity } from "./repositories/identities.ts";
-import { completeJob, enqueueJob } from "./repositories/jobs.ts";
+import {
+  claimNextJob,
+  completeJob,
+  enqueueDeliveryJob,
+  enqueueJob,
+  rescheduleOrFailJob,
+} from "./repositories/jobs.ts";
+import { recordMessage } from "./repositories/messages.ts";
 import {
   findByHeadSha,
   findByRepoNumber,
@@ -13,10 +20,11 @@ import {
 import {
   cancelForReviewer,
   claimReminder,
+  isReminderClaimCurrent,
   listDue,
   scheduleReminder,
 } from "./repositories/reminders.ts";
-import { jobs } from "./schema.ts";
+import { jobs, messages, processedDeliveries, reminders } from "./schema.ts";
 import { createTestDb } from "./testDb.ts";
 
 let db: Db;
@@ -76,6 +84,44 @@ describe("dedupe", () => {
     expect(await markDeliverySeen(db, "delivery-1")).toBe(true);
     expect(await markDeliverySeen(db, "delivery-1")).toBe(false);
   });
+
+  it("persists the delivery marker and durable job in one transaction", async () => {
+    const result = await enqueueDeliveryJob(db, {
+      deliveryId: "delivery-atomic",
+      event: "pull_request",
+      action: "opened",
+      raw: { private: "payload" },
+    });
+
+    expect(result.isNew).toBe(true);
+    expect(await db.select().from(processedDeliveries)).toHaveLength(1);
+    expect(await db.select().from(jobs)).toHaveLength(1);
+  });
+
+  it("rolls the delivery marker back when durable job insertion fails", async () => {
+    await db.insert(jobs).values({
+      id: "delivery-conflict",
+      deliveryId: "unrelated-delivery",
+      event: "pull_request",
+      action: "opened",
+      raw: {},
+    });
+
+    await expect(
+      enqueueDeliveryJob(db, {
+        deliveryId: "delivery-conflict",
+        event: "pull_request",
+        action: "opened",
+        raw: { private: "payload" },
+      }),
+    ).rejects.toThrow();
+
+    const markers = await db
+      .select()
+      .from(processedDeliveries)
+      .where(eq(processedDeliveries.deliveryId, "delivery-conflict"));
+    expect(markers).toHaveLength(0);
+  });
 });
 
 describe("reminders", () => {
@@ -97,6 +143,38 @@ describe("reminders", () => {
     const [a, b] = await Promise.all([claimReminder(db, r.id), claimReminder(db, r.id)]);
     const winners = [a, b].filter(Boolean);
     expect(winners).toHaveLength(1);
+    expect(winners[0]?.status).toBe("sending");
+  });
+
+  it("allows cancellation to suppress a reminder while it is claimed", async () => {
+    await seedPr();
+    const r = await scheduleReminder(db, {
+      prId: prId("unkey/api", 1),
+      reviewerGithubId: 7,
+      dueAt: new Date(1_000),
+    });
+    const claimed = await claimReminder(db, r.id, new Date(2_000), 5_000);
+    expect(claimed).toBeDefined();
+    if (!claimed) throw new Error("expected reminder claim");
+
+    await cancelForReviewer(db, prId("unkey/api", 1), 7);
+
+    expect(await isReminderClaimCurrent(db, claimed)).toBe(false);
+    const [row] = await db.select().from(reminders).where(eq(reminders.id, r.id));
+    expect(row?.status).toBe("cancelled");
+  });
+
+  it("reclaims an expired reminder sending lease", async () => {
+    await seedPr();
+    const r = await scheduleReminder(db, {
+      prId: prId("unkey/api", 1),
+      reviewerGithubId: 7,
+      dueAt: new Date(1_000),
+    });
+    await claimReminder(db, r.id, new Date(2_000), 5_000);
+    expect(await listDue(db, new Date(6_999), 5_000)).toHaveLength(0);
+    expect(await listDue(db, new Date(7_000), 5_000)).toHaveLength(1);
+    expect(await claimReminder(db, r.id, new Date(7_000), 5_000)).toBeDefined();
   });
 
   it("cancel flips a pending reminder so it no longer lists as due", async () => {
@@ -132,9 +210,95 @@ describe("jobs", () => {
       action: "opened",
       raw: { secret: "private-repo-diff" },
     });
-    await completeJob(db, job.id);
+    const claimed = await claimNextJob(db, { now: job.availableAt });
+    expect(claimed?.id).toBe(job.id);
+    if (!claimed) throw new Error("expected job claim");
+    await completeJob(db, claimed);
     const [row] = await db.select().from(jobs).where(eq(jobs.id, job.id)).limit(1);
     expect(row?.status).toBe("done");
     expect(row?.raw).toBeNull();
+  });
+
+  it("reclaims a processing job after its lease expires", async () => {
+    const job = await enqueueJob(db, {
+      deliveryId: "lease-job",
+      event: "pull_request",
+      action: "opened",
+      raw: {},
+    });
+    const now = job.availableAt.getTime();
+    const first = await claimNextJob(db, { now: new Date(now), leaseMs: 5_000 });
+    expect(first?.id).toBe(job.id);
+    expect(await claimNextJob(db, { now: new Date(now + 4_999), leaseMs: 5_000 })).toBeUndefined();
+    const reclaimed = await claimNextJob(db, {
+      now: new Date(now + 5_000),
+      leaseMs: 5_000,
+    });
+    expect(reclaimed?.id).toBe(job.id);
+    expect(reclaimed?.attempts).toBe(2);
+  });
+
+  it("fences a stale worker after its processing lease is reclaimed", async () => {
+    const job = await enqueueJob(db, {
+      deliveryId: "fenced-job",
+      event: "pull_request",
+      action: "opened",
+      raw: {},
+    });
+    const now = job.availableAt.getTime();
+    const staleClaim = await claimNextJob(db, { now: new Date(now), leaseMs: 5_000 });
+    const currentClaim = await claimNextJob(db, {
+      now: new Date(now + 5_000),
+      leaseMs: 5_000,
+    });
+    if (!staleClaim || !currentClaim) throw new Error("expected both job claims");
+
+    expect(await completeJob(db, staleClaim)).toBe(false);
+    expect(await completeJob(db, currentClaim)).toBe(true);
+    const [row] = await db.select().from(jobs).where(eq(jobs.id, job.id));
+    expect(row?.status).toBe("done");
+  });
+
+  it("purges raw payload when retries are exhausted", async () => {
+    const job = await enqueueJob(db, {
+      deliveryId: "terminal-job",
+      event: "pull_request",
+      action: "opened",
+      raw: { secret: "private-repo-diff" },
+    });
+    const now = job.availableAt.getTime();
+    const claimed = await claimNextJob(db, { now: new Date(now), leaseMs: 5_000 });
+    expect(claimed?.id).toBe(job.id);
+    if (!claimed) throw new Error("expected job claim");
+    await rescheduleOrFailJob(db, claimed, {
+      maxAttempts: 1,
+      retryAt: new Date(now + 1_000),
+    });
+
+    const [row] = await db.select().from(jobs).where(eq(jobs.id, job.id));
+    expect(row?.status).toBe("failed");
+    expect(row?.raw).toBeNull();
+  });
+});
+
+describe("messages", () => {
+  it("uses database-safe UUID primary keys rather than a process-local sequence", async () => {
+    await upsertPullRequest(db, {
+      repoFullName: "unkey/api",
+      number: 1,
+      githubPrId: 1,
+      currentState: "pr",
+    });
+    await recordMessage(db, {
+      prId: prId("unkey/api", 1),
+      kind: "lifecycle",
+      githubEventRef: null,
+      slackTs: "1.0",
+    });
+
+    const [row] = await db.select().from(messages);
+    expect(row?.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
   });
 });

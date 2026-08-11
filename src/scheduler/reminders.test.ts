@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "../db/client.ts";
 import {
@@ -7,6 +8,7 @@ import {
   upsertPullRequest,
 } from "../db/repositories/pullRequests.ts";
 import { listDue } from "../db/repositories/reminders.ts";
+import { reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createLogger } from "../logger.ts";
 import { FakeSlackClient } from "../testing/fakeSlack.ts";
@@ -65,6 +67,21 @@ describe("reminder scheduler (U8, R9)", () => {
     expect(slack.messages).toHaveLength(1);
     // second scan finds nothing pending
     expect(await s.processDue()).toBe(0);
+  });
+
+  it("returns a failed Slack delivery to pending instead of losing it", async () => {
+    const s = scheduler();
+    await s.onReviewRequested(PR, 7);
+    advanceHours(HOURS);
+    slack.postMessage = async () => {
+      throw new Error("Slack unavailable");
+    };
+
+    await expect(s.processDue()).rejects.toThrow("Slack unavailable");
+
+    const [row] = await db.select().from(reminders).where(eq(reminders.prId, PR));
+    expect(row?.status).toBe("pending");
+    expect(await listDue(db, new Date(clock))).toHaveLength(1);
   });
 
   it("does not post when the review was submitted before due time", async () => {

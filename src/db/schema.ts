@@ -20,7 +20,12 @@ import {
  */
 
 export const prStateEnum = pgEnum("pr_state", ["draft", "pr", "closed", "merged"]);
-export const reminderStatusEnum = pgEnum("reminder_status", ["pending", "sent", "cancelled"]);
+export const reminderStatusEnum = pgEnum("reminder_status", [
+  "pending",
+  "sending",
+  "sent",
+  "cancelled",
+]);
 export const jobStatusEnum = pgEnum("job_status", ["pending", "processing", "done", "failed"]);
 export const identitySourceEnum = pgEnum("identity_source", [
   "self-link",
@@ -93,6 +98,7 @@ export const reminders = pgTable(
     reviewerGithubId: bigint("reviewer_github_id", { mode: "number" }).notNull(),
     dueAt: timestamp("due_at", { withTimezone: true }).notNull(),
     status: reminderStatusEnum("status").notNull().default("pending"),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
@@ -112,10 +118,12 @@ export const jobs = pgTable(
     status: jobStatusEnum("status").notNull().default("pending"),
     attempts: integer("attempts").notNull().default(0),
     claimedAt: timestamp("claimed_at", { withTimezone: true }), // single-writer lease (KTD10)
+    availableAt: timestamp("available_at", { withTimezone: true }).notNull().defaultNow(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
-    statusCreatedIdx: index("jobs_status_created_idx").on(t.status, t.createdAt),
+    statusCreatedIdx: index("jobs_status_created_idx").on(t.status, t.availableAt, t.createdAt),
+    deliveryUnique: uniqueIndex("jobs_delivery_unique").on(t.deliveryId),
   }),
 );
 
