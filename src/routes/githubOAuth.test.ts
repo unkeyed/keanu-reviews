@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../db/client.ts";
-import { findByGithubId, upsertIdentity } from "../db/repositories/identities.ts";
+import { findByGithubId } from "../db/repositories/identities.ts";
+import { githubLinkConfirmations, oauthStateNonces } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createOAuthState } from "../github/oauth.ts";
 import { createLogger } from "../logger.ts";
@@ -10,6 +11,7 @@ const STATE_SECRET = "oauth_state_secret_with_at_least_32_bytes";
 const TEAM_ID = "T123";
 const CALLBACK_URL = "https://bot.example.com/oauth/github/callback";
 const NOW = 1_800_000_000_000;
+const CONFIRMATION_CODE = Buffer.alloc(24, 9).toString("base64url");
 
 let db: Db;
 let close: () => Promise<void>;
@@ -44,6 +46,7 @@ function app() {
     slackTeamId: TEAM_ID,
     callbackUrl: CALLBACK_URL,
     now: () => NOW,
+    randomBytes: () => Buffer.alloc(24, 9),
   });
 }
 
@@ -83,18 +86,18 @@ describe("GitHub OAuth callback", () => {
     expect(authenticate).not.toHaveBeenCalled();
   });
 
-  it("persists only the identity returned by authenticated GET /user", async () => {
+  it("creates a Slack confirmation after GET /user without linking directly", async () => {
     const res = await callback(state());
 
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(res.headers.get("content-security-policy")).toContain("default-src 'none'");
     expect(authenticate).toHaveBeenCalledWith({ code: "one-time-code", callbackUrl: CALLBACK_URL });
-    expect(await findByGithubId(db, 583231)).toMatchObject({
-      githubLogin: "octocat",
-      slackUserId: "U7",
-      source: "self-link",
-    });
+    expect(await findByGithubId(db, 583231)).toBeUndefined();
+    expect(await res.text()).toContain(`/link-github confirm ${CONFIRMATION_CODE}`);
+    expect(await db.select().from(githubLinkConfirmations)).toHaveLength(1);
+    expect(await db.select().from(oauthStateNonces)).toHaveLength(1);
   });
 
   it("does not persist an identity when exchange or user lookup fails", async () => {
@@ -105,40 +108,18 @@ describe("GitHub OAuth callback", () => {
     expect(res.status).toBe(502);
     expect(await res.text()).not.toContain("secret details");
     expect(await findByGithubId(db, 583231)).toBeUndefined();
+    expect(await db.select().from(githubLinkConfirmations)).toHaveLength(0);
+    expect(await db.select().from(oauthStateNonces)).toHaveLength(0);
   });
 
-  it("rejects takeover of a GitHub identity already mapped to another Slack user", async () => {
-    await upsertIdentity(db, {
-      githubUserId: 583231,
-      githubLogin: "old-login",
-      slackUserId: "U-OWNER",
-      source: "admin-import",
-    });
+  it("rejects replay of a signed state nonce after GitHub authentication", async () => {
+    expect((await callback(state())).status).toBe(200);
+    const replay = await callback(state(), "another-code");
 
-    const res = await callback(state());
-
-    expect(res.status).toBe(409);
-    expect(await findByGithubId(db, 583231)).toMatchObject({
-      githubLogin: "old-login",
-      slackUserId: "U-OWNER",
-      source: "admin-import",
-    });
-  });
-
-  it("allows the same Slack owner to reauthenticate and refresh the login", async () => {
-    await upsertIdentity(db, {
-      githubUserId: 583231,
-      githubLogin: "old-login",
-      slackUserId: "U7",
-      source: "self-link",
-    });
-
-    const res = await callback(state());
-
-    expect(res.status).toBe(200);
-    expect(await findByGithubId(db, 583231)).toMatchObject({
-      githubLogin: "octocat",
-      slackUserId: "U7",
-    });
+    expect(replay.status).toBe(409);
+    expect(await replay.text()).toContain("already been used");
+    expect(authenticate).toHaveBeenCalledTimes(2);
+    expect(await db.select().from(githubLinkConfirmations)).toHaveLength(1);
+    expect(await findByGithubId(db, 583231)).toBeUndefined();
   });
 });

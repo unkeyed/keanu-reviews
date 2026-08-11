@@ -31,4 +31,15 @@ describe("database readiness", () => {
 
     await expect(createDbReadyCheck(testDb.db)()).rejects.toThrow(/pull_request_lifecycle_claims/i);
   });
+
+  it.each(["github_link_confirmations", "oauth_state_nonces"])(
+    "rejects a database missing OAuth table %s",
+    async (table) => {
+      const testDb = await createTestDb();
+      cleanups.push(() => testDb.client.close());
+      await testDb.client.exec(`drop table ${table}`);
+
+      await expect(createDbReadyCheck(testDb.db)()).rejects.toThrow(new RegExp(table, "i"));
+    },
+  );
 });

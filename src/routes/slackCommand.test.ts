@@ -1,5 +1,10 @@
 import { createHmac } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Db } from "../db/client.ts";
+import { createGithubLinkConfirmation } from "../db/repositories/githubLinks.ts";
+import { findByGithubId } from "../db/repositories/identities.ts";
+import { githubLinkConfirmations } from "../db/schema.ts";
+import { createTestDb } from "../db/testDb.ts";
 import { verifyOAuthState } from "../github/oauth.ts";
 import { createLogger } from "../logger.ts";
 import { createSlackCommandRoute } from "./slackCommand.ts";
@@ -8,18 +13,32 @@ const SIGNING_SECRET = "signing_secret";
 const STATE_SECRET = "oauth_state_secret_with_at_least_32_bytes";
 const TEAM_ID = "T123";
 const TS = String(Math.floor(Date.now() / 1000));
+const NOW = Number(TS) * 1000;
+const CONFIRMATION_CODE = Buffer.alloc(24, 5).toString("base64url");
 const sign = (body: string): string =>
   `v0=${createHmac("sha256", SIGNING_SECRET).update(`v0:${TS}:${body}`, "utf8").digest("hex")}`;
 
+let db: Db;
+let close: () => Promise<void>;
+
+beforeEach(async () => {
+  const testDb = await createTestDb();
+  db = testDb.db;
+  close = () => testDb.client.close();
+});
+
+afterEach(() => close());
+
 function createApp(overrides: Partial<Parameters<typeof createSlackCommandRoute>[0]> = {}) {
   return createSlackCommandRoute({
+    db,
     logger: createLogger("error"),
     signingSecret: SIGNING_SECRET,
     slackTeamId: TEAM_ID,
     oauthStateSecret: STATE_SECRET,
     githubOauthClientId: "Iv1.client-id",
     githubOauthCallbackUrl: "https://bot.example.com/oauth/github/callback",
-    now: () => Number(TS) * 1000,
+    now: () => NOW,
     randomBytes: () => Buffer.alloc(16, 7),
     ...overrides,
   });
@@ -34,6 +53,19 @@ const post = (app: ReturnType<typeof createSlackCommandRoute>, body: string, sig
       "x-slack-signature": sig,
       "content-type": "application/x-www-form-urlencoded",
     },
+  });
+
+const createPending = (over: Partial<Parameters<typeof createGithubLinkConfirmation>[1]> = {}) =>
+  createGithubLinkConfirmation(db, {
+    nonce: "route-state-nonce",
+    stateExpiresAt: new Date(NOW + 10 * 60_000),
+    code: CONFIRMATION_CODE,
+    slackTeamId: TEAM_ID,
+    slackUserId: "U7",
+    githubUserId: 583231,
+    githubLogin: "octocat",
+    now: new Date(NOW),
+    ...over,
   });
 
 describe("slash command /link-github (U9)", () => {
@@ -63,12 +95,13 @@ describe("slash command /link-github (U9)", () => {
   });
 
   it("returns an ephemeral authorize URL whose state binds the Slack identity", async () => {
-    const body = `user_id=U7&team_id=${TEAM_ID}&text=ignored-attacker-login`;
+    const body = `user_id=U7&team_id=${TEAM_ID}`;
     const res = await post(createApp(), body);
 
     expect(res.status).toBe(200);
     const response = (await res.json()) as { response_type: string; text: string };
     expect(response.response_type).toBe("ephemeral");
+    expect(res.headers.get("cache-control")).toBe("no-store");
     const encodedUrl = response.text.match(/<(https:\/\/[^|]+)\|/)?.[1];
     expect(encodedUrl).toBeDefined();
     const authorizeUrl = new URL(encodedUrl as string);
@@ -90,7 +123,15 @@ describe("slash command /link-github (U9)", () => {
 
   it("acknowledges without calling a database or network dependency", async () => {
     const externalIo = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected I/O"));
-    const app = createApp({ randomBytes: () => Buffer.from("no-external-io!!") });
+    const noDb = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("unexpected database I/O");
+        },
+      },
+    ) as Db;
+    const app = createApp({ db: noDb, randomBytes: () => Buffer.from("no-external-io!!") });
     const body = `user_id=U7&team_id=${TEAM_ID}`;
 
     const res = await post(app, body);
@@ -98,5 +139,73 @@ describe("slash command /link-github (U9)", () => {
     expect(res.status).toBe(200);
     expect(externalIo).not.toHaveBeenCalled();
     externalIo.mockRestore();
+  });
+
+  it("rejects unknown command text without starting OAuth", async () => {
+    const body = `user_id=U7&team_id=${TEAM_ID}&text=octocat`;
+    const res = await post(createApp(), body);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      response_type: "ephemeral",
+      text: expect.stringContaining("Usage"),
+    });
+  });
+
+  it("confirms the verified GitHub account once for the bound Slack user", async () => {
+    await createPending();
+    const body = new URLSearchParams({
+      user_id: "U7",
+      team_id: TEAM_ID,
+      text: `confirm ${CONFIRMATION_CODE}`,
+    }).toString();
+
+    const confirmed = await post(createApp(), body);
+    expect(confirmed.status).toBe(200);
+    expect(confirmed.headers.get("cache-control")).toBe("no-store");
+    expect(await confirmed.json()).toMatchObject({
+      response_type: "ephemeral",
+      text: expect.stringContaining("octocat"),
+    });
+    expect(await findByGithubId(db, 583231)).toMatchObject({ slackUserId: "U7" });
+
+    const replay = await post(createApp(), body);
+    expect(await replay.json()).toMatchObject({ text: expect.stringContaining("invalid") });
+  });
+
+  it("does not consume a confirmation presented by the wrong Slack user", async () => {
+    await createPending();
+    const attackerBody = new URLSearchParams({
+      user_id: "U8",
+      team_id: TEAM_ID,
+      text: `confirm ${CONFIRMATION_CODE}`,
+    }).toString();
+    const ownerBody = new URLSearchParams({
+      user_id: "U7",
+      team_id: TEAM_ID,
+      text: `confirm ${CONFIRMATION_CODE}`,
+    }).toString();
+
+    expect(await (await post(createApp(), attackerBody)).json()).toMatchObject({
+      text: expect.stringContaining("invalid"),
+    });
+    expect(await db.select().from(githubLinkConfirmations)).toHaveLength(1);
+    expect(await (await post(createApp(), ownerBody)).json()).toMatchObject({
+      text: expect.stringContaining("octocat"),
+    });
+  });
+
+  it("rejects and cleans up an expired confirmation", async () => {
+    await createPending({ stateExpiresAt: new Date(NOW + 1_000) });
+    const body = new URLSearchParams({
+      user_id: "U7",
+      team_id: TEAM_ID,
+      text: `confirm ${CONFIRMATION_CODE}`,
+    }).toString();
+
+    const res = await post(createApp({ now: () => NOW + 1_000 }), body);
+    expect(await res.json()).toMatchObject({ text: expect.stringContaining("expired") });
+    expect(await db.select().from(githubLinkConfirmations)).toHaveLength(0);
+    expect(await findByGithubId(db, 583231)).toBeUndefined();
   });
 });

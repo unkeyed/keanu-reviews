@@ -212,6 +212,19 @@ describe("incremental legacy-schema upgrade", () => {
       expect(reminder.attempts).toBe(0);
     }
 
+    await applyMigration(client, "0005_chubby_masked_marvel.sql");
+    const oauthTables = await client.query<{ table_name: string }>(`
+      SELECT "table_name"
+      FROM "information_schema"."tables"
+      WHERE "table_schema" = 'public'
+        AND "table_name" IN ('oauth_state_nonces', 'github_link_confirmations')
+      ORDER BY "table_name"
+    `);
+    expect(oauthTables.rows.map(({ table_name }) => table_name)).toEqual([
+      "github_link_confirmations",
+      "oauth_state_nonces",
+    ]);
+
     const db = drizzle(client, { schema }) as unknown as Db;
     await expect(
       claimMessageEffect(db, {

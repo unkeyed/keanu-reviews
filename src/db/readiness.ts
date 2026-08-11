@@ -1,10 +1,12 @@
 import { sql } from "drizzle-orm";
 import type { Db } from "./client.ts";
 import {
+  githubLinkConfirmations,
   identities,
   installations,
   jobs,
   messages,
+  oauthStateNonces,
   processedDeliveries,
   pullRequestLifecycleClaims,
   pullRequests,
@@ -45,6 +47,16 @@ export function createDbReadyCheck(db: Db): ReadyCheck {
           ${identities.githubUserId}, ${identities.githubLogin}, ${identities.slackUserId},
           ${identities.source}, ${identities.updatedAt}
         )::text from ${identities} limit 0) as identities,
+        (select row(
+          ${oauthStateNonces.nonceHash}, ${oauthStateNonces.expiresAt},
+          ${oauthStateNonces.consumedAt}
+        )::text from ${oauthStateNonces} limit 0) as oauth_state_nonces,
+        (select row(
+          ${githubLinkConfirmations.codeHash}, ${githubLinkConfirmations.slackTeamId},
+          ${githubLinkConfirmations.slackUserId}, ${githubLinkConfirmations.githubUserId},
+          ${githubLinkConfirmations.githubLogin}, ${githubLinkConfirmations.expiresAt},
+          ${githubLinkConfirmations.createdAt}
+        )::text from ${githubLinkConfirmations} limit 0) as github_link_confirmations,
         (select row(
           ${reminders.id}, ${reminders.prId}, ${reminders.reviewerGithubId},
           ${reminders.dueAt}, ${reminders.availableAt}, ${reminders.sourceUpdatedAt},

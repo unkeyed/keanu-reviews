@@ -1,11 +1,14 @@
 import type { Buffer } from "node:buffer";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import type { Db } from "../db/client.ts";
+import { confirmGithubLink } from "../db/repositories/githubLinks.ts";
 import { createGithubAuthorizeUrl, createOAuthState } from "../github/oauth.ts";
 import type { Logger } from "../logger.ts";
 import { verifySlackSignature } from "../slack/verify.ts";
 
 export interface SlackCommandDeps {
+  db: Db;
   logger: Logger;
   signingSecret: string;
   slackTeamId: string;
@@ -23,6 +26,12 @@ export interface SlackCommandDeps {
  */
 export function createSlackCommandRoute(deps: SlackCommandDeps): Hono {
   const app = new Hono();
+
+  app.use("/slack/commands", async (c, next) => {
+    c.header("cache-control", "no-store");
+    c.header("pragma", "no-cache");
+    await next();
+  });
 
   app.use(
     "/slack/commands",
@@ -54,6 +63,40 @@ export function createSlackCommandRoute(deps: SlackCommandDeps): Hono {
     }
     const slackUserId = params.get("user_id");
     if (!slackUserId) return c.json({ error: "missing_user" }, 400);
+
+    const commandText = (params.get("text") ?? "").trim();
+    if (commandText) {
+      const match = /^confirm\s+([A-Za-z0-9_-]{32})$/.exec(commandText);
+      if (!match?.[1]) {
+        return c.json({
+          response_type: "ephemeral",
+          text: "Usage: `/link-github` or `/link-github confirm <code>`.",
+        });
+      }
+
+      const result = await confirmGithubLink(deps.db, {
+        code: match[1],
+        slackTeamId: deps.slackTeamId,
+        slackUserId,
+        now: new Date((deps.now ?? Date.now)()),
+      });
+      if (result.outcome === "linked" || result.outcome === "refreshed") {
+        return c.json({
+          response_type: "ephemeral",
+          text: `GitHub account \`${result.identity.githubLogin}\` is now linked to your Slack user.`,
+        });
+      }
+      if (result.outcome === "conflict") {
+        return c.json({
+          response_type: "ephemeral",
+          text: "That GitHub account is already linked to another Slack user. Start again or contact an administrator.",
+        });
+      }
+      return c.json({
+        response_type: "ephemeral",
+        text: "That confirmation code is invalid, expired, already used, or belongs to another Slack user.",
+      });
+    }
 
     const state = createOAuthState({
       secret: deps.oauthStateSecret,

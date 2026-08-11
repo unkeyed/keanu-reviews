@@ -73,10 +73,14 @@ does not need any GitHub write permission. Set the installation ID in
 
 ### GitHub account linking
 
-`/link-github` never trusts a typed GitHub username. It immediately returns an
-ephemeral GitHub authorization link, then maps the Slack user only after GitHub's
-authenticated user endpoint returns an immutable numeric account ID. Existing
-GitHub mappings cannot be transferred to another Slack user through this flow.
+`/link-github` never trusts a typed GitHub username. With no arguments it returns
+an ephemeral GitHub authorization link without waiting on database or network
+I/O. After GitHub verifies the account, the browser shows a short-lived one-time
+code; return to the same Slack user and run
+`/link-github confirm <code>` to finish. The signed OAuth state is single-use,
+the code is bound to the originating workspace and Slack user, and the callback
+does not link anything by itself. Existing GitHub mappings cannot be transferred
+to another Slack user through this flow.
 
 In the GitHub App settings, create a client secret and set the callback URL to
 exactly `${PUBLIC_URL}/oauth/github/callback` (for example,

@@ -36,6 +36,13 @@
       "when": 1786477317585,
       "tag": "0004_cool_bulldozer",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786478046023,
+      "tag": "0005_chubby_masked_marvel",
+      "breakpoints": true
     }
   ]
 }

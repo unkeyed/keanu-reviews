@@ -109,6 +109,45 @@ export const identities = pgTable("identities", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * Durable one-time consumption records for signed OAuth state nonces. The nonce
+ * itself is hashed before storage; a row means that state has already completed
+ * GitHub authentication and cannot mint another Slack confirmation.
+ */
+export const oauthStateNonces = pgTable(
+  "oauth_state_nonces",
+  {
+    nonceHash: text("nonce_hash").primaryKey(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ expiresAtIdx: index("oauth_state_nonces_expires_at_idx").on(t.expiresAt) }),
+);
+
+/**
+ * Short-lived, Slack-confirmed GitHub identity claims. Only a hash of the
+ * browser-displayed confirmation code is persisted.
+ */
+export const githubLinkConfirmations = pgTable(
+  "github_link_confirmations",
+  {
+    codeHash: text("code_hash").primaryKey(),
+    slackTeamId: text("slack_team_id").notNull(),
+    slackUserId: text("slack_user_id").notNull(),
+    githubUserId: bigint("github_user_id", { mode: "number" }).notNull(),
+    githubLogin: text("github_login").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    expiresAtIdx: index("github_link_confirmations_expires_at_idx").on(t.expiresAt),
+    slackOwnerIdx: index("github_link_confirmations_slack_owner_idx").on(
+      t.slackTeamId,
+      t.slackUserId,
+    ),
+  }),
+);
+
 export const reminders = pgTable(
   "reminders",
   {

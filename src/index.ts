@@ -81,6 +81,7 @@ function boot(): void {
     callbackUrl: githubOauthCallbackUrl,
   });
   const slackCommand = createSlackCommandRoute({
+    db,
     logger,
     signingSecret: config.SLACK_SIGNING_SECRET,
     slackTeamId: config.SLACK_TEAM_ID,

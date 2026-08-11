@@ -1,6 +1,7 @@
+import { randomBytes as cryptoRandomBytes } from "node:crypto";
 import { Hono } from "hono";
 import type { Db } from "../db/client.ts";
-import { linkSelfIdentity } from "../db/repositories/identities.ts";
+import { createGithubLinkConfirmation } from "../db/repositories/githubLinks.ts";
 import { type GithubOAuthClient, GithubOAuthError, verifyOAuthState } from "../github/oauth.ts";
 import type { Logger } from "../logger.ts";
 
@@ -12,6 +13,7 @@ export interface GithubOAuthRouteDeps {
   slackTeamId: string;
   callbackUrl: string;
   now?: () => number;
+  randomBytes?: (size: number) => Buffer;
 }
 
 function page(message: string): string {
@@ -25,6 +27,12 @@ export function createGithubOAuthRoute(deps: GithubOAuthRouteDeps): Hono {
     c.header("cache-control", "no-store");
     c.header("pragma", "no-cache");
     c.header("referrer-policy", "no-referrer");
+    c.header(
+      "content-security-policy",
+      "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    );
+    c.header("x-content-type-options", "nosniff");
+    c.header("x-frame-options", "DENY");
     await next();
   });
 
@@ -57,19 +65,32 @@ export function createGithubOAuthRoute(deps: GithubOAuthRouteDeps): Hono {
       );
     }
 
-    const linked = await linkSelfIdentity(deps.db, {
+    const confirmationCode = (deps.randomBytes ?? cryptoRandomBytes)(24).toString("base64url");
+    const pending = await createGithubLinkConfirmation(deps.db, {
+      nonce: state.nonce,
+      stateExpiresAt: new Date(state.expiresAt),
+      code: confirmationCode,
+      slackTeamId: state.slackTeamId,
+      slackUserId: state.slackUserId,
       githubUserId: user.id,
       githubLogin: user.login,
-      slackUserId: state.slackUserId,
+      now: new Date((deps.now ?? Date.now)()),
     });
-    if (linked.outcome === "conflict") {
-      deps.logger.warn("github identity link rejected because it already has an owner", {
-        githubUserId: user.id,
-      });
-      return c.html(page("That GitHub account is already linked to another Slack user."), 409);
+    if (pending.outcome === "state_replayed") {
+      return c.html(page("This account-link request has already been used."), 409);
+    }
+    if (pending.outcome === "state_expired") {
+      return c.html(
+        page("This account-link request expired while GitHub was authenticating."),
+        400,
+      );
     }
 
-    return c.html(page("Your verified GitHub account is now linked. You can close this window."));
+    return c.html(
+      page(
+        `GitHub verified. Return to Slack and run <code>/link-github confirm ${confirmationCode}</code>. This one-time code expires shortly.`,
+      ),
+    );
   });
 
   return app;
