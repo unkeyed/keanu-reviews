@@ -93,10 +93,30 @@ export function createWebApiSlackClient(
   const postPacer = new Pacer(1000, options.sleep, options.now);
   const createPacer = new Pacer(3000, options.sleep, options.now); // ~20/min Tier-2 headroom
 
-  const toRetryable = (e: unknown): unknown => {
-    const err = e as { code?: string; retryAfter?: number };
+  const normalizeSlackError = (e: unknown): unknown => {
+    const err = e as {
+      code?: string;
+      retryAfter?: number;
+      data?: { error?: string; needed?: string; provided?: string };
+    };
     if (err?.code === ErrorCode.RateLimitedError) {
       return { status: 429, retryAfterSeconds: err.retryAfter ?? 1 };
+    }
+    // Slack platform errors carry actionable detail (which scope is missing,
+    // which channel, etc.) on `data`. The default `.message` drops it, so lift
+    // `needed`/`provided` into the message the worker logs.
+    const slackCode = err?.data?.error;
+    if (slackCode) {
+      const parts = [`Slack API error: ${slackCode}`];
+      if (err.data?.needed) parts.push(`needed scope: ${err.data.needed}`);
+      if (err.data?.provided) parts.push(`provided scopes: ${err.data.provided}`);
+      const enriched = new Error(parts.join(" — "), { cause: e });
+      Object.assign(enriched, {
+        slackError: slackCode,
+        neededScope: err.data?.needed,
+        providedScopes: err.data?.provided,
+      });
+      return enriched;
     }
     return e;
   };
@@ -104,7 +124,7 @@ export function createWebApiSlackClient(
     withRetry(
       () =>
         fn().catch((e) => {
-          throw toRetryable(e);
+          throw normalizeSlackError(e);
         }),
       {
         maxRetries: MAX_RATE_LIMIT_RETRIES,

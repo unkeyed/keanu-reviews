@@ -158,6 +158,22 @@ describe("Slack Web API adapter", () => {
     expect(web.conversations.invite).toHaveBeenCalledTimes(2);
   });
 
+  it("surfaces the missing scope from a Slack missing_scope error", async () => {
+    const web = fakeWebApi();
+    web.apiCall.mockRejectedValueOnce({
+      data: {
+        error: "missing_scope",
+        needed: "channels:join",
+        provided: "chat:write,channels:manage",
+      },
+    });
+    const slack = createWebApiSlackClient("unused", { web });
+
+    await expect(slack.postMessage({ channel: "C123", text: "hi" })).rejects.toThrow(
+      /missing_scope.*needed scope: channels:join.*provided scopes: chat:write,channels:manage/,
+    );
+  });
+
   it("rejects successful-looking responses that omit required identifiers", async () => {
     const web = fakeWebApi();
     web.conversations.create.mockResolvedValueOnce({});
