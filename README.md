@@ -107,7 +107,7 @@ idempotent and safe to rerun; invalid files or invocations exit nonzero.
 
 ### Slack app scopes
 
-`channels:manage`, `channels:write.invites`, `chat:write`, `users:read.email`
+`channels:manage`, `channels:read`, `channels:write.invites`, `chat:write`, `users:read.email`
 (add `chat:write.public` if the bot does not auto-join channels; `groups:*` for
 private channels, deferred). The `/link-github` command needs slash-command
 interactivity plus the signing secret; its request URL is

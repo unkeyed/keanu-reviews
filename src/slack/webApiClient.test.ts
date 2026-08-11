@@ -16,6 +16,12 @@ function fakeWebApi() {
       archive: vi.fn(async () => ({})),
       unarchive: vi.fn(async () => ({})),
       invite: vi.fn(async () => ({})),
+      list: vi.fn(
+        async (): Promise<{
+          channels?: unknown;
+          response_metadata?: { next_cursor?: unknown };
+        }> => ({ channels: [], response_metadata: { next_cursor: "" } }),
+      ),
     },
     users: {
       lookupByEmail: vi.fn(
@@ -57,6 +63,44 @@ describe("Slack Web API adapter", () => {
     expect(web.conversations.unarchive).toHaveBeenCalledWith({ channel: "C123" });
     expect(web.conversations.invite).toHaveBeenCalledOnce();
     expect(web.conversations.invite).toHaveBeenCalledWith({ channel: "C123", users: "U1,U2" });
+  });
+
+  it("finds an exact channel name across paginated public channels", async () => {
+    const web = fakeWebApi();
+    web.conversations.list
+      .mockResolvedValueOnce({
+        channels: [{ id: "C1", name: "similar-name" }],
+        response_metadata: { next_cursor: "page-2" },
+      })
+      .mockResolvedValueOnce({
+        channels: [{ id: "C2", name: "pr-unkey-api-1-deadbeef" }],
+        response_metadata: { next_cursor: "" },
+      });
+    const slack = createWebApiSlackClient("unused", { web });
+
+    await expect(slack.findChannelByName("pr-unkey-api-1-deadbeef")).resolves.toBe("C2");
+    expect(web.conversations.list).toHaveBeenNthCalledWith(1, {
+      cursor: undefined,
+      exclude_archived: false,
+      limit: 200,
+      types: "public_channel",
+    });
+    expect(web.conversations.list).toHaveBeenNthCalledWith(2, {
+      cursor: "page-2",
+      exclude_archived: false,
+      limit: 200,
+      types: "public_channel",
+    });
+  });
+
+  it("rejects malformed channel-list responses instead of misidentifying recovery state", async () => {
+    const web = fakeWebApi();
+    web.conversations.list.mockResolvedValueOnce({ response_metadata: { next_cursor: "" } });
+    const slack = createWebApiSlackClient("unused", { web });
+
+    await expect(slack.findChannelByName("pr-unkey-api-1-deadbeef")).rejects.toThrow(
+      "channels array",
+    );
   });
 
   it("forwards threading, blocks, and the idempotency key and requires a timestamp", async () => {

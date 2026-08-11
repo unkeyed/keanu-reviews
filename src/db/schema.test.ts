@@ -18,10 +18,12 @@ import {
   messageNaturalKey,
 } from "./repositories/messages.ts";
 import {
+  claimPullRequestLifecycle,
   findAllByRepoHeadSha,
   findAllByRepoNumbers,
   findByRepoNumber,
   prId,
+  releasePullRequestLifecycle,
   upsertPullRequest,
 } from "./repositories/pullRequests.ts";
 import {
@@ -47,6 +49,25 @@ afterEach(async () => {
 });
 
 describe("pull_requests", () => {
+  it("leases lifecycle reconciliation per GitHub PR and fences stale release", async () => {
+    const stale = await claimPullRequestLifecycle(db, 999, {
+      now: new Date(1_000),
+      leaseMs: 5_000,
+    });
+    expect(stale).toBeDefined();
+    expect(
+      await claimPullRequestLifecycle(db, 999, { now: new Date(5_999), leaseMs: 5_000 }),
+    ).toBeUndefined();
+    const current = await claimPullRequestLifecycle(db, 999, {
+      now: new Date(6_000),
+      leaseMs: 5_000,
+    });
+    if (!stale || !current) throw new Error("expected lifecycle claims");
+
+    expect(await releasePullRequestLifecycle(db, stale)).toBe(false);
+    expect(await releasePullRequestLifecycle(db, current)).toBe(true);
+  });
+
   it("upsert is idempotent on (repo, number) — updates, does not duplicate", async () => {
     await upsertPullRequest(db, {
       repoFullName: "unkey/api",
@@ -231,6 +252,31 @@ describe("reminders", () => {
     });
     await cancelForReviewer(db, prId("unkey/api", 1), 7);
     expect(await listDue(db, new Date())).toHaveLength(0);
+  });
+
+  it("persists cancellation tombstones so stale requests cannot resurrect", async () => {
+    await seedPr();
+    const pr = prId("unkey/api", 1);
+    await cancelForReviewer(db, pr, 7, new Date(20_000), "v2");
+    const stale = await scheduleReminder(db, {
+      prId: pr,
+      reviewerGithubId: 7,
+      dueAt: new Date(100_000),
+      sourceUpdatedAt: new Date(10_000),
+      sourceVersion: "v1",
+    });
+    expect(stale.status).toBe("cancelled");
+    expect(stale.generation).toBe(1);
+
+    const current = await scheduleReminder(db, {
+      prId: pr,
+      reviewerGithubId: 7,
+      dueAt: new Date(200_000),
+      sourceUpdatedAt: new Date(30_000),
+      sourceVersion: "v3",
+    });
+    expect(current.status).toBe("pending");
+    expect(current.generation).toBe(2);
   });
 });
 

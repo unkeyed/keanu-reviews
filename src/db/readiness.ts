@@ -6,6 +6,7 @@ import {
   jobs,
   messages,
   processedDeliveries,
+  pullRequestLifecycleClaims,
   pullRequests,
   reminders,
 } from "./schema.ts";
@@ -28,9 +29,13 @@ export function createDbReadyCheck(db: Db): ReadyCheck {
           ${pullRequests.id}, ${pullRequests.repoFullName}, ${pullRequests.number},
           ${pullRequests.githubPrId}, ${pullRequests.channelId}, ${pullRequests.currentState},
           ${pullRequests.appliedState}, ${pullRequests.appliedChannelName},
-          ${pullRequests.sourceUpdatedAt}, ${pullRequests.headSha},
+          ${pullRequests.sourceUpdatedAt}, ${pullRequests.sourceArrivalKey}, ${pullRequests.headSha},
           ${pullRequests.rootMessageTs}, ${pullRequests.createdAt}, ${pullRequests.updatedAt}
         )::text from ${pullRequests} limit 0) as pull_requests,
+        (select row(
+          ${pullRequestLifecycleClaims.githubPrId}, ${pullRequestLifecycleClaims.claimToken},
+          ${pullRequestLifecycleClaims.claimedAt}
+        )::text from ${pullRequestLifecycleClaims} limit 0) as pull_request_lifecycle_claims,
         (select row(
           ${messages.id}, ${messages.naturalKey}, ${messages.prId},
           ${messages.githubEventRef}, ${messages.slackTs}, ${messages.kind}, ${messages.status},
@@ -42,7 +47,9 @@ export function createDbReadyCheck(db: Db): ReadyCheck {
         )::text from ${identities} limit 0) as identities,
         (select row(
           ${reminders.id}, ${reminders.prId}, ${reminders.reviewerGithubId},
-          ${reminders.dueAt}, ${reminders.status}, ${reminders.claimedAt},
+          ${reminders.dueAt}, ${reminders.availableAt}, ${reminders.sourceUpdatedAt},
+          ${reminders.sourceVersion}, ${reminders.generation}, ${reminders.attempts},
+          ${reminders.status}, ${reminders.claimedAt},
           ${reminders.createdAt}
         )::text from ${reminders} limit 0) as reminders,
         (select row(

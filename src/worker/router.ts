@@ -13,16 +13,19 @@ export interface RouterDeps extends PrHandlerDeps {
     prId: string,
     reviewerGithubId: number,
     sourceUpdatedAt?: Date,
+    sourceVersion?: string,
   ) => Promise<void>;
   onReviewRequestRemoved?: (
     prId: string,
     reviewerGithubId: number,
     sourceUpdatedAt?: Date,
+    sourceVersion?: string,
   ) => Promise<void>;
   onReviewSubmitted?: (
     prId: string,
     reviewerGithubId: number,
     sourceUpdatedAt?: Date,
+    sourceVersion?: string,
   ) => Promise<void>;
   fetchPrForSha?: PrForShaFetcher;
 }
@@ -37,19 +40,20 @@ export function createRouter(deps: RouterDeps): Router {
   return async (job) => {
     // biome-ignore lint/suspicious/noExplicitAny: raw webhook payload, shaped per handler.
     const payload = job.raw as any;
+    const sourceArrivalKey = `${job.createdAt.toISOString()}:${job.id}`;
     switch (job.event) {
       case "pull_request":
-        await handlePullRequest(deps, payload);
+        await handlePullRequest(deps, payload, { sourceArrivalKey });
         // review_requested / review_request_removed arrive as pull_request actions.
         if (job.action === "review_requested" || job.action === "review_request_removed") {
-          await handleReviewRequest(deps, payload, job.deliveryId);
+          await handleReviewRequest(deps, payload, job.deliveryId, sourceArrivalKey);
         }
         return;
       case "pull_request_review_comment":
         await handleReviewComment(deps, payload);
         return;
       case "pull_request_review":
-        await handleReview(deps, payload);
+        await handleReview(deps, payload, sourceArrivalKey);
         return;
       case "issue_comment":
         await handleIssueComment(deps, payload);

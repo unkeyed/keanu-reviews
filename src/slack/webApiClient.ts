@@ -24,6 +24,12 @@ interface SlackWebApi {
     archive(input: { channel: string }): Promise<unknown>;
     unarchive(input: { channel: string }): Promise<unknown>;
     invite(input: { channel: string; users: string }): Promise<unknown>;
+    list(input: {
+      cursor?: string;
+      exclude_archived: boolean;
+      limit: number;
+      types: string;
+    }): Promise<unknown>;
   };
   users: SlackUserLookupApi;
   apiCall(method: string, options?: Record<string, unknown>): Promise<unknown>;
@@ -112,6 +118,44 @@ export function createWebApiSlackClient(
           };
         }),
       ),
+    findChannelByName: async (name) => {
+      let cursor: string | undefined;
+      const seenCursors = new Set<string>();
+      do {
+        const result = (await call(() =>
+          web.conversations.list({
+            cursor,
+            exclude_archived: false,
+            limit: 200,
+            // This service creates public channels, so recovery needs only the
+            // channels:read scope and never enumerates private conversations.
+            types: "public_channel",
+          }),
+        )) as {
+          channels?: unknown;
+          response_metadata?: { next_cursor?: unknown };
+        };
+        if (!Array.isArray(result.channels)) {
+          throw new Error("Slack conversations.list response did not include a channels array");
+        }
+        for (const channel of result.channels) {
+          const candidate = channel as { id?: unknown; name?: unknown };
+          if (candidate.name === name) {
+            return requireNonEmptyString(candidate.id, "conversations.list channel ID");
+          }
+        }
+        const nextCursor = result.response_metadata?.next_cursor;
+        if (nextCursor !== undefined && typeof nextCursor !== "string") {
+          throw new Error("Slack conversations.list response included an invalid cursor");
+        }
+        cursor = nextCursor?.trim() || undefined;
+        if (cursor && seenCursors.has(cursor)) {
+          throw new Error("Slack conversations.list returned a repeated cursor");
+        }
+        if (cursor) seenCursors.add(cursor);
+      } while (cursor);
+      return undefined;
+    },
     renameChannel: (channelId, name) =>
       call(async () => {
         await web.conversations.rename({ channel: channelId, name });

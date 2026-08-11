@@ -18,6 +18,7 @@ export interface SlackMessage {
 
 export interface SlackClient {
   createChannel(name: string): Promise<{ channelId: string }>;
+  findChannelByName(name: string): Promise<string | undefined>;
   renameChannel(channelId: string, name: string): Promise<void>;
   archiveChannel(channelId: string): Promise<void>;
   unarchiveChannel(channelId: string): Promise<void>;

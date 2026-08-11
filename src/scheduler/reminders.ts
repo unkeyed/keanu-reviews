@@ -8,12 +8,13 @@ import {
   isReminderClaimCurrent,
   listDue,
   markReminderSent,
-  releaseReminderClaim,
+  rescheduleOrFailReminder,
   scheduleReminder,
 } from "../db/repositories/reminders.ts";
 import { isTerminal } from "../domain/prState.ts";
 import type { Logger } from "../logger.ts";
 import type { SlackClient } from "../slack/client.ts";
+import { deliverSlackMessage } from "../slack/deliver.ts";
 
 export interface ReminderDeps {
   db: Db;
@@ -21,6 +22,9 @@ export interface ReminderDeps {
   logger: Logger;
   reminderHours: number;
   reminderLeaseMs?: number;
+  maxAttempts?: number;
+  retryBaseMs?: number;
+  batchSize?: number;
   now?: () => number;
 }
 
@@ -34,71 +38,102 @@ export function createReminderScheduler(deps: ReminderDeps) {
   const now = deps.now ?? Date.now;
   const windowMs = deps.reminderHours * 60 * 60_000;
   const leaseMs = deps.reminderLeaseMs ?? 5 * 60_000;
+  const maxAttempts = deps.maxAttempts ?? 5;
+  const retryBaseMs = deps.retryBaseMs ?? 60_000;
+  const batchSize = deps.batchSize ?? 50;
+  let localSourceSequence = 0;
+  const fallbackSourceVersion = (sourceTime: Date) =>
+    `${sourceTime.toISOString()}:${String(++localSourceSequence).padStart(12, "0")}`;
 
   const onReviewRequested = async (
     prId: string,
     reviewerGithubId: number,
     sourceUpdatedAt?: Date,
+    sourceVersion?: string,
   ): Promise<void> => {
-    const requestedAt = sourceUpdatedAt?.getTime() ?? now();
+    const requestedAt = sourceUpdatedAt ?? new Date(now());
     await scheduleReminder(deps.db, {
       prId,
       reviewerGithubId,
-      dueAt: new Date(requestedAt + windowMs),
+      dueAt: new Date(requestedAt.getTime() + windowMs),
+      sourceUpdatedAt: requestedAt,
+      sourceVersion: sourceVersion ?? fallbackSourceVersion(requestedAt),
     });
   };
 
-  const cancel = (prId: string, reviewerGithubId: number, sourceUpdatedAt?: Date) =>
-    cancelForReviewer(
+  const cancel = async (
+    prId: string,
+    reviewerGithubId: number,
+    sourceUpdatedAt?: Date,
+    sourceVersion?: string,
+  ): Promise<void> => {
+    const cancelledAt = sourceUpdatedAt ?? new Date(now());
+    await cancelForReviewer(
       deps.db,
       prId,
       reviewerGithubId,
-      sourceUpdatedAt ? new Date(sourceUpdatedAt.getTime() + windowMs) : undefined,
+      cancelledAt,
+      sourceVersion ?? fallbackSourceVersion(cancelledAt),
     );
+  };
 
   const processDue = async (): Promise<number> => {
     const scanTime = new Date(now());
-    const due = await listDue(deps.db, scanTime, leaseMs);
+    const due = await listDue(deps.db, scanTime, leaseMs, batchSize);
     let posted = 0;
     for (const r of due) {
       const claimed = await claimReminder(deps.db, r.id, scanTime, leaseMs);
       if (!claimed) continue; // lost the race to another scanner
 
-      const pr = await findById(deps.db, r.prId);
-      if (!pr?.channelId) {
-        await releaseReminderClaim(deps.db, claimed);
-        continue;
-      }
-      if (isTerminal(pr.currentState)) {
-        await cancelReminderClaim(deps.db, claimed);
-        continue;
-      }
-
-      const mapped = await findByGithubId(deps.db, r.reviewerGithubId);
-      const mention = mapped ? `<@${mapped.slackUserId}>` : "the requested reviewer";
-      if (!(await isReminderClaimCurrent(deps.db, claimed))) continue;
-
       try {
-        await deps.slack.postMessage({
-          channel: pr.channelId,
-          text: "Reminder: this PR is still waiting for review",
-          threadTs: pr.rootMessageTs ?? undefined,
-          blocks: [
-            {
-              type: "section",
-              text: {
-                type: "mrkdwn",
-                text: `⏰ ${mention} — this PR has been waiting ~${deps.reminderHours}h for your review.`,
+        const pr = await findById(deps.db, r.prId);
+        if (!pr?.channelId) throw new Error(`Reminder PR channel is unavailable for ${r.prId}`);
+        if (isTerminal(pr.currentState)) {
+          await cancelReminderClaim(deps.db, claimed);
+          continue;
+        }
+
+        const mapped = await findByGithubId(deps.db, r.reviewerGithubId);
+        const mention = mapped ? `<@${mapped.slackUserId}>` : "the requested reviewer";
+        if (!(await isReminderClaimCurrent(deps.db, claimed))) continue;
+
+        await deliverSlackMessage(
+          deps.db,
+          deps.slack,
+          {
+            prId: r.prId,
+            kind: "reminder",
+            githubEventRef: `${r.reviewerGithubId}:${claimed.generation}`,
+          },
+          {
+            channel: pr.channelId,
+            text: "Reminder: this PR is still waiting for review",
+            threadTs: pr.rootMessageTs ?? undefined,
+            blocks: [
+              {
+                type: "section",
+                text: {
+                  type: "mrkdwn",
+                  text: `⏰ ${mention} — this PR has been waiting ~${deps.reminderHours}h for your review.`,
+                },
               },
-            },
-          ],
-        });
+            ],
+          },
+        );
+        if (await markReminderSent(deps.db, claimed)) posted += 1;
       } catch (err) {
-        await releaseReminderClaim(deps.db, claimed);
-        throw err;
+        const retryDelay = retryBaseMs * 2 ** Math.max(0, claimed.attempts - 1);
+        const outcome = await rescheduleOrFailReminder(deps.db, claimed, {
+          maxAttempts,
+          retryAt: new Date(now() + retryDelay),
+        });
+        deps.logger.error("reminder delivery failed", {
+          reminderId: claimed.id,
+          attempts: claimed.attempts,
+          outcome,
+          err: err instanceof Error ? err.message : String(err),
+        });
       }
-      await markReminderSent(deps.db, claimed);
-      posted += 1;
     }
     return posted;
   };

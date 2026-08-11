@@ -23,4 +23,12 @@ describe("database readiness", () => {
 
     await expect(createDbReadyCheck(testDb.db)()).rejects.toThrow(/identities/i);
   });
+
+  it("rejects a database that has not applied the lifecycle migration", async () => {
+    const testDb = await createTestDb();
+    cleanups.push(() => testDb.client.close());
+    await testDb.client.exec("drop table pull_request_lifecycle_claims");
+
+    await expect(createDbReadyCheck(testDb.db)()).rejects.toThrow(/pull_request_lifecycle_claims/i);
+  });
 });

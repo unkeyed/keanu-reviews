@@ -38,13 +38,16 @@ beforeEach(async () => {
 });
 afterEach(() => close());
 
-const scheduler = () =>
+const scheduler = (
+  options: { maxAttempts?: number; retryBaseMs?: number; batchSize?: number } = {},
+) =>
   createReminderScheduler({
     db,
     slack,
     logger: createLogger("error"),
     reminderHours: HOURS,
     now: () => clock,
+    ...options,
   });
 
 const advanceHours = (h: number) => {
@@ -69,19 +72,21 @@ describe("reminder scheduler (U8, R9)", () => {
     expect(await s.processDue()).toBe(0);
   });
 
-  it("returns a failed Slack delivery to pending instead of losing it", async () => {
-    const s = scheduler();
+  it("reschedules a failed Slack delivery with backoff instead of blocking the scan", async () => {
+    const s = scheduler({ retryBaseMs: 1_000 });
     await s.onReviewRequested(PR, 7);
     advanceHours(HOURS);
     slack.postMessage = async () => {
       throw new Error("Slack unavailable");
     };
 
-    await expect(s.processDue()).rejects.toThrow("Slack unavailable");
+    await expect(s.processDue()).resolves.toBe(0);
 
     const [row] = await db.select().from(reminders).where(eq(reminders.prId, PR));
     expect(row?.status).toBe("pending");
-    expect(await listDue(db, new Date(clock))).toHaveLength(1);
+    expect(row?.attempts).toBe(1);
+    expect(row?.availableAt.getTime()).toBe(clock + 1_000);
+    expect(await listDue(db, new Date(clock))).toHaveLength(0);
   });
 
   it("does not post when the review was submitted before due time", async () => {
@@ -130,5 +135,82 @@ describe("reminder scheduler (U8, R9)", () => {
     const [a, b] = await Promise.all([s.processDue(), s.processDue()]);
     expect(a + b).toBe(1);
     expect(slack.messages).toHaveLength(1);
+  });
+
+  it("retries an ambiguously accepted post with the same generation idempotency key", async () => {
+    const s = scheduler({ retryBaseMs: 1_000 });
+    await s.onReviewRequested(PR, 7);
+    advanceHours(HOURS);
+    const post = slack.postMessage.bind(slack);
+    let loseResponse = true;
+    slack.postMessage = async (message) => {
+      const result = await post(message);
+      if (loseResponse) {
+        loseResponse = false;
+        throw new Error("response lost after accept");
+      }
+      return result;
+    };
+
+    expect(await s.processDue()).toBe(0);
+    expect(slack.messages).toHaveLength(1);
+    clock += 1_000;
+    expect(await s.processDue()).toBe(1);
+
+    expect(slack.messages).toHaveLength(1);
+    expect(slack.messages[0]?.clientMsgId).toMatch(/^[0-9a-f-]{36}$/);
+    const [row] = await db.select().from(reminders).where(eq(reminders.prId, PR));
+    expect(row?.status).toBe("sent");
+  });
+
+  it("continues past a poison reminder so another due row can be delivered", async () => {
+    const s = scheduler({ retryBaseMs: 1_000 });
+    await s.onReviewRequested(PR, 7);
+    await s.onReviewRequested(PR, 8);
+    advanceHours(HOURS);
+    const post = slack.postMessage.bind(slack);
+    let poison = true;
+    slack.postMessage = async (message) => {
+      if (poison) {
+        poison = false;
+        throw new Error("poison row");
+      }
+      return post(message);
+    };
+
+    expect(await s.processDue()).toBe(1);
+    expect(slack.messages).toHaveLength(1);
+    const rows = await db.select().from(reminders).where(eq(reminders.prId, PR));
+    expect(rows.map((row) => row.status).sort()).toEqual(["pending", "sent"]);
+  });
+
+  it("marks a reminder failed after its bounded exponential retry budget", async () => {
+    const s = scheduler({ maxAttempts: 2, retryBaseMs: 1_000 });
+    await s.onReviewRequested(PR, 7);
+    advanceHours(HOURS);
+    slack.postMessage = async () => {
+      throw new Error("permanent Slack failure");
+    };
+
+    expect(await s.processDue()).toBe(0);
+    clock += 1_000;
+    expect(await s.processDue()).toBe(0);
+
+    const [row] = await db.select().from(reminders).where(eq(reminders.prId, PR));
+    expect(row?.status).toBe("failed");
+    expect(row?.attempts).toBe(2);
+    expect(await s.processDue()).toBe(0);
+  });
+
+  it("processes reminders in bounded batches without starving the remainder", async () => {
+    const s = scheduler({ batchSize: 2 });
+    await s.onReviewRequested(PR, 7);
+    await s.onReviewRequested(PR, 8);
+    await s.onReviewRequested(PR, 9);
+    advanceHours(HOURS);
+
+    expect(await s.processDue()).toBe(2);
+    expect(await s.processDue()).toBe(1);
+    expect(slack.messages).toHaveLength(3);
   });
 });

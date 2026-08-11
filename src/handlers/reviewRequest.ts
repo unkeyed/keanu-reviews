@@ -22,11 +22,13 @@ export interface ReviewRequestDeps extends PrHandlerDeps {
     prId: string,
     reviewerGithubId: number,
     sourceUpdatedAt?: Date,
+    sourceVersion?: string,
   ) => Promise<void>;
   onReviewRequestRemoved?: (
     prId: string,
     reviewerGithubId: number,
     sourceUpdatedAt?: Date,
+    sourceVersion?: string,
   ) => Promise<void>;
 }
 
@@ -45,6 +47,7 @@ export async function handleReviewRequest(
   deps: ReviewRequestDeps,
   payload: ReviewRequestPayload,
   eventRef = payload.pull_request.updated_at,
+  sourceVersion = eventRef,
 ): Promise<void> {
   const { db, slack, logger } = deps;
   const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
@@ -64,6 +67,7 @@ export async function handleReviewRequest(
       row.id,
       reviewer.id,
       sourceDate(payload.pull_request.updated_at),
+      sourceVersion,
     );
     return;
   }
@@ -116,5 +120,10 @@ export async function handleReviewRequest(
     );
   }
 
-  await deps.onReviewRequested?.(row.id, reviewer.id, sourceDate(payload.pull_request.updated_at));
+  await deps.onReviewRequested?.(
+    row.id,
+    reviewer.id,
+    sourceDate(payload.pull_request.updated_at),
+    sourceVersion,
+  );
 }

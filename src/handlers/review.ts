@@ -14,6 +14,7 @@ export interface ReviewDeps extends PrHandlerDeps {
     prId: string,
     reviewerGithubId: number,
     sourceUpdatedAt?: Date,
+    sourceVersion?: string,
   ) => Promise<void>;
 }
 
@@ -38,7 +39,11 @@ function sourceDate(value: string | undefined): Date | undefined {
 }
 
 /** Mirror a review submission (U6, R5) and cancel the reviewer's reminder (U8 hook). */
-export async function handleReview(deps: ReviewDeps, payload: ReviewPayload): Promise<void> {
+export async function handleReview(
+  deps: ReviewDeps,
+  payload: ReviewPayload,
+  sourceVersion = String(payload.review.id),
+): Promise<void> {
   if (payload.action !== "submitted") return;
   const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
   if (!row.channelId) throw new Error(`PR channel is not ready for ${row.id}`);
@@ -50,6 +55,7 @@ export async function handleReview(deps: ReviewDeps, payload: ReviewPayload): Pr
     row.id,
     r.user.id,
     sourceDate(r.submitted_at ?? payload.pull_request.updated_at),
+    sourceVersion,
   );
   const slackUserId = await resolveSlackUser(
     { db: deps.db, slack: deps.slack },

@@ -4,7 +4,11 @@ import { findByRepoNumber, prId } from "../db/repositories/pullRequests.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createLogger } from "../logger.ts";
 import { FakeSlackClient } from "../testing/fakeSlack.ts";
-import { type PullRequestPayload, handlePullRequest } from "./pullRequest.ts";
+import {
+  PullRequestLifecycleBusyError,
+  type PullRequestPayload,
+  handlePullRequest,
+} from "./pullRequest.ts";
 
 let db: Db;
 let slack: FakeSlackClient;
@@ -46,7 +50,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   it("opened draft creates a draft-* channel, stores mapping + root ts", async () => {
     await handlePullRequest(deps(), payload("opened", { draft: true }));
     expect(slack.channels).toHaveLength(1);
-    expect(slack.channels[0]?.name).toBe("draft-api-1423");
+    expect(slack.channels[0]?.name).toBe("draft-unkey-api-1423-19ec85a8");
     const row = await findByRepoNumber(db, "unkey/api", 1423);
     expect(row?.channelId).toBe("C1");
     expect(row?.rootMessageTs).toBe("ts-1");
@@ -56,23 +60,23 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   it("ready_for_review renames draft -> pr; converted_to_draft renames back", async () => {
     await handlePullRequest(deps(), payload("opened", { draft: true }));
     await handlePullRequest(deps(), payload("ready_for_review", { draft: false }));
-    expect(slack.channel("C1")?.name).toBe("pr-api-1423");
+    expect(slack.channel("C1")?.name).toBe("pr-unkey-api-1423-19ec85a8");
     await handlePullRequest(deps(), payload("converted_to_draft", { draft: true }));
-    expect(slack.channel("C1")?.name).toBe("draft-api-1423");
+    expect(slack.channel("C1")?.name).toBe("draft-unkey-api-1423-19ec85a8");
   });
 
   it("closed+merged renames to merged then archives (rename precedes archive)", async () => {
     await handlePullRequest(deps(), payload("opened"));
     await handlePullRequest(deps(), payload("closed", { merged: true }));
     const ch = slack.channel("C1");
-    expect(ch?.name).toBe("merged-api-1423");
+    expect(ch?.name).toBe("merged-unkey-api-1423-19ec85a8");
     expect(ch?.archived).toBe(true);
   });
 
   it("closed without merge renames to closed then archives", async () => {
     await handlePullRequest(deps(), payload("opened"));
     await handlePullRequest(deps(), payload("closed", { merged: false }));
-    expect(slack.channel("C1")?.name).toBe("closed-api-1423");
+    expect(slack.channel("C1")?.name).toBe("closed-unkey-api-1423-19ec85a8");
     expect(slack.channel("C1")?.archived).toBe(true);
   });
 
@@ -81,7 +85,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     await handlePullRequest(deps(), payload("closed", { merged: false }));
     await handlePullRequest(deps(), payload("reopened"));
     expect(slack.channel("C1")?.archived).toBe(false);
-    expect(slack.channel("C1")?.name).toBe("pr-api-1423");
+    expect(slack.channel("C1")?.name).toBe("pr-unkey-api-1423-19ec85a8");
   });
 
   it("re-delivered opened event does not create a second channel", async () => {
@@ -91,6 +95,28 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     expect(await findByRepoNumber(db, "unkey/api", 1423).then((r) => r?.id)).toBe(
       prId("unkey/api", 1423),
     );
+  });
+
+  it("recovers an ambiguous create that succeeded in Slack before the response was lost", async () => {
+    const create = slack.createChannel.bind(slack);
+    slack.createChannel = async (name) => {
+      await create(name);
+      throw new Error("connection reset after accept");
+    };
+
+    await handlePullRequest(deps(), payload("opened"));
+
+    expect(slack.channels).toHaveLength(1);
+    expect((await findByRepoNumber(db, "unkey/api", 1423))?.channelId).toBe("C1");
+  });
+
+  it("recovers name_taken by looking up only the exact deterministic channel name", async () => {
+    await slack.createChannel("pr-unkey-api-1423-19ec85a8");
+
+    await handlePullRequest(deps(), payload("opened"));
+
+    expect(slack.channels).toHaveLength(1);
+    expect((await findByRepoNumber(db, "unkey/api", 1423))?.channelId).toBe("C1");
   });
 
   it("sanitizes untrusted PR titles and logins in blocks and fallback text", async () => {
@@ -146,7 +172,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     expect(pending?.appliedState).toBe("draft");
     await handlePullRequest(deps(), ready);
 
-    expect(slack.channel("C1")?.name).toBe("pr-api-1423");
+    expect(slack.channel("C1")?.name).toBe("pr-unkey-api-1423-19ec85a8");
   });
 
   it("retries archive after rename succeeded but archive failed", async () => {
@@ -170,8 +196,54 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     expect(pending?.appliedState).toBe("pr");
     await handlePullRequest(deps(), closed);
 
-    expect(slack.channel("C1")?.name).toBe("closed-api-1423");
+    expect(slack.channel("C1")?.name).toBe("closed-unkey-api-1423-19ec85a8");
     expect(slack.channel("C1")?.archived).toBe(true);
+  });
+
+  it("posts a terminal lifecycle note after rename and before archive", async () => {
+    await handlePullRequest(deps(), payload("opened"));
+    const operations: string[] = [];
+    const rename = slack.renameChannel.bind(slack);
+    const post = slack.postMessage.bind(slack);
+    const archive = slack.archiveChannel.bind(slack);
+    slack.renameChannel = async (channelId, name) => {
+      operations.push("rename");
+      await rename(channelId, name);
+    };
+    slack.postMessage = async (message) => {
+      operations.push("post");
+      return post(message);
+    };
+    slack.archiveChannel = async (channelId) => {
+      operations.push("archive");
+      await archive(channelId);
+    };
+
+    await handlePullRequest(deps(), payload("closed", { updated_at: "2026-08-11T12:01:00Z" }));
+
+    expect(operations).toEqual(["rename", "post", "archive"]);
+    expect(slack.channel("C1")?.archived).toBe(true);
+  });
+
+  it("retries a terminal lifecycle note before archiving the channel", async () => {
+    await handlePullRequest(deps(), payload("opened"));
+    const post = slack.postMessage.bind(slack);
+    let fail = true;
+    slack.postMessage = async (message) => {
+      if (fail) {
+        fail = false;
+        throw new Error("note failed");
+      }
+      return post(message);
+    };
+    const closed = payload("closed", { updated_at: "2026-08-11T12:01:00Z" });
+
+    await expect(handlePullRequest(deps(), closed)).rejects.toThrow("note failed");
+    expect(slack.channel("C1")?.archived).toBe(false);
+    await handlePullRequest(deps(), closed);
+
+    expect(slack.channel("C1")?.archived).toBe(true);
+    expect(slack.messages.filter((message) => message.text.includes("closed"))).toHaveLength(1);
   });
 
   it("archives a terminal-first event after a root-post failure and retry", async () => {
@@ -205,7 +277,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     await handlePullRequest(deps(), closed);
 
     expect(slack.channels).toHaveLength(1);
-    expect(slack.channel("C1")?.name).toBe("merged-api-1423");
+    expect(slack.channel("C1")?.name).toBe("merged-unkey-api-1423-19ec85a8");
     expect(slack.channel("C1")?.archived).toBe(true);
     expect(operations).toEqual(["rename", "archive"]);
   });
@@ -229,8 +301,60 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     const row = await findByRepoNumber(db, "unkey/api", 1423);
     expect(row?.currentState).toBe("merged");
     expect(row?.sourceUpdatedAt?.toISOString()).toBe("2026-08-11T12:02:00.000Z");
-    expect(slack.channel("C1")?.name).toBe("merged-api-1423");
+    expect(slack.channel("C1")?.name).toBe("merged-unkey-api-1423-19ec85a8");
     expect(slack.channel("C1")?.archived).toBe(true);
+  });
+
+  it("uses the durable job arrival key to order equal GitHub updated_at snapshots", async () => {
+    const opened = payload("opened", { draft: true });
+    const ready = payload("ready_for_review", { draft: false });
+    await handlePullRequest(deps(), opened, { sourceArrivalKey: "2026-08-11T12:00:01Z:a" });
+    await handlePullRequest(deps(), ready, { sourceArrivalKey: "2026-08-11T12:00:02Z:b" });
+    await handlePullRequest(deps(), opened, { sourceArrivalKey: "2026-08-11T12:00:01Z:a" });
+
+    const row = await findByRepoNumber(db, "unkey/api", 1423);
+    expect(row?.currentState).toBe("pr");
+    expect(row?.sourceArrivalKey).toBe("2026-08-11T12:00:02Z:b");
+  });
+
+  it("serializes older and newer lifecycle workers through the database lease", async () => {
+    const create = slack.createChannel.bind(slack);
+    let releaseCreate: (() => void) | undefined;
+    let signalCreateStarted: (() => void) | undefined;
+    const createStarted = new Promise<void>((resolve) => {
+      signalCreateStarted = resolve;
+    });
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    slack.createChannel = async (name) => {
+      signalCreateStarted?.();
+      await createGate;
+      return create(name);
+    };
+
+    const older = handlePullRequest(deps(), payload("opened", { draft: true }), {
+      sourceArrivalKey: "2026-08-11T12:00:01Z:old",
+    });
+    await createStarted;
+    await expect(
+      handlePullRequest(
+        deps(),
+        payload("ready_for_review", {
+          updated_at: "2026-08-11T12:01:00Z",
+        }),
+        { sourceArrivalKey: "2026-08-11T12:01:01Z:new" },
+      ),
+    ).rejects.toBeInstanceOf(PullRequestLifecycleBusyError);
+    releaseCreate?.();
+    await older;
+
+    await handlePullRequest(
+      deps(),
+      payload("ready_for_review", { updated_at: "2026-08-11T12:01:00Z" }),
+      { sourceArrivalKey: "2026-08-11T12:01:01Z:new" },
+    );
+    expect((await findByRepoNumber(db, "unkey/api", 1423))?.currentState).toBe("pr");
   });
 
   it("reuses the PR row and channel after a repository rename", async () => {
@@ -245,9 +369,9 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     const renamed = await findByRepoNumber(db, "unkey/platform", 1423);
     expect(renamed?.id).toBe(original?.id);
     expect(renamed?.channelId).toBe("C1");
-    expect(renamed?.appliedChannelName).toBe("pr-platform-1423");
+    expect(renamed?.appliedChannelName).toBe("pr-unkey-platform-1423-4a8dbb6a");
     expect(await findByRepoNumber(db, "unkey/api", 1423)).toBeUndefined();
     expect(slack.channels).toHaveLength(1);
-    expect(slack.channel("C1")?.name).toBe("pr-platform-1423");
+    expect(slack.channel("C1")?.name).toBe("pr-unkey-platform-1423-4a8dbb6a");
   });
 });

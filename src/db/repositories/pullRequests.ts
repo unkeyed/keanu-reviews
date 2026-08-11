@@ -1,7 +1,8 @@
-import { and, eq, inArray, isNull, lte, or } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { and, eq, inArray, isNull, lt, lte, or } from "drizzle-orm";
 import type { PrState } from "../../domain/prState.ts";
 import type { Db } from "../client.ts";
-import { type PullRequestRow, pullRequests } from "../schema.ts";
+import { type PullRequestRow, pullRequestLifecycleClaims, pullRequests } from "../schema.ts";
 
 export const prId = (repoFullName: string, number: number): string => `${repoFullName}#${number}`;
 
@@ -14,6 +15,7 @@ export interface UpsertPrInput {
   channelId?: string | null;
   rootMessageTs?: string | null;
   sourceUpdatedAt?: Date | null;
+  sourceArrivalKey?: string | null;
 }
 
 interface PullRequestSourceInput extends UpsertPrInput {
@@ -38,13 +40,26 @@ async function upsert(db: Db, input: UpsertPrInput): Promise<UpsertResult> {
     channelId: input.channelId ?? null,
     rootMessageTs: input.rootMessageTs ?? null,
     sourceUpdatedAt: input.sourceUpdatedAt ?? null,
+    sourceArrivalKey: input.sourceArrivalKey ?? null,
     updatedAt: now,
   };
   const sourceGuard = input.sourceUpdatedAt
-    ? or(
-        isNull(pullRequests.sourceUpdatedAt),
-        lte(pullRequests.sourceUpdatedAt, input.sourceUpdatedAt),
-      )
+    ? input.sourceArrivalKey
+      ? or(
+          isNull(pullRequests.sourceUpdatedAt),
+          lt(pullRequests.sourceUpdatedAt, input.sourceUpdatedAt),
+          and(
+            eq(pullRequests.sourceUpdatedAt, input.sourceUpdatedAt),
+            or(
+              isNull(pullRequests.sourceArrivalKey),
+              lte(pullRequests.sourceArrivalKey, input.sourceArrivalKey),
+            ),
+          ),
+        )
+      : or(
+          isNull(pullRequests.sourceUpdatedAt),
+          lte(pullRequests.sourceUpdatedAt, input.sourceUpdatedAt),
+        )
     : undefined;
   const [row] = await db
     .insert(pullRequests)
@@ -56,6 +71,9 @@ async function upsert(db: Db, input: UpsertPrInput): Promise<UpsertResult> {
         number: values.number,
         currentState: values.currentState,
         ...(input.sourceUpdatedAt !== undefined ? { sourceUpdatedAt: values.sourceUpdatedAt } : {}),
+        ...(input.sourceArrivalKey !== undefined
+          ? { sourceArrivalKey: values.sourceArrivalKey }
+          : {}),
         // Only overwrite headSha when a new one is supplied (synchronize/opened).
         ...(input.headSha !== undefined ? { headSha: input.headSha } : {}),
         updatedAt: now,
@@ -81,6 +99,61 @@ export async function applyPullRequestSource(
   input: PullRequestSourceInput,
 ): Promise<UpsertResult> {
   return upsert(db, input);
+}
+
+export interface PullRequestLifecycleClaim {
+  githubPrId: number;
+  claimToken: string;
+  claimedAt: Date;
+}
+
+/**
+ * Acquire a cross-replica lifecycle lease. The random token fences a stale
+ * holder from releasing a lease that has since been reclaimed.
+ */
+export async function claimPullRequestLifecycle(
+  db: Db,
+  githubPrId: number,
+  options: { now?: Date; leaseMs?: number } = {},
+): Promise<PullRequestLifecycleClaim | undefined> {
+  const now = options.now ?? new Date();
+  const leaseExpiredAt = new Date(now.getTime() - (options.leaseMs ?? 5 * 60_000));
+  const claimToken = randomUUID();
+
+  const [inserted] = await db
+    .insert(pullRequestLifecycleClaims)
+    .values({ githubPrId, claimToken, claimedAt: now })
+    .onConflictDoNothing({ target: pullRequestLifecycleClaims.githubPrId })
+    .returning();
+  if (inserted) return inserted;
+
+  const [reclaimed] = await db
+    .update(pullRequestLifecycleClaims)
+    .set({ claimToken, claimedAt: now })
+    .where(
+      and(
+        eq(pullRequestLifecycleClaims.githubPrId, githubPrId),
+        lte(pullRequestLifecycleClaims.claimedAt, leaseExpiredAt),
+      ),
+    )
+    .returning();
+  return reclaimed;
+}
+
+export async function releasePullRequestLifecycle(
+  db: Db,
+  claim: PullRequestLifecycleClaim,
+): Promise<boolean> {
+  const rows = await db
+    .delete(pullRequestLifecycleClaims)
+    .where(
+      and(
+        eq(pullRequestLifecycleClaims.githubPrId, claim.githubPrId),
+        eq(pullRequestLifecycleClaims.claimToken, claim.claimToken),
+      ),
+    )
+    .returning({ githubPrId: pullRequestLifecycleClaims.githubPrId });
+  return rows.length > 0;
 }
 
 export async function setChannel(

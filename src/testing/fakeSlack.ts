@@ -11,9 +11,15 @@ export class FakeSlackClient implements SlackClient {
   private clientMessageIds = new Map<string, string>();
 
   async createChannel(name: string): Promise<{ channelId: string }> {
+    if (this.channels.some((channel) => channel.name === name)) {
+      throw { data: { error: "name_taken" } };
+    }
     const id = `C${++this.chanSeq}`;
     this.channels.push({ id, name, archived: false });
     return { channelId: id };
+  }
+  async findChannelByName(name: string): Promise<string | undefined> {
+    return this.channels.find((channel) => channel.name === name)?.id;
   }
   async renameChannel(channelId: string, name: string): Promise<void> {
     const ch = this.channels.find((c) => c.id === channelId);
@@ -40,6 +46,9 @@ export class FakeSlackClient implements SlackClient {
     if (msg.clientMsgId) {
       const existing = this.clientMessageIds.get(msg.clientMsgId);
       if (existing) return { ts: existing };
+    }
+    if (this.channel(msg.channel)?.archived) {
+      throw { data: { error: "is_archived" } };
     }
     this.messages.push(msg);
     const ts = `ts-${++this.tsSeq}`;

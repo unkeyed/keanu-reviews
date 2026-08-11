@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { PrState } from "../domain/prState.ts";
 
 /**
@@ -17,13 +18,17 @@ export function slugify(input: string): string {
 }
 
 export function channelName(state: PrState, repoFullName: string, number: number): string {
-  // Use only the repo name (after the owner slash) to keep names short.
-  const repo = repoFullName.includes("/")
-    ? (repoFullName.split("/").pop() ?? repoFullName)
-    : repoFullName;
-  const suffix = `-${number}`;
+  // Include owner + repo and retain a digest of the original identity. The
+  // digest prevents slug/truncation collisions while exact lookup remains safe.
+  const identityHash = createHash("sha256")
+    .update(`${repoFullName.toLowerCase()}#${number}`)
+    .digest("hex")
+    .slice(0, 8);
+  const suffix = `-${number}-${identityHash}`;
   const prefix = `${state}-`;
   const budget = MAX_LEN - prefix.length - suffix.length;
-  const repoSlug = slugify(repo).slice(0, Math.max(1, budget)).replace(/-+$/g, "");
+  const repoSlug = (slugify(repoFullName) || "repo")
+    .slice(0, Math.max(1, budget))
+    .replace(/-+$/g, "");
   return `${prefix}${repoSlug}${suffix}`;
 }

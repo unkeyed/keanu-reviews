@@ -25,6 +25,7 @@ export const reminderStatusEnum = pgEnum("reminder_status", [
   "sending",
   "sent",
   "cancelled",
+  "failed",
 ]);
 export const messageStatusEnum = pgEnum("message_status", ["pending", "sending", "sent"]);
 export const jobStatusEnum = pgEnum("job_status", ["pending", "processing", "done", "failed"]);
@@ -56,6 +57,9 @@ export const pullRequests = pgTable(
     appliedState: prStateEnum("applied_state"),
     appliedChannelName: text("applied_channel_name"),
     sourceUpdatedAt: timestamp("source_updated_at", { withTimezone: true }),
+    // Orders webhook snapshots whose GitHub updated_at values are equal.
+    // Production supplies `${job.createdAt}:${job.id}` as a stable arrival key.
+    sourceArrivalKey: text("source_arrival_key"),
     headSha: text("head_sha"), // CI mapping join key (U7), refreshed on opened/synchronize
     rootMessageTs: text("root_message_ts"), // Slack thread root for follow-up activity (R7)
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -67,6 +71,13 @@ export const pullRequests = pgTable(
     headShaIdx: index("pr_head_sha_idx").on(t.headSha),
   }),
 );
+
+/** Cross-replica lease serializing external lifecycle reconciliation per GitHub PR. */
+export const pullRequestLifecycleClaims = pgTable("pull_request_lifecycle_claims", {
+  githubPrId: bigint("github_pr_id", { mode: "number" }).primaryKey(),
+  claimToken: text("claim_token").notNull(),
+  claimedAt: timestamp("claimed_at", { withTimezone: true }).notNull(),
+});
 
 export const messages = pgTable(
   "messages",
@@ -107,13 +118,18 @@ export const reminders = pgTable(
       .references(() => pullRequests.id),
     reviewerGithubId: bigint("reviewer_github_id", { mode: "number" }).notNull(),
     dueAt: timestamp("due_at", { withTimezone: true }).notNull(),
+    availableAt: timestamp("available_at", { withTimezone: true }).notNull(),
+    sourceUpdatedAt: timestamp("source_updated_at", { withTimezone: true }).notNull(),
+    sourceVersion: text("source_version").notNull().default(""),
+    generation: integer("generation").notNull().default(1),
+    attempts: integer("attempts").notNull().default(0),
     status: reminderStatusEnum("status").notNull().default("pending"),
     claimedAt: timestamp("claimed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
     prReviewerUnique: uniqueIndex("reminders_pr_reviewer_unique").on(t.prId, t.reviewerGithubId),
-    dueStatusIdx: index("reminders_due_status_idx").on(t.status, t.dueAt),
+    dueStatusIdx: index("reminders_due_status_idx").on(t.status, t.availableAt, t.createdAt),
   }),
 );
 
