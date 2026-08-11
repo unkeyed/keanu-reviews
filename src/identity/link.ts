@@ -13,24 +13,6 @@ export interface LinkDeps {
   fetchGithubUser: GithubUserFetcher;
 }
 
-/** Link the invoking Slack user to a GitHub login (U9, self-service, R11). */
-export async function linkIdentity(
-  deps: LinkDeps,
-  input: { slackUserId: string; githubLogin: string },
-): Promise<{ ok: boolean; message: string }> {
-  const user = await deps.fetchGithubUser(input.githubLogin);
-  if (!user) {
-    return { ok: false, message: `No GitHub user \`${input.githubLogin}\` found.` };
-  }
-  await upsertIdentity(deps.db, {
-    githubUserId: user.id,
-    githubLogin: user.login,
-    slackUserId: input.slackUserId,
-    source: "self-link",
-  });
-  return { ok: true, message: `Linked GitHub \`${user.login}\` to your Slack account. 🎉` };
-}
-
 export interface ImportRow {
   github_login?: string;
   slack_email?: string;

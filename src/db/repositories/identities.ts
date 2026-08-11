@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Db } from "../client.ts";
 import { type IdentityRow, identities } from "../schema.ts";
 
@@ -37,4 +37,38 @@ export async function findByGithubId(
     .where(eq(identities.githubUserId, githubUserId))
     .limit(1);
   return row;
+}
+
+export type SelfLinkIdentityResult =
+  | { outcome: "linked" | "refreshed"; identity: IdentityRow }
+  | { outcome: "conflict" };
+
+/**
+ * Link an OAuth-verified GitHub identity without ever transferring ownership
+ * from another Slack user. The conflict insert plus Slack-scoped update makes
+ * the decision safe when two callbacks race for the same GitHub id.
+ */
+export async function linkSelfIdentity(
+  db: Db,
+  input: Omit<UpsertIdentityInput, "source">,
+): Promise<SelfLinkIdentityResult> {
+  const [inserted] = await db
+    .insert(identities)
+    .values({ ...input, source: "self-link", updatedAt: new Date() })
+    .onConflictDoNothing({ target: identities.githubUserId })
+    .returning();
+  if (inserted) return { outcome: "linked", identity: inserted };
+
+  const [refreshed] = await db
+    .update(identities)
+    .set({ githubLogin: input.githubLogin, source: "self-link", updatedAt: new Date() })
+    .where(
+      and(
+        eq(identities.githubUserId, input.githubUserId),
+        eq(identities.slackUserId, input.slackUserId),
+      ),
+    )
+    .returning();
+  if (refreshed) return { outcome: "refreshed", identity: refreshed };
+  return { outcome: "conflict" };
 }

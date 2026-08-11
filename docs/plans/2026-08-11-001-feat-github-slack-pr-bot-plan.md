@@ -53,7 +53,7 @@ The build-vs-buy question is already settled: the team trialed axolo in producti
 
 **Sync boundary & identity**
 - R10. Sync is strictly one-way GitHub → Slack. The service never writes to GitHub (no comments, statuses, reviews, or reactions). The GitHub PR stays the system of record; Slack is a notification/awareness surface, so review decisions that must persist are made on the PR.
-- R11. GitHub users are mapped to Slack users through a stored mapping keyed on the immutable GitHub numeric user id. The mapping is populated by a first-release self-service `/link-github` command and admin bulk-import (U9), with Slack email lookup as an auto-match fallback.
+- R11. GitHub users are mapped to Slack users through a stored mapping keyed on the immutable GitHub numeric user id. The mapping is populated by a first-release OAuth-verified `/link-github` command and admin bulk-import (U9), with Slack email lookup as an auto-match fallback.
 
 ### Actors
 
@@ -89,13 +89,13 @@ The build-vs-buy question is already settled: the team trialed axolo in producti
 - KTD3. **ACK-fast, process-async.** The webhook endpoint verifies the signature, dedupes, persists the raw event to a jobs table, and returns 2xx within GitHub's ~10s window. A worker loop processes jobs so slow Slack enrichment never triggers GitHub retries (which would duplicate Slack posts).
 - KTD4. **Idempotent, state-derived Slack updates.** GitHub delivery is at-least-once and unordered. Channel state is a pure function of the latest known PR state (stored), not of event arrival order; message posting dedupes on `(delivery_id)` and on natural keys (e.g. one CI message per check run + conclusion).
 - KTD5. **Deep links are SHA-pinned blob permalinks:** `https://github.com/<owner>/<repo>/blob/<commit_id>/<path>#L<line>`, built from the `pull_request_review_comment` payload (`comment.commit_id`, `comment.path`, `comment.line`). SHA-pinned so links don't drift; the comment's `html_url` is also stored as a secondary "view thread" link.
-- KTD6. **Identity map keyed on GitHub numeric `id`, never `login`.** Logins are mutable; the numeric id is stable. The map is populated primarily by the `/link-github` self-link command and admin bulk-import (U9); `users.lookupByEmail` is a best-effort auto-match fallback that is cached and expected to miss (GitHub profile/commit email ≠ Slack email frequently), and the email itself is only available via a read-only `GET /users/{login}` public-profile lookup.
+- KTD6. **Identity map keyed on GitHub numeric `id`, never `login`.** Logins are mutable; the numeric id is stable. The map is populated primarily by the GitHub OAuth-verified `/link-github` self-link command and admin bulk-import (U9); `users.lookupByEmail` is a best-effort auto-match fallback that is cached and expected to miss (GitHub profile/commit email ≠ Slack email frequently), and the email itself is only available via a read-only `GET /users/{login}` public-profile lookup.
 - KTD7. **Channel naming = sanitized, state-prefixed, stored by id.** Pattern `<state>-<repo-slug>-<number>` (e.g. `draft-api-1423` → `pr-api-1423` → `merged-api-1423`), lowercased and slugified to satisfy Slack's ≤80-char, lowercase, `[a-z0-9-_]` rule. The channel is always addressed by stored `channel_id`, never by re-deriving the name.
 - KTD8. **Rename-before-archive ordering.** Slack cannot rename an archived channel, so the close/merge handler renames to the terminal state first, then archives.
 - KTD9. **Client-side rate limiting.** `conversations.create` is Tier 2 (~20/min) — the tightest limit and a real risk during PR floods — so channel creation runs through a throttled queue. All Slack calls honor HTTP 429 `Retry-After`; `chat.postMessage` is paced to ~1/sec per channel.
 - KTD10. **Single active writer for jobs and reminders.** The job worker and reminder timer run in-process, so concurrency must be bounded: either pin the service to a single instance on Unkey Deploy, or claim work atomically (`SELECT … FOR UPDATE SKIP LOCKED` for jobs; a conditional `UPDATE … WHERE status='pending'` compare-and-swap for reminders). Reminder posting is check-then-act with no `delivery_id`, so without an atomic claim two instances (or a rolling-deploy overlap) would double-post. The chosen approach is recorded here and enforced by a two-process test in U8.
 - KTD11. **Untrusted GitHub text is neutralized before Slack rendering.** Review-comment and review bodies are attacker-controllable (any commenter, including outside collaborators on public repos), so before they enter a Slack `mrkdwn` block the service escapes `&`/`<`/`>` and strips Slack control sequences (`<!channel>`, `<!here>`, `<!everyone>`, `<!subteam^…>`) — or renders the body as `plain_text`. Prevents mass-ping and link-injection abuse.
-- KTD12. **Secrets from the Unkey Deploy secret store, never logged.** The GitHub App private key, webhook secret, Slack bot token, and Slack signing secret load from the platform secret store — never committed, never written to logs — with a documented rotation procedure. `.env.example` documents names only.
+- KTD12. **Secrets from the Unkey Deploy secret store, never logged.** The GitHub App private key, webhook and OAuth client secrets, OAuth state signing secret, Slack bot token, and Slack signing secret load from the platform secret store — never committed, never written to logs — with a documented rotation procedure. `.env.example` documents names only.
 - KTD13. **Raw-payload retention and minimization.** `jobs.raw` holds private-repo data (diff hunks, author emails, branch names), so the store persists only the fields downstream handlers need and purges raw payloads after successful processing (or a short TTL). Bounds how long someone else's source lives outside GitHub.
 
 ### High-Level Technical Design
@@ -313,15 +313,17 @@ U1 → U2 are the foundation. U3 depends on U1/U2. U4 depends on U3. U5, U6, U7 
 - **Goal:** Give the `identities` map a reliable day-one population path so reviewer invites and mentions work at launch, rather than depending on the miss-prone email fallback.
 - **Requirements:** R8, R11.
 - **Dependencies:** U1, U2.
-- **Files:** `src/routes/slackCommand.ts`, `src/slack/verify.ts`, `src/identity/link.ts`, `src/identity/import.ts`, `src/routes/slackCommand.test.ts`, `src/slack/verify.test.ts`, `src/identity/import.test.ts`.
-- **Approach:** Add a Slack slash command `/link-github <github-login>` — a new inbound Slack surface. Verify Slack's request signature (`X-Slack-Signature` + timestamp, signing secret from the secret store, KTD12) before acting; resolve the invoking Slack user id from the command payload and upsert an `identities` row (`github_user_id` ← resolved from the login via a read-only `GET /users/{login}`, `slack_user_id`, `source: self-link`). Provide an admin bulk-import path (`import.ts`) that seeds `identities` from a CSV/JSON of `github_login,slack_email` (or `slack_user_id`) pairs. This is the only unit that adds a Slack *inbound* request URL; it does not write to GitHub (reads only).
+- **Files:** `src/routes/slackCommand.ts`, `src/routes/githubOAuth.ts`, `src/github/oauth.ts`, `src/slack/verify.ts`, `src/identity/link.ts`, `src/routes/slackCommand.test.ts`, `src/routes/githubOAuth.test.ts`, `src/github/oauth.test.ts`, `src/slack/verify.test.ts`, `src/identity/import.test.ts`.
+- **Approach:** Add a Slack slash command `/link-github` — a new inbound Slack surface. Verify Slack's request signature (`X-Slack-Signature` + timestamp, signing secret from the secret store, KTD12) and the configured Slack workspace, then immediately return an ephemeral GitHub App OAuth URL. Bind the Slack user and workspace to a short-lived HMAC-signed state. The callback exchanges the one-time code and reads authenticated `GET /user`; only that verified immutable numeric id may be linked. An existing GitHub id cannot be transferred to another Slack user through self-service linking. Provide an admin bulk-import path (`import.ts`) that seeds `identities` from a CSV/JSON of `github_login,slack_email` (or `slack_user_id`) pairs. This unit adds Slack and OAuth callback inbound URLs; it does not write to GitHub.
 - **Execution note:** Verify the Slack signing-secret check test-first — it is an inbound public endpoint and security-critical (same posture as U3's webhook verification).
 - **Test scenarios:**
-  - `/link-github octocat` from a Slack user upserts an `identities` row mapping that Slack id to octocat's numeric GitHub id.
-  - A slash-command request with an invalid/stale Slack signature is rejected, no upsert.
-  - Re-linking updates the existing row rather than duplicating (idempotent on `github_user_id`).
+  - `/link-github` returns an ephemeral authorization URL without awaiting DB or network I/O.
+  - A successful OAuth callback maps the Slack id from signed state to the numeric id returned by authenticated `GET /user`.
+  - Invalid/stale Slack signatures, wrong workspaces, and invalid/expired OAuth state are rejected before DB or GitHub calls.
+  - Self-service linking cannot reassign a GitHub numeric id already owned by another Slack user.
+  - Reauthenticating as the same mapping refreshes the login rather than duplicating the row.
   - Admin bulk-import seeds N rows from a CSV; malformed rows are reported and skipped, not fatal.
-  - A login that resolves to no GitHub user is reported back to the invoker without crashing.
+  - OAuth exchange and API failures return a generic response without persisting an identity or exposing a token.
 - **Verification:** After a `/link-github` call, a subsequent `review_requested` for that reviewer (U5) resolves to a Slack mention and a real channel invite.
 
 ---

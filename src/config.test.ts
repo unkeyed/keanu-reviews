@@ -6,8 +6,13 @@ const validEnv = (): NodeJS.ProcessEnv => ({
   GITHUB_APP_PRIVATE_KEY: "-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----",
   GITHUB_WEBHOOK_SECRET: "whsec_test_secret",
   GITHUB_INSTALLATION_ID: "42",
+  GITHUB_OAUTH_CLIENT_ID: "Iv1.client-id",
+  GITHUB_OAUTH_CLIENT_SECRET: "github_oauth_client_secret",
+  OAUTH_STATE_SECRET: "oauth_state_secret_with_at_least_32_bytes",
+  PUBLIC_URL: "https://bot.example.com/",
   SLACK_BOT_TOKEN: "xoxb-test-token",
   SLACK_SIGNING_SECRET: "slack_signing_secret",
+  SLACK_TEAM_ID: "T123",
   DATABASE_URL: "postgres://user:pass@localhost:5432/db",
 });
 
@@ -16,6 +21,7 @@ describe("loadConfig", () => {
     const cfg = loadConfig(validEnv());
     expect(cfg.GITHUB_APP_ID).toBe("123456");
     expect(cfg.GITHUB_INSTALLATION_ID).toBe("42");
+    expect(cfg.PUBLIC_URL).toBe("https://bot.example.com");
     expect(cfg.PORT).toBe(3000); // default
     expect(cfg.REMINDER_HOURS).toBe(12); // plan default
   });
@@ -54,5 +60,34 @@ describe("loadConfig", () => {
     expect(SECRET_KEYS).toContain("GITHUB_APP_PRIVATE_KEY");
     expect(SECRET_KEYS).toContain("SLACK_BOT_TOKEN");
     expect(SECRET_KEYS).toContain("SLACK_SIGNING_SECRET");
+    expect(SECRET_KEYS).toContain("GITHUB_OAUTH_CLIENT_SECRET");
+    expect(SECRET_KEYS).toContain("OAUTH_STATE_SECRET");
+  });
+
+  it.each([
+    "ftp://bot.example.com",
+    "http://bot.example.com",
+    "https://user:password@bot.example.com",
+    "https://bot.example.com/base-path",
+    "https://bot.example.com/?query=not-allowed",
+  ])("rejects a PUBLIC_URL that is not an HTTP(S) origin: %s", (publicUrl) => {
+    const env = validEnv();
+    env.PUBLIC_URL = publicUrl;
+    expect(() => loadConfig(env)).toThrowError(/PUBLIC_URL/);
+  });
+
+  it.each(["http://localhost:3000/", "http://127.0.0.1:3000/", "http://[::1]:3000/"])(
+    "allows an HTTP loopback origin for local development: %s",
+    (publicUrl) => {
+      const env = validEnv();
+      env.PUBLIC_URL = publicUrl;
+      expect(loadConfig(env).PUBLIC_URL).toBe(new URL(publicUrl).origin);
+    },
+  );
+
+  it.each(["workspace-name", "E123", "T-123"])("rejects an invalid SLACK_TEAM_ID: %s", (teamId) => {
+    const env = validEnv();
+    env.SLACK_TEAM_ID = teamId;
+    expect(() => loadConfig(env)).toThrowError(/SLACK_TEAM_ID/);
   });
 });

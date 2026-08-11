@@ -1,5 +1,32 @@
 import { z } from "zod";
 
+const PublicUrlSchema = z
+  .string()
+  .url("PUBLIC_URL must be a valid URL")
+  .superRefine((value, context) => {
+    const url = new URL(value);
+    const isLoopback =
+      url.hostname === "localhost" ||
+      url.hostname.endsWith(".localhost") ||
+      url.hostname === "127.0.0.1" ||
+      url.hostname === "[::1]";
+    if (
+      (url.protocol !== "https:" && !(url.protocol === "http:" && isLoopback)) ||
+      url.username ||
+      url.password ||
+      url.pathname !== "/" ||
+      url.search ||
+      url.hash
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "PUBLIC_URL must be an HTTPS origin (HTTP only for loopback) without credentials, path, query, or hash",
+      });
+    }
+  })
+  .transform((value) => new URL(value).origin);
+
 /**
  * Typed service configuration, validated at boot (U1).
  *
@@ -18,6 +45,10 @@ const ConfigSchema = z.object({
   GITHUB_APP_ID: z.string().min(1, "GITHUB_APP_ID is required"),
   GITHUB_APP_PRIVATE_KEY: z.string().min(1, "GITHUB_APP_PRIVATE_KEY is required"),
   GITHUB_WEBHOOK_SECRET: z.string().min(1, "GITHUB_WEBHOOK_SECRET is required"),
+  GITHUB_OAUTH_CLIENT_ID: z.string().min(1, "GITHUB_OAUTH_CLIENT_ID is required"),
+  GITHUB_OAUTH_CLIENT_SECRET: z.string().min(1, "GITHUB_OAUTH_CLIENT_SECRET is required"),
+  OAUTH_STATE_SECRET: z.string().min(32, "OAUTH_STATE_SECRET must be at least 32 characters"),
+  PUBLIC_URL: PublicUrlSchema,
   // The first release deliberately supports exactly one GitHub installation.
   GITHUB_INSTALLATION_ID: z
     .string()
@@ -29,6 +60,9 @@ const ConfigSchema = z.object({
   // Slack (U4-U9)
   SLACK_BOT_TOKEN: z.string().min(1, "SLACK_BOT_TOKEN is required"),
   SLACK_SIGNING_SECRET: z.string().min(1, "SLACK_SIGNING_SECRET is required"),
+  SLACK_TEAM_ID: z
+    .string()
+    .regex(/^T[A-Z0-9]{2,}$/, "SLACK_TEAM_ID must be a Slack workspace ID beginning with T"),
 
   // Storage (U2)
   DATABASE_URL: z.string().url("DATABASE_URL must be a valid connection URL"),
@@ -44,6 +78,8 @@ export type Config = z.infer<typeof ConfigSchema>;
 export const SECRET_KEYS = [
   "GITHUB_APP_PRIVATE_KEY",
   "GITHUB_WEBHOOK_SECRET",
+  "GITHUB_OAUTH_CLIENT_SECRET",
+  "OAUTH_STATE_SECRET",
   "SLACK_BOT_TOKEN",
   "SLACK_SIGNING_SECRET",
   "DATABASE_URL",

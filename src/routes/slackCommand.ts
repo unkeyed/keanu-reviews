@@ -1,18 +1,25 @@
+import type { Buffer } from "node:buffer";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { type LinkDeps, linkIdentity } from "../identity/link.ts";
+import { createGithubAuthorizeUrl, createOAuthState } from "../github/oauth.ts";
 import type { Logger } from "../logger.ts";
 import { verifySlackSignature } from "../slack/verify.ts";
 
-export interface SlackCommandDeps extends LinkDeps {
+export interface SlackCommandDeps {
   logger: Logger;
   signingSecret: string;
+  slackTeamId: string;
+  oauthStateSecret: string;
+  githubOauthClientId: string;
+  githubOauthCallbackUrl: string;
+  now?: () => number;
+  randomBytes?: (size: number) => Buffer;
 }
 
 /**
- * Slack slash-command endpoint (U9). `/link-github <login>` links the invoking
- * Slack user to a GitHub account. Verifies the Slack signature before acting —
- * this is a public inbound endpoint. Reads only; never writes to GitHub.
+ * Start proof-of-ownership linking for `/link-github`. After local signature
+ * and workspace checks this returns immediately; GitHub and DB I/O happen only
+ * in the browser callback, outside Slack's acknowledgement window.
  */
 export function createSlackCommandRoute(deps: SlackCommandDeps): Hono {
   const app = new Hono();
@@ -27,30 +34,43 @@ export function createSlackCommandRoute(deps: SlackCommandDeps): Hono {
 
   app.post("/slack/commands", async (c) => {
     const rawBody = await c.req.text();
-    const ok = verifySlackSignature({
-      signingSecret: deps.signingSecret,
-      timestamp: c.req.header("x-slack-request-timestamp"),
-      signature: c.req.header("x-slack-signature"),
-      rawBody,
-    });
-    if (!ok) {
+    if (
+      !verifySlackSignature({
+        signingSecret: deps.signingSecret,
+        timestamp: c.req.header("x-slack-request-timestamp"),
+        signature: c.req.header("x-slack-signature"),
+        rawBody,
+        now: deps.now,
+      })
+    ) {
       deps.logger.warn("slack command signature rejected");
       return c.json({ error: "invalid_signature" }, 401);
     }
 
     const params = new URLSearchParams(rawBody);
-    const slackUserId = params.get("user_id");
-    const githubLogin = params.get("text")?.trim();
-    if (!slackUserId) return c.json({ error: "missing_user" }, 400);
-    if (!githubLogin) {
-      return c.json({
-        response_type: "ephemeral",
-        text: "Usage: `/link-github <github-username>`",
-      });
+    if (params.get("team_id") !== deps.slackTeamId) {
+      deps.logger.warn("slack command workspace rejected");
+      return c.json({ error: "workspace_not_allowed" }, 403);
     }
+    const slackUserId = params.get("user_id");
+    if (!slackUserId) return c.json({ error: "missing_user" }, 400);
 
-    const result = await linkIdentity(deps, { slackUserId, githubLogin });
-    return c.json({ response_type: "ephemeral", text: result.message });
+    const state = createOAuthState({
+      secret: deps.oauthStateSecret,
+      slackUserId,
+      slackTeamId: deps.slackTeamId,
+      now: deps.now,
+      randomBytes: deps.randomBytes,
+    });
+    const authorizeUrl = createGithubAuthorizeUrl({
+      clientId: deps.githubOauthClientId,
+      callbackUrl: deps.githubOauthCallbackUrl,
+      state,
+    });
+    return c.json({
+      response_type: "ephemeral",
+      text: `Verify ownership to link your account: <${authorizeUrl}|Continue with GitHub>`,
+    });
   });
 
   return app;

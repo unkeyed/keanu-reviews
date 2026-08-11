@@ -2,13 +2,11 @@ import { serve } from "@hono/node-server";
 import { type Config, ConfigError, SECRET_KEYS, loadConfig } from "./config.ts";
 import { createDb } from "./db/client.ts";
 import { createInstallationAuth } from "./github/auth.ts";
+import { createGithubOAuthClient } from "./github/oauth.ts";
 import { octokitMintFn } from "./github/octokitAuth.ts";
-import {
-  createGithubEmailFetcher,
-  createGithubUserFetcher,
-  createPrForShaFetcher,
-} from "./github/users.ts";
+import { createGithubEmailFetcher, createPrForShaFetcher } from "./github/users.ts";
 import { createLogger, registerSecretValues } from "./logger.ts";
+import { createGithubOAuthRoute } from "./routes/githubOAuth.ts";
 import { createGithubWebhookRoute } from "./routes/githubWebhook.ts";
 import { createSlackCommandRoute } from "./routes/slackCommand.ts";
 import { startReminderLoop } from "./scheduler/loop.ts";
@@ -70,15 +68,28 @@ function boot(): void {
     webhookSecret: config.GITHUB_WEBHOOK_SECRET,
     allowedInstallationIds: [installationId],
   });
-  const slackCommand = createSlackCommandRoute({
+  const githubOauthCallbackUrl = `${config.PUBLIC_URL}/oauth/github/callback`;
+  const githubOauth = createGithubOAuthRoute({
     db,
-    slack,
+    logger,
+    oauthClient: createGithubOAuthClient({
+      clientId: config.GITHUB_OAUTH_CLIENT_ID,
+      clientSecret: config.GITHUB_OAUTH_CLIENT_SECRET,
+    }),
+    oauthStateSecret: config.OAUTH_STATE_SECRET,
+    slackTeamId: config.SLACK_TEAM_ID,
+    callbackUrl: githubOauthCallbackUrl,
+  });
+  const slackCommand = createSlackCommandRoute({
     logger,
     signingSecret: config.SLACK_SIGNING_SECRET,
-    fetchGithubUser: createGithubUserFetcher(auth, installationId),
+    slackTeamId: config.SLACK_TEAM_ID,
+    oauthStateSecret: config.OAUTH_STATE_SECRET,
+    githubOauthClientId: config.GITHUB_OAUTH_CLIENT_ID,
+    githubOauthCallbackUrl,
   });
 
-  const app = createApp({ config, logger, mounts: [githubWebhook, slackCommand] });
+  const app = createApp({ config, logger, mounts: [githubWebhook, githubOauth, slackCommand] });
 
   // Background loops (single active writer, KTD10)
   startWorkerLoop(worker, 1000, logger);

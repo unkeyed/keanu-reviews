@@ -46,14 +46,32 @@ written to logs. See [`.env.example`](.env.example) for the full list.
 
 Required secrets: `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`,
 `GITHUB_WEBHOOK_SECRET`, `GITHUB_INSTALLATION_ID` (one installation),
-`SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `DATABASE_URL`.
+`GITHUB_OAUTH_CLIENT_SECRET`, `OAUTH_STATE_SECRET`, `SLACK_BOT_TOKEN`,
+`SLACK_SIGNING_SECRET`, `DATABASE_URL`. The service also requires the GitHub App
+OAuth client ID, its public origin, and the one allowed Slack workspace ID; see
+`.env.example` for their variable names.
+
+### GitHub account linking
+
+`/link-github` never trusts a typed GitHub username. It immediately returns an
+ephemeral GitHub authorization link, then maps the Slack user only after GitHub's
+authenticated user endpoint returns an immutable numeric account ID. Existing
+GitHub mappings cannot be transferred to another Slack user through this flow.
+
+In the GitHub App settings, create a client secret and set the callback URL to
+exactly `${PUBLIC_URL}/oauth/github/callback` (for example,
+`https://bot.example.com/oauth/github/callback`). Set `PUBLIC_URL` to an HTTPS
+origin with no path (HTTP is accepted only for loopback development), and
+generate a separate random `OAUTH_STATE_SECRET` of at least 32 characters. Set
+`SLACK_TEAM_ID` to the `T…` workspace ID that owns the slash command.
 
 ### Slack app scopes
 
 `channels:manage`, `channels:write.invites`, `chat:write`, `users:read.email`
 (add `chat:write.public` if the bot does not auto-join channels; `groups:*` for
 private channels, deferred). The `/link-github` command needs slash-command
-interactivity plus the signing secret.
+interactivity plus the signing secret; its request URL is
+`${PUBLIC_URL}/slack/commands`.
 
 ## Status
 
