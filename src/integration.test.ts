@@ -88,7 +88,7 @@ describe("end-to-end webhook -> Slack smoke", () => {
     // 1. opened -> channel created
     await deliver("pull_request", { action: "opened", pull_request: pr() });
     expect(slack.channels).toHaveLength(1);
-    expect(slack.channel("C1")?.name).toBe("pr-unkey-api-1423-19ec85a8");
+    expect(slack.channel("C1")?.name).toBe("pr-unkey-api-1423-add-auth");
 
     // 2. inline review comment -> threaded with an Open-at-line permalink
     await deliver("pull_request_review_comment", {
@@ -126,7 +126,7 @@ describe("end-to-end webhook -> Slack smoke", () => {
 
     // 4. merged -> rename to merged then archive
     await deliver("pull_request", { action: "closed", pull_request: pr({ merged: true }) });
-    expect(slack.channel("C1")?.name).toBe("merged-unkey-api-1423-19ec85a8");
+    expect(slack.channel("C1")?.name).toBe("merged-unkey-api-1423-add-auth");
     expect(slack.channel("C1")?.archived).toBe(true);
 
     // Still exactly one channel throughout.

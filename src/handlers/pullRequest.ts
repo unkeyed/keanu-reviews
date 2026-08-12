@@ -133,7 +133,7 @@ export async function handlePullRequest(
     let rootReconciled = false;
     // Persist the channel immediately so a root-post failure cannot orphan it.
     if (!row.channelId) {
-      const name = channelName(row.currentState, row.repoFullName, row.number);
+      const name = channelName(row.currentState, row.repoFullName, row.number, pr.title);
       let channelId: string;
       try {
         ({ channelId } = await slack.createChannel(name));
@@ -208,7 +208,12 @@ export async function handlePullRequest(
     }
 
     const desiredState = current.currentState;
-    const desiredChannelName = channelName(desiredState, current.repoFullName, current.number);
+    const desiredChannelName = channelName(
+      desiredState,
+      current.repoFullName,
+      current.number,
+      pr.title,
+    );
     const needsSlackReconciliation =
       current.appliedState !== desiredState || current.appliedChannelName !== desiredChannelName;
     const shouldPostLifecycle =

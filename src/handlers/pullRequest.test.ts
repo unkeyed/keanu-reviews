@@ -132,7 +132,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   it("opened draft creates a draft-* channel, stores mapping + root ts", async () => {
     await handlePullRequest(deps(), payload("opened", { draft: true }));
     expect(slack.channels).toHaveLength(1);
-    expect(slack.channels[0]?.name).toBe("draft-unkey-api-1423-19ec85a8");
+    expect(slack.channels[0]?.name).toBe("draft-unkey-api-1423-add-auth");
     const row = await findByRepoNumber(db, "unkey/api", 1423);
     expect(row?.channelId).toBe("C1");
     expect(row?.rootMessageTs).toBe("ts-1");
@@ -142,23 +142,23 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   it("ready_for_review renames draft -> pr; converted_to_draft renames back", async () => {
     await handlePullRequest(deps(), payload("opened", { draft: true }));
     await handlePullRequest(deps(), payload("ready_for_review", { draft: false }));
-    expect(slack.channel("C1")?.name).toBe("pr-unkey-api-1423-19ec85a8");
+    expect(slack.channel("C1")?.name).toBe("pr-unkey-api-1423-add-auth");
     await handlePullRequest(deps(), payload("converted_to_draft", { draft: true }));
-    expect(slack.channel("C1")?.name).toBe("draft-unkey-api-1423-19ec85a8");
+    expect(slack.channel("C1")?.name).toBe("draft-unkey-api-1423-add-auth");
   });
 
   it("closed+merged renames to merged then archives (rename precedes archive)", async () => {
     await handlePullRequest(deps(), payload("opened"));
     await handlePullRequest(deps(), payload("closed", { merged: true }));
     const ch = slack.channel("C1");
-    expect(ch?.name).toBe("merged-unkey-api-1423-19ec85a8");
+    expect(ch?.name).toBe("merged-unkey-api-1423-add-auth");
     expect(ch?.archived).toBe(true);
   });
 
   it("closed without merge renames to closed then archives", async () => {
     await handlePullRequest(deps(), payload("opened"));
     await handlePullRequest(deps(), payload("closed", { merged: false }));
-    expect(slack.channel("C1")?.name).toBe("closed-unkey-api-1423-19ec85a8");
+    expect(slack.channel("C1")?.name).toBe("closed-unkey-api-1423-add-auth");
     expect(slack.channel("C1")?.archived).toBe(true);
   });
 
@@ -167,7 +167,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     await handlePullRequest(deps(), payload("closed", { merged: false }));
     await handlePullRequest(deps(), payload("reopened"));
     expect(slack.channel("C1")?.archived).toBe(false);
-    expect(slack.channel("C1")?.name).toBe("pr-unkey-api-1423-19ec85a8");
+    expect(slack.channel("C1")?.name).toBe("pr-unkey-api-1423-add-auth");
   });
 
   it("re-delivered opened event does not create a second channel", async () => {
@@ -193,7 +193,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   });
 
   it("recovers name_taken by looking up only the exact deterministic channel name", async () => {
-    await slack.createChannel("pr-unkey-api-1423-19ec85a8");
+    await slack.createChannel("pr-unkey-api-1423-add-auth");
 
     await handlePullRequest(deps(), payload("opened"));
 
@@ -254,7 +254,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     expect(pending?.appliedState).toBe("draft");
     await handlePullRequest(deps(), ready);
 
-    expect(slack.channel("C1")?.name).toBe("pr-unkey-api-1423-19ec85a8");
+    expect(slack.channel("C1")?.name).toBe("pr-unkey-api-1423-add-auth");
   });
 
   it("retries archive after rename succeeded but archive failed", async () => {
@@ -278,7 +278,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     expect(pending?.appliedState).toBe("pr");
     await handlePullRequest(deps(), closed);
 
-    expect(slack.channel("C1")?.name).toBe("closed-unkey-api-1423-19ec85a8");
+    expect(slack.channel("C1")?.name).toBe("closed-unkey-api-1423-add-auth");
     expect(slack.channel("C1")?.archived).toBe(true);
   });
 
@@ -359,7 +359,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     await handlePullRequest(deps(), closed);
 
     expect(slack.channels).toHaveLength(1);
-    expect(slack.channel("C1")?.name).toBe("merged-unkey-api-1423-19ec85a8");
+    expect(slack.channel("C1")?.name).toBe("merged-unkey-api-1423-add-auth");
     expect(slack.channel("C1")?.archived).toBe(true);
     expect(operations).toEqual(["rename", "archive"]);
   });
@@ -383,7 +383,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     const row = await findByRepoNumber(db, "unkey/api", 1423);
     expect(row?.currentState).toBe("merged");
     expect(row?.sourceUpdatedAt?.toISOString()).toBe("2026-08-11T12:02:00.000Z");
-    expect(slack.channel("C1")?.name).toBe("merged-unkey-api-1423-19ec85a8");
+    expect(slack.channel("C1")?.name).toBe("merged-unkey-api-1423-add-auth");
     expect(slack.channel("C1")?.archived).toBe(true);
   });
 
@@ -451,9 +451,9 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     const renamed = await findByRepoNumber(db, "unkey/platform", 1423);
     expect(renamed?.id).toBe(original?.id);
     expect(renamed?.channelId).toBe("C1");
-    expect(renamed?.appliedChannelName).toBe("pr-unkey-platform-1423-4a8dbb6a");
+    expect(renamed?.appliedChannelName).toBe("pr-unkey-platform-1423-add-auth");
     expect(await findByRepoNumber(db, "unkey/api", 1423)).toBeUndefined();
     expect(slack.channels).toHaveLength(1);
-    expect(slack.channel("C1")?.name).toBe("pr-unkey-platform-1423-4a8dbb6a");
+    expect(slack.channel("C1")?.name).toBe("pr-unkey-platform-1423-add-auth");
   });
 });
