@@ -135,6 +135,13 @@ describe("handleIssueComment (U6)", () => {
     expect(slack.messages).toHaveLength(0);
   });
 
+  it("ignores a comment the bot itself authored (echo guard)", async () => {
+    const own = issueComment(true);
+    own.comment.performed_via_github_app = { id: 555 };
+    await handleIssueComment(deps({ githubAppId: "555" }), own);
+    expect(slack.messages).toHaveLength(0);
+  });
+
   it("throws for a PR comment whose parent mapping is not ready", async () => {
     await db.delete(pullRequests);
     await expect(handleIssueComment(deps(), issueComment(true))).rejects.toThrow(

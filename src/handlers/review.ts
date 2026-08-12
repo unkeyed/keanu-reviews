@@ -87,7 +87,13 @@ export interface IssueCommentPayload {
   action: string;
   repository: { full_name: string };
   issue: { number: number; pull_request?: unknown };
-  comment: { id: number; body: string; html_url: string; user: { id: number; login: string } };
+  comment: {
+    id: number;
+    body: string;
+    html_url: string;
+    user: { id: number; login: string };
+    performed_via_github_app?: { id: number } | null;
+  };
 }
 
 /** Mirror a PR conversation comment (U6). Ignored for non-PR issues. */
@@ -97,6 +103,14 @@ export async function handleIssueComment(
 ): Promise<void> {
   if (payload.action !== "created") return;
   if (!payload.issue.pull_request) return; // not a PR — ignore
+  // Echo guard: never mirror a comment the bot itself posted (e.g. the opt-in
+  // merge comment), which would otherwise loop back into Slack.
+  if (
+    deps.githubAppId &&
+    payload.comment.performed_via_github_app?.id === Number(deps.githubAppId)
+  ) {
+    return;
+  }
   const row = await findByRepoNumber(deps.db, payload.repository.full_name, payload.issue.number);
   if (!row?.channelId) {
     throw new RetryableError(

@@ -53,7 +53,8 @@ The build-vs-buy question is already settled: the team trialed axolo in producti
 - R9. A reminder posts approximately 12 hours after a review is requested if that review is still pending; it is suppressed once the review is submitted, the review request is removed, or the PR is closed/merged.
 
 **Sync boundary & identity**
-- R10. Sync is strictly one-way GitHub → Slack. The service never writes to GitHub (no comments, statuses, reviews, or reactions). The GitHub PR stays the system of record; Slack is a notification/awareness surface, so review decisions that must persist are made on the PR.
+- R10. Sync is one-way GitHub → Slack by default: the service never writes to GitHub, with a **single opt-in exception** (R13, default off). The GitHub PR stays the system of record; Slack is a notification/awareness surface, so review decisions that must persist are made on the PR.
+- R13. Opt-in (`GITHUB_COMMENT_ON_MERGE`, default off): when a PR merges, post one comment on the PR containing the Slack channel URL for context. This is the only GitHub write; enabling it requires granting the GitHub App write permission (Pull requests / Issues) and reinstalling. The bot ignores comments it authored (echo guard), and the write posts at most once per PR.
 - R11. GitHub users are mapped to Slack users through a stored mapping keyed on the immutable GitHub numeric user id. The mapping is populated by a first-release OAuth-verified `/link-github` command and admin bulk-import (U9), with Slack email lookup as an auto-match fallback.
 
 ### Actors
@@ -351,7 +352,7 @@ Commands are established in U1 (greenfield repo); use the repo-standard toolchai
 
 **Global**
 - R1–R11 are satisfied and demonstrated by the end-to-end smoke path.
-- One-way boundary (R10) is verifiable: no code path calls a GitHub write endpoint (reads for enrichment/identity/CI-mapping are allowed).
+- One-way boundary (R10) holds by default: the only GitHub write is the opt-in merge comment (R13), gated behind `GITHUB_COMMENT_ON_MERGE` and off unless explicitly enabled. All other GitHub calls are reads (enrichment/identity/CI-mapping/mergeability).
 - Rate-limit handling (429 `Retry-After`, Tier-2 create queue, per-channel pacing) is in place.
 - Webhook dedupe and idempotent state updates hold under replayed/out-of-order deliveries, and the concurrency model (KTD10) prevents double-posting under two workers/schedulers.
 - Secrets load from the secret store and never appear in logs (KTD12); untrusted GitHub text is sanitized before Slack rendering (KTD11); the webhook enforces the installation allowlist (U3).

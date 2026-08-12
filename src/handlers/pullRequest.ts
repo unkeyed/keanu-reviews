@@ -1,20 +1,24 @@
 import type { Db } from "../db/client.ts";
 import {
   applyPullRequestSource,
+  claimMergeComment,
   claimPullRequestLifecycle,
   findByGithubPrId,
   findByRepoNumber,
   markSlackStateApplied,
+  releaseMergeComment,
   releasePullRequestLifecycle,
   setChannel,
 } from "../db/repositories/pullRequests.ts";
 import { cancelForPr } from "../db/repositories/reminders.ts";
 import { type PrState, computeTargetState, isTerminal } from "../domain/prState.ts";
+import type { PrCommenter } from "../github/comments.ts";
 import { type GithubEmailFetcher, resolveSlackUser } from "../identity/resolve.ts";
 import type { Logger } from "../logger.ts";
 import { sanitizeLinkLabel, sanitizeMrkdwn } from "../slack/blocks.ts";
 import type { SlackBlock, SlackClient } from "../slack/client.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
+import { slackChannelUrl } from "../slack/links.ts";
 import { channelName } from "../slack/naming.ts";
 import { RetryableError } from "../worker/retryable.ts";
 import type { PullRequestFetcher } from "./mergeability.ts";
@@ -46,6 +50,14 @@ export interface PrHandlerDeps {
   fetchPullRequest?: PullRequestFetcher;
   /** Optional #shipped channel (id or name); announces a PR when it merges. */
   shippedChannel?: string;
+  /** Opt-in: post the Slack channel URL as a comment on the PR when it merges. */
+  commentOnMerge?: boolean;
+  /** GitHub write used only by the merge-comment feature. */
+  postPrComment?: PrCommenter;
+  /** Slack workspace id, used to build the channel deep link for the merge comment. */
+  slackTeamId?: string;
+  /** Our GitHub App id, used to ignore comments the bot itself authored (echo guard). */
+  githubAppId?: string;
 }
 
 export interface PullRequestHandlingOptions {
@@ -219,6 +231,24 @@ export async function handlePullRequest(
               authorMention: authorSlackId ? `<@${authorSlackId}>` : sanitizeMrkdwn(pr.user.login),
             },
           );
+
+          // Opt-in ONE-WAY-BOUNDARY EXCEPTION: post the Slack channel URL back to
+          // the PR for context. Claimed atomically so it posts at most once.
+          if (deps.commentOnMerge && deps.postPrComment && deps.slackTeamId) {
+            if (await claimMergeComment(db, current.id, options.now ?? new Date())) {
+              try {
+                const url = slackChannelUrl(deps.slackTeamId, channelId);
+                await deps.postPrComment(
+                  current.repoFullName,
+                  current.number,
+                  `💬 Slack discussion for this PR: ${url}`,
+                );
+              } catch (error) {
+                await releaseMergeComment(db, current.id); // allow a retry
+                throw error;
+              }
+            }
+          }
         }
         await slack.archiveChannel(channelId); // ...then archive
         await cancelForPr(db, current.id, sourceUpdatedAt, options.sourceArrivalKey ?? ""); // stop pending reminders on close/merge

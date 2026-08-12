@@ -92,3 +92,67 @@ export async function githubGetJson<T>(
     });
   }
 }
+
+/**
+ * Perform an authenticated GitHub JSON POST. This is the ONLY write path in the
+ * service and is used exclusively behind the opt-in merge-comment feature; the
+ * one-way boundary otherwise holds. A 403 typically means the GitHub App lacks
+ * the write permission (grant it and reinstall).
+ */
+export async function githubPostJson(
+  auth: InstallationAuth,
+  installationId: string,
+  path: string,
+  body: unknown,
+  options: GithubRequestOptions = {},
+): Promise<void> {
+  const url = `${GITHUB_API_BASE}${path}`;
+  const fetchFn = options.fetch ?? globalThis.fetch;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+
+  const request = async (token: string): Promise<Response> => {
+    const signal = AbortSignal.timeout(timeoutMs);
+    try {
+      return await fetchFn(url, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          accept: "application/vnd.github+json",
+          "content-type": "application/json",
+          "user-agent": "unkey-slack-pr-bot",
+        },
+        body: JSON.stringify(body),
+        signal,
+      });
+    } catch (cause) {
+      if (signal.aborted) {
+        throw new GithubApiError(`GitHub request timed out after ${timeoutMs}ms`, {
+          kind: "timeout",
+          url,
+          cause,
+        });
+      }
+      throw new GithubApiError("GitHub request failed", { kind: "network", url, cause });
+    }
+  };
+
+  let token = await auth.getToken(installationId);
+  let response = await request(token);
+  if (response.status === 401) {
+    auth.invalidate(installationId);
+    token = await auth.getToken(installationId);
+    response = await request(token);
+  }
+
+  if (!response.ok) {
+    const hint =
+      response.status === 403
+        ? " (the GitHub App likely lacks write permission — grant Pull requests / Issues write and reinstall)"
+        : "";
+    throw new GithubApiError(`GitHub API returned HTTP ${response.status}${hint}`, {
+      kind: "http",
+      status: response.status,
+      url,
+    });
+  }
+}

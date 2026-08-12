@@ -183,6 +183,24 @@ export async function setMergeableState(db: Db, id: string, state: string): Prom
     .where(eq(pullRequests.id, id));
 }
 
+/**
+ * Atomically claim the right to post the one merge comment (opt-in GitHub write).
+ * Returns true for exactly one caller; the loser skips. Release on failure so a
+ * retry can re-attempt.
+ */
+export async function claimMergeComment(db: Db, id: string, now: Date): Promise<boolean> {
+  const rows = await db
+    .update(pullRequests)
+    .set({ mergeCommentPostedAt: now })
+    .where(and(eq(pullRequests.id, id), isNull(pullRequests.mergeCommentPostedAt)))
+    .returning({ id: pullRequests.id });
+  return rows.length > 0;
+}
+
+export async function releaseMergeComment(db: Db, id: string): Promise<void> {
+  await db.update(pullRequests).set({ mergeCommentPostedAt: null }).where(eq(pullRequests.id, id));
+}
+
 export async function markSlackStateApplied(
   db: Db,
   id: string,

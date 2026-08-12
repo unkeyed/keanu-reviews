@@ -1,0 +1,1 @@
+ALTER TABLE "pull_requests" ADD COLUMN "merge_comment_posted_at" timestamp with time zone;

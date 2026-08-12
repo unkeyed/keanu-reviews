@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../db/client.ts";
 import { upsertIdentity } from "../db/repositories/identities.ts";
 import { findByRepoNumber, prId } from "../db/repositories/pullRequests.ts";
@@ -80,6 +80,33 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     await handlePullRequest(d, payload("opened"));
     await handlePullRequest(d, payload("closed", { merged: false }));
     expect(slack.messages.some((m) => m.channel === "C0SHIPPED")).toBe(false);
+  });
+
+  it("comments the Slack channel URL on the PR when merged (opt-in), once", async () => {
+    const postPrComment = vi.fn((_repo: string, _number: number, _body: string) =>
+      Promise.resolve(),
+    );
+    const d = {
+      ...deps(),
+      commentOnMerge: true,
+      postPrComment,
+      slackTeamId: "T1",
+    };
+    await handlePullRequest(d, payload("opened"));
+    await handlePullRequest(d, payload("closed", { merged: true }));
+    expect(postPrComment).toHaveBeenCalledTimes(1);
+    const call = postPrComment.mock.calls[0];
+    expect(call?.[0]).toBe("unkey/api");
+    expect(call?.[1]).toBe(1423);
+    expect(call?.[2]).toContain("slack.com/app_redirect?channel=C1&team=T1");
+  });
+
+  it("does not comment on the PR when the opt-in is off", async () => {
+    const postPrComment = vi.fn(async () => {});
+    const d = { ...deps(), commentOnMerge: false, postPrComment, slackTeamId: "T1" };
+    await handlePullRequest(d, payload("opened"));
+    await handlePullRequest(d, payload("closed", { merged: true }));
+    expect(postPrComment).not.toHaveBeenCalled();
   });
 
   it("opened draft creates a draft-* channel, stores mapping + root ts", async () => {

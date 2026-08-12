@@ -63,6 +63,13 @@ const ConfigSchema = z.object({
   SLACK_TEAM_ID: z
     .string()
     .regex(/^T[A-Z0-9]{2,}$/, "SLACK_TEAM_ID must be a Slack workspace ID beginning with T"),
+  // Opt-in: post the Slack channel URL as a comment on the PR when it merges.
+  // This is the ONLY GitHub write path and is OFF by default — enabling it
+  // requires granting the GitHub App write permission and reinstalling.
+  GITHUB_COMMENT_ON_MERGE: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
   // Optional channel that receives a "shipped" announcement when a PR is merged.
   // Accepts a channel ID (e.g. C0123ABC) or a name (e.g. shipped / #shipped).
   // Unset disables the feature.

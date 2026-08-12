@@ -3,6 +3,7 @@ import { type Config, ConfigError, SECRET_KEYS, loadConfig } from "./config.ts";
 import { createDb } from "./db/client.ts";
 import { createDbReadyCheck } from "./db/readiness.ts";
 import { createInstallationAuth } from "./github/auth.ts";
+import { createPrCommenter } from "./github/comments.ts";
 import { createGithubOAuthClient } from "./github/oauth.ts";
 import { octokitMintFn } from "./github/octokitAuth.ts";
 import {
@@ -61,6 +62,13 @@ function boot(): void {
     fetchPrForSha: createPrForShaFetcher(auth, installationId),
     fetchPullRequest: createPullRequestFetcher(auth, installationId),
     shippedChannel: config.SLACK_SHIPPED_CHANNEL,
+    // Opt-in GitHub write: post the Slack channel URL on merge. Off by default.
+    commentOnMerge: config.GITHUB_COMMENT_ON_MERGE,
+    postPrComment: config.GITHUB_COMMENT_ON_MERGE
+      ? createPrCommenter(auth, installationId)
+      : undefined,
+    slackTeamId: config.SLACK_TEAM_ID,
+    githubAppId: config.GITHUB_APP_ID,
     onReviewRequested: scheduler.onReviewRequested,
     onReviewSubmitted: scheduler.onReviewSubmitted,
     onReviewRequestRemoved: scheduler.onReviewRequestRemoved,

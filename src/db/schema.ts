@@ -64,6 +64,8 @@ export const pullRequests = pgTable(
     rootMessageTs: text("root_message_ts"), // Slack thread root for follow-up activity (R7)
     // Last mergeable_state announced to the channel, so we only post on change.
     lastMergeableState: text("last_mergeable_state"),
+    // Claim marker so the opt-in merge-comment posts to GitHub at most once.
+    mergeCommentPostedAt: timestamp("merge_comment_posted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

@@ -67,9 +67,17 @@ stored in `GITHUB_WEBHOOK_SECRET`. Subscribe to these events:
 - Check runs
 
 Grant read-only repository permissions for **Pull requests**, **Issues**, and
-**Checks** (plus GitHub's mandatory read-only **Metadata** permission). The bot
-does not need any GitHub write permission. Set the installation ID in
-`GITHUB_INSTALLATION_ID`; events from other installations are rejected.
+**Checks** (plus GitHub's mandatory read-only **Metadata** permission). Set the
+installation ID in `GITHUB_INSTALLATION_ID`; events from other installations are
+rejected.
+
+**Optional merge comment (opt-in, the only write path).** Setting
+`GITHUB_COMMENT_ON_MERGE=true` makes the bot post the Slack channel URL as a
+comment on each merged PR. This is the sole exception to the otherwise strict
+one-way boundary and is **off by default**. To use it, change **Pull requests**
+permission to **Read & write** (PR comments post via the Issues API) and
+**reinstall/reapprove** the app — otherwise the comment POST returns `403`.
+Leave `GITHUB_COMMENT_ON_MERGE` unset/`false` to keep the app fully read-only.
 
 ### GitHub account linking
 
