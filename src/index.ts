@@ -5,7 +5,11 @@ import { createDbReadyCheck } from "./db/readiness.ts";
 import { createInstallationAuth } from "./github/auth.ts";
 import { createGithubOAuthClient } from "./github/oauth.ts";
 import { octokitMintFn } from "./github/octokitAuth.ts";
-import { createGithubEmailFetcher, createPrForShaFetcher } from "./github/users.ts";
+import {
+  createGithubEmailFetcher,
+  createPrForShaFetcher,
+  createPullRequestFetcher,
+} from "./github/users.ts";
 import { createLogger, registerSecretValues } from "./logger.ts";
 import { createGithubOAuthRoute } from "./routes/githubOAuth.ts";
 import { createGithubWebhookRoute } from "./routes/githubWebhook.ts";
@@ -55,6 +59,7 @@ function boot(): void {
     logger,
     fetchGithubEmail: createGithubEmailFetcher(auth, installationId),
     fetchPrForSha: createPrForShaFetcher(auth, installationId),
+    fetchPullRequest: createPullRequestFetcher(auth, installationId),
     onReviewRequested: scheduler.onReviewRequested,
     onReviewSubmitted: scheduler.onReviewSubmitted,
     onReviewRequestRemoved: scheduler.onReviewRequestRemoved,

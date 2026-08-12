@@ -42,7 +42,7 @@ The build-vs-buy question is already settled: the team trialed axolo in producti
 **Activity mirroring**
 - R4. Inline review comments are mirrored into the PR's channel with the file path, line number, and an "Open" link that opens the file at that exact line.
 - R5. Review submissions (approved / changes requested / commented) are mirrored into the channel.
-- R6. CI/CD results (GitHub Checks) are reported in the channel.
+- R6. The PR's overall mergeability (ready to merge / blocked / conflicts / behind base / checks failing) is reported in the channel, refreshed when CI completes or a review is submitted, and posted only when the state changes. This replaces per-check CI messages: `mergeable_state` folds required checks, branch protection, and merge conflicts into one signal.
 - R7. PR lifecycle activity (opened, ready-for-review, converted-to-draft, closed, merged, reopened) and all mirrored activity are reported as top-level messages directly in the channel — not as thread replies. The channel itself is the per-PR conversation, so every update is a normal channel message.
 
 **Reviewers**
@@ -275,9 +275,9 @@ U1 → U2 are the foundation. U3 depends on U1/U2. U4 depends on U3. U5, U6, U7 
   - Fallback `text` is present on every posted message.
 - **Verification:** A real review comment appears as a channel message with an "Open" link that lands on the exact file and line at the reviewed commit, and a body with Slack control sequences renders inert.
 
-### U7. CI/CD status reporting
+### U7. Mergeability status reporting
 
-- **Goal:** Report CI results into the PR channel.
+- **Goal:** Report the PR's mergeability into the channel (replaces per-check CI messages). `check_run` completion and `pull_request_review` submission are the triggers; each fetches the PR's `mergeable_state` (read-only `GET /pulls/{number}`), maps it to a friendly status, and posts only on change. GitHub computes mergeability asynchronously, so an `unknown`/null result retries with backoff until it settles.
 - **Requirements:** R6.
 - **Dependencies:** U3, U4.
 - **Files:** `src/handlers/checks.ts`, `src/ci/status.ts`, `src/handlers/checks.test.ts`, `src/ci/status.test.ts`.

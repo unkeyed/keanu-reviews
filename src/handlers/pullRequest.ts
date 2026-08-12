@@ -17,6 +17,7 @@ import type { SlackBlock, SlackClient } from "../slack/client.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { channelName } from "../slack/naming.ts";
 import { RetryableError } from "../worker/retryable.ts";
+import type { PullRequestFetcher } from "./mergeability.ts";
 
 export interface PullRequestPayload {
   action: string;
@@ -40,6 +41,8 @@ export interface PrHandlerDeps {
   logger: Logger;
   /** Optional GitHub email lookup so identity resolution can fall back past the map. */
   fetchGithubEmail?: GithubEmailFetcher;
+  /** Optional PR read used to report mergeability (replaces per-check CI messages). */
+  fetchPullRequest?: PullRequestFetcher;
 }
 
 export interface PullRequestHandlingOptions {

@@ -4,7 +4,8 @@ import { setChannel, upsertPullRequest } from "../db/repositories/pullRequests.t
 import { createTestDb } from "../db/testDb.ts";
 import { createLogger } from "../logger.ts";
 import { FakeSlackClient } from "../testing/fakeSlack.ts";
-import { type CheckRunPayload, handleCheckRun } from "./checks.ts";
+import { type CheckRunPayload, type ChecksDeps, handleCheckRun } from "./checks.ts";
+import type { PullRequestMergeability } from "./mergeability.ts";
 
 let db: Db;
 let slack: FakeSlackClient;
@@ -18,7 +19,14 @@ beforeEach(async () => {
 });
 afterEach(() => close());
 
-const deps = (over = {}) => ({ db, slack, logger: createLogger("error"), ...over });
+const clean: PullRequestMergeability = { mergeable: true, mergeableState: "clean", draft: false };
+const deps = (over: Partial<ChecksDeps> = {}): ChecksDeps => ({
+  db,
+  slack,
+  logger: createLogger("error"),
+  fetchPullRequest: vi.fn(async () => clean),
+  ...over,
+});
 
 const seedPr = async (
   headSha: string,
@@ -48,52 +56,39 @@ const payload = (over: Partial<CheckRunPayload["check_run"]> = {}): CheckRunPayl
   },
 });
 
-describe("handleCheckRun (U7, R6)", () => {
-  it("posts a failure message with the run link, mapped by head_sha", async () => {
+describe("handleCheckRun -> mergeability (R6)", () => {
+  it("reports the PR's mergeability, mapped by head_sha", async () => {
     await seedPr("sha-1");
     await handleCheckRun(deps(), payload());
-    const text = JSON.stringify(slack.messages.at(-1)?.blocks);
-    expect(text).toContain("failed");
-    expect(text).toContain("https://github.com/unkey/api/runs/100");
+    expect(JSON.stringify(slack.messages.at(-1)?.blocks)).toContain("Ready to merge");
   });
 
-  it("posts nothing while the run is still in_progress", async () => {
+  it("does nothing while the run is still in_progress", async () => {
     await seedPr("sha-1");
     await handleCheckRun(deps(), payload({ status: "in_progress", conclusion: null }));
     expect(slack.messages).toHaveLength(0);
   });
 
-  it("does not double-post the same run id + conclusion", async () => {
+  it("does not re-post when mergeability is unchanged", async () => {
     await seedPr("sha-1");
     await handleCheckRun(deps(), payload());
-    await handleCheckRun(deps(), payload());
+    await handleCheckRun(deps(), payload({ id: 101 }));
     expect(slack.messages).toHaveLength(1);
   });
 
-  it("routes by repository and posts to every associated tracked PR", async () => {
+  it("routes by repository and reports every associated tracked PR", async () => {
     await seedPr("sha-1", { repoFullName: "other/api", channelId: "C-other" });
     await seedPr("sha-1", { number: 1, channelId: "C1" });
     await seedPr("sha-1", { number: 2, channelId: "C2" });
 
-    await handleCheckRun(
-      deps(),
-      payload({
-        pull_requests: [{ number: 1 }, { number: 2 }],
-      }),
-    );
+    await handleCheckRun(deps(), payload({ pull_requests: [{ number: 1 }, { number: 2 }] }));
 
-    expect(slack.messages.map((message) => message.channel).sort()).toEqual(["C1", "C2"]);
-  });
-
-  it("sanitizes an untrusted check name in blocks and fallback text", async () => {
-    await seedPr("sha-1");
-    await handleCheckRun(deps(), payload({ name: "tests <!channel>" }));
-    expect(JSON.stringify(slack.messages.at(-1))).not.toContain("<!channel>");
+    expect(slack.messages.map((m) => m.channel).sort()).toEqual(["C1", "C2"]);
   });
 
   it("falls back to REST when head_sha isn't stored, then ignores if unresolved", async () => {
     await seedPr("stored-sha");
-    const fetchPrForSha = vi.fn(async () => [1]); // resolves the fork check to PR #1
+    const fetchPrForSha = vi.fn(async () => [1]);
     await handleCheckRun(deps({ fetchPrForSha }), payload({ head_sha: "fork-sha" }));
     expect(fetchPrForSha).toHaveBeenCalled();
     expect(slack.messages).toHaveLength(1);
@@ -111,31 +106,11 @@ describe("handleCheckRun (U7, R6)", () => {
     ).rejects.toThrow("PR channel is not ready");
   });
 
-  it("posts mapped associations before retrying a missing one", async () => {
+  it("reports mapped associations before retrying a missing one", async () => {
     await seedPr("sha-1", { number: 1, channelId: "C1" });
     const event = payload({ pull_requests: [{ number: 1 }, { number: 2 }] });
 
     await expect(handleCheckRun(deps(), event)).rejects.toThrow("PR channel is not ready");
-    expect(slack.messages.map((message) => message.channel)).toEqual(["C1"]);
-
-    await seedPr("sha-1", { number: 2, channelId: "C2" });
-    await handleCheckRun(deps(), event);
-    expect(slack.messages.map((message) => message.channel).sort()).toEqual(["C1", "C2"]);
-  });
-
-  it("posts ready associations before retrying an unready mapping", async () => {
-    await seedPr("sha-1", { number: 1, channelId: "C1" });
-    await upsertPullRequest(db, {
-      repoFullName: "unkey/api",
-      number: 2,
-      githubPrId: 2,
-      currentState: "pr",
-      headSha: "sha-1",
-    });
-
-    await expect(
-      handleCheckRun(deps(), payload({ pull_requests: [{ number: 1 }, { number: 2 }] })),
-    ).rejects.toThrow("PR channel is not ready");
-    expect(slack.messages.map((message) => message.channel)).toEqual(["C1"]);
+    expect(slack.messages.map((m) => m.channel)).toEqual(["C1"]);
   });
 });

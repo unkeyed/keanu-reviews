@@ -35,6 +35,7 @@ beforeEach(async () => {
     db,
     slack,
     logger,
+    fetchPullRequest: async () => ({ mergeable: true, mergeableState: "clean", draft: false }),
     onReviewRequested: scheduler.onReviewRequested,
     onReviewSubmitted: scheduler.onReviewSubmitted,
     onReviewRequestRemoved: scheduler.onReviewRequestRemoved,
@@ -109,7 +110,7 @@ describe("end-to-end webhook -> Slack smoke", () => {
       "https://github.com/unkey/api/blob/sha1/src/handlers/auth.ts#L42|Open",
     );
 
-    // 3. CI result -> channel message mapped by head_sha
+    // 3. CI completion -> mergeability status posted to the channel (by head_sha)
     await deliver("check_run", {
       action: "completed",
       check_run: {
@@ -121,7 +122,7 @@ describe("end-to-end webhook -> Slack smoke", () => {
         name: "test",
       },
     });
-    expect(JSON.stringify(slack.messages.at(-1)?.blocks)).toContain("passed");
+    expect(JSON.stringify(slack.messages.at(-1)?.blocks)).toContain("Ready to merge");
 
     // 4. merged -> rename to merged then archive
     await deliver("pull_request", { action: "closed", pull_request: pr({ merged: true }) });

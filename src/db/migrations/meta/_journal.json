@@ -43,6 +43,13 @@
       "when": 1786478046023,
       "tag": "0005_chubby_masked_marvel",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786529296610,
+      "tag": "0006_mergeability",
+      "breakpoints": true
     }
   ]
 }

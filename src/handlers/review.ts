@@ -3,6 +3,7 @@ import { resolveSlackUser } from "../identity/resolve.ts";
 import { issueCommentBlocks, reviewSummaryBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { RetryableError } from "../worker/retryable.ts";
+import { reportMergeability } from "./mergeability.ts";
 import {
   type PrHandlerDeps,
   type PullRequestPayload,
@@ -77,6 +78,9 @@ export async function handleReview(
       }),
     },
   );
+
+  // A submitted review can flip mergeability (e.g. required approval satisfied).
+  await reportMergeability(deps, row, `review:${r.id}`);
 }
 
 export interface IssueCommentPayload {

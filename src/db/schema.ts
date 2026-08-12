@@ -62,6 +62,8 @@ export const pullRequests = pgTable(
     sourceArrivalKey: text("source_arrival_key"),
     headSha: text("head_sha"), // CI mapping join key (U7), refreshed on opened/synchronize
     rootMessageTs: text("root_message_ts"), // Slack thread root for follow-up activity (R7)
+    // Last mergeable_state announced to the channel, so we only post on change.
+    lastMergeableState: text("last_mergeable_state"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

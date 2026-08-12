@@ -1,4 +1,5 @@
 import type { PrForShaFetcher } from "../ci/status.ts";
+import type { PullRequestFetcher } from "../handlers/mergeability.ts";
 import type { GithubUserFetcher } from "../identity/link.ts";
 import type { GithubEmailFetcher } from "../identity/resolve.ts";
 import type { InstallationAuth } from "./auth.ts";
@@ -50,6 +51,29 @@ export function createGithubUserFetcher(
       throw invalidResponse(path);
     }
     return { id: body.id as number, login: body.login };
+  };
+}
+
+/** Read a PR's mergeability via `GET /repos/{owner}/{repo}/pulls/{number}` (read-only). */
+export function createPullRequestFetcher(
+  auth: InstallationAuth,
+  installationId: string,
+  options: GithubRequestOptions = {},
+): PullRequestFetcher {
+  return async (repoFullName: string, number: number) => {
+    const repoPath = repoFullName.split("/").map(encodeURIComponent).join("/");
+    const path = `/repos/${repoPath}/pulls/${number}`;
+    const body = await githubGetJson<{
+      mergeable?: unknown;
+      mergeable_state?: unknown;
+      draft?: unknown;
+    }>(auth, installationId, path, options);
+    if (body === undefined) return undefined;
+    return {
+      mergeable: typeof body.mergeable === "boolean" ? body.mergeable : null,
+      mergeableState: typeof body.mergeable_state === "string" ? body.mergeable_state : "unknown",
+      draft: body.draft === true,
+    };
   };
 }
 

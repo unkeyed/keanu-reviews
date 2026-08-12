@@ -1,0 +1,1 @@
+ALTER TABLE "pull_requests" ADD COLUMN "last_mergeable_state" text;

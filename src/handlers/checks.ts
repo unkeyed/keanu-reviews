@@ -1,9 +1,7 @@
-import { type PrForShaFetcher, conclusionLabel } from "../ci/status.ts";
+import type { PrForShaFetcher } from "../ci/status.ts";
 import { findAllByRepoHeadSha, findAllByRepoNumbers } from "../db/repositories/pullRequests.ts";
-import { sanitizeLinkLabel, sanitizeMrkdwn } from "../slack/blocks.ts";
-import { deliverSlackMessage } from "../slack/deliver.ts";
 import { RetryableError } from "../worker/retryable.ts";
-import type { PrHandlerDeps } from "./pullRequest.ts";
+import { type MergeabilityDeps, reportMergeability } from "./mergeability.ts";
 
 export interface CheckRunPayload {
   action: string;
@@ -19,19 +17,21 @@ export interface CheckRunPayload {
   };
 }
 
-export interface ChecksDeps extends PrHandlerDeps {
+export interface ChecksDeps extends MergeabilityDeps {
   /** Fallback PR resolution for a head_sha not stored locally (e.g. fork checks). */
   fetchPrForSha?: PrForShaFetcher;
 }
 
 /**
- * CI reporting (U7, R6). Only `check_run` (legacy `status` and `check_suite`
- * aggregation are deferred). Reports on completion, mapping the check to its PR
- * by head_sha: local column first, then a read-only REST fallback.
+ * CI completion is the trigger to refresh PR mergeability (R6, replaces the
+ * former per-check messages). When a check finishes we resolve the associated
+ * PR(s) by head_sha and report their overall `mergeable_state` — conflicts,
+ * branch protection, and required checks folded into one signal — posting only
+ * when it changed (see `reportMergeability`).
  */
 export async function handleCheckRun(deps: ChecksDeps, payload: CheckRunPayload): Promise<void> {
   const run = payload.check_run;
-  if (payload.action !== "completed" || run.status !== "completed" || !run.conclusion) return;
+  if (payload.action !== "completed" || run.status !== "completed") return;
 
   const repoFullName = payload.repository.full_name;
   const associatedNumbers = new Set(run.pull_requests?.map((pr) => pr.number) ?? []);
@@ -48,8 +48,6 @@ export async function handleCheckRun(deps: ChecksDeps, payload: CheckRunPayload)
   }
 
   const hasMissingAssociations = associatedNumbers.size > rows.length;
-  const hasUnreadyAssociations = rows.some((row) => !row.channelId);
-
   if (rows.length === 0) {
     if (hasMissingAssociations) {
       throw new RetryableError(
@@ -63,31 +61,10 @@ export async function handleCheckRun(deps: ChecksDeps, payload: CheckRunPayload)
 
   for (const row of rows) {
     if (!row.channelId) continue;
-    await deliverSlackMessage(
-      deps.db,
-      deps.slack,
-      { prId: row.id, kind: "ci", githubEventRef: `${run.id}:${run.conclusion}` },
-      {
-        channel: row.channelId,
-        text: sanitizeMrkdwn(`CI ${run.conclusion}: ${run.name}`),
-        blocks: [
-          {
-            type: "context",
-            elements: [
-              {
-                type: "mrkdwn",
-                text: `${conclusionLabel(run.conclusion)} · <${run.html_url}|${sanitizeLinkLabel(run.name)}>`,
-              },
-            ],
-          },
-        ],
-      },
-    );
+    await reportMergeability(deps, row, `check-run:${run.id}`);
   }
 
-  // Preserve progress for mapped PRs. Retries dedupe those effects while
-  // delivering to associations whose channel mappings became ready meanwhile.
-  if (hasMissingAssociations || hasUnreadyAssociations) {
+  if (hasMissingAssociations || rows.some((row) => !row.channelId)) {
     throw new RetryableError(
       `PR channel is not ready for every check_run association in ${repoFullName}`,
       { sha: run.head_sha, associations: [...associatedNumbers] },
