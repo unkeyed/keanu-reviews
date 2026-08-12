@@ -15,7 +15,7 @@ import { type PrState, computeTargetState, isTerminal } from "../domain/prState.
 import type { PrCommenter } from "../github/comments.ts";
 import { type GithubEmailFetcher, resolveSlackUser } from "../identity/resolve.ts";
 import type { Logger } from "../logger.ts";
-import { sanitizeLinkLabel, sanitizeMrkdwn } from "../slack/blocks.ts";
+import { sanitizeInlineCode, sanitizeLinkLabel, sanitizeMrkdwn } from "../slack/blocks.ts";
 import type { SlackBlock, SlackClient } from "../slack/client.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { slackChannelUrl } from "../slack/links.ts";
@@ -34,7 +34,8 @@ export interface PullRequestPayload {
     title: string;
     html_url: string;
     user: { login: string; id: number };
-    head: { sha: string };
+    head: { sha: string; ref?: string };
+    base?: { ref: string };
     updated_at: string;
   };
   repository: { full_name: string };
@@ -163,7 +164,7 @@ export async function handlePullRequest(
         {
           channel: channelId,
           text: sanitizeMrkdwn(`PR #${pr.number}: ${pr.title}`),
-          blocks: lifecycleBlocks(pr, row.currentState),
+          blocks: rootBlocks(pr),
         },
       );
       await setChannel(db, current.id, channelId, root.slackTs);
@@ -328,6 +329,21 @@ function lifecycleBlocks(pr: PullRequestPayload["pull_request"], state: PrState)
       text: {
         type: "mrkdwn",
         text: `*<${pr.html_url}|#${pr.number} ${sanitizeLinkLabel(pr.title)}>* — \`${state}\` · by ${sanitizeMrkdwn(pr.user.login)}`,
+      },
+    },
+  ];
+}
+
+/** The channel's opening message: a linked PR number plus the branch flow. */
+function rootBlocks(pr: PullRequestPayload["pull_request"]): SlackBlock[] {
+  const base = pr.base?.ref ?? "the base branch";
+  const head = pr.head.ref ?? "this branch";
+  return [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `🔀 *<${pr.html_url}|PR #${pr.number}>* — ${sanitizeMrkdwn(pr.title)}\n${sanitizeMrkdwn(pr.user.login)} wants to merge into \`${sanitizeInlineCode(base)}\` from \`${sanitizeInlineCode(head)}\``,
       },
     },
   ];
