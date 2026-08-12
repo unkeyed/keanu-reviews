@@ -1,4 +1,3 @@
-import { buildBlobPermalink } from "../github/permalink.ts";
 import { resolveSlackUser } from "../identity/resolve.ts";
 import { reviewCommentBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
@@ -39,15 +38,9 @@ export async function handleReviewComment(
   if (!row.channelId) throw new RetryableError(`PR channel is not ready for ${row.id}`);
 
   const c = payload.comment;
-  const permalink = c.line
-    ? buildBlobPermalink({
-        repoFullName: payload.repository.full_name,
-        sha: c.commit_id,
-        path: c.path,
-        line: c.line,
-        startLine: c.start_line ?? null,
-      })
-    : c.html_url;
+  // Link to the comment in the PR discussion (e.g. .../pull/7006#discussion_r…),
+  // not the file/line blob view. The file:line still shows as text context.
+  const permalink = c.html_url;
   const slackUserId = await resolveSlackUser(
     { db: deps.db, slack: deps.slack },
     { githubId: c.user.id, login: c.user.login },

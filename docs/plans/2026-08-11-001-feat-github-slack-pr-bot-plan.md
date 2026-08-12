@@ -24,7 +24,7 @@ execution: code
 
 ### Summary
 
-A persistent service that receives GitHub App webhooks and drives a Slack workspace so that each pull request gets a dedicated channel. The channel's name tracks PR state (draft, open, closed, merged), auto-archives on close/merge, invites requested reviewers, mirrors review comments with an "Open" deep link to the exact file and line, reports CI/CD results, and reminds when a requested review has sat unreviewed for ~12 hours. Communication is one-way: GitHub is the source of truth and nothing typed in Slack is written back to GitHub.
+A persistent service that receives GitHub App webhooks and drives a Slack workspace so that each pull request gets a dedicated channel. The channel's name tracks PR state (draft, open, closed, merged), auto-archives on close/merge, invites requested reviewers, mirrors review comments with an "Open" deep link to the comment in the PR discussion (file:line shown as text), reports CI/CD results, and reminds when a requested review has sat unreviewed for ~12 hours. Communication is one-way: GitHub is the source of truth and nothing typed in Slack is written back to GitHub.
 
 ### Problem Frame
 
@@ -40,7 +40,7 @@ The build-vs-buy question is already settled: the team trialed axolo in producti
 - R3. The channel is auto-archived when the PR is closed or merged, after the final state rename.
 
 **Activity mirroring**
-- R4. Inline review comments are mirrored into the PR's channel with the file path, line number, and an "Open" link that opens the file at that exact line.
+- R4. Inline review comments are mirrored into the PR's channel with the file path and line number shown as text, and an "Open" link that jumps to the comment in the PR discussion (`comment.html_url`, e.g. `…/pull/7006#discussion_r…`).
 - R5. Review submissions (approved / changes requested / commented) are mirrored into the channel.
 - R6. The PR's overall mergeability (ready to merge / blocked / conflicts / behind base / checks failing) is reported in the channel, refreshed when CI completes or a review is submitted, and posted only when the state changes. This replaces per-check CI messages: `mergeable_state` folds required checks, branch protection, and merge conflicts into one signal.
 - R7. PR lifecycle activity (opened, ready-for-review, converted-to-draft, closed, merged, reopened) and all mirrored activity are reported as top-level messages directly in the channel — not as thread replies. The channel itself is the per-PR conversation, so every update is a normal channel message.
@@ -90,7 +90,7 @@ The build-vs-buy question is already settled: the team trialed axolo in producti
 - KTD2. **PlanetScale Postgres via Drizzle ORM** for all state: installations, PR↔channel mapping, message roots, identity map, reminder queue, and webhook dedupe. Cheap, already provisioned, and Drizzle matches Unkey's conventions.
 - KTD3. **ACK-fast, process-async.** The webhook endpoint verifies the signature, dedupes, persists the raw event to a jobs table, and returns 2xx within GitHub's ~10s window. A worker loop processes jobs so slow Slack enrichment never triggers GitHub retries (which would duplicate Slack posts).
 - KTD4. **Idempotent, state-derived Slack updates.** GitHub delivery is at-least-once and unordered. Channel state is a pure function of the latest known PR state (stored), not of event arrival order; message posting dedupes on `(delivery_id)` and on natural keys (e.g. one CI message per check run + conclusion).
-- KTD5. **Deep links are SHA-pinned blob permalinks:** `https://github.com/<owner>/<repo>/blob/<commit_id>/<path>#L<line>`, built from the `pull_request_review_comment` payload (`comment.commit_id`, `comment.path`, `comment.line`). SHA-pinned so links don't drift; the comment's `html_url` is also stored as a secondary "view thread" link.
+- KTD5. **The review-comment "Open" link is the comment's discussion URL** (`comment.html_url`, e.g. `…/pull/7006#discussion_r…`), landing the reader in the PR conversation thread rather than the file/line blob view. The `comment.path`:`comment.line` still renders as text context alongside the link.
 - KTD6. **Identity map keyed on GitHub numeric `id`, never `login`.** Logins are mutable; the numeric id is stable. The map is populated primarily by the GitHub OAuth-verified `/link-github` self-link command and admin bulk-import (U9); `users.lookupByEmail` is a best-effort auto-match fallback that is cached and expected to miss (GitHub profile/commit email ≠ Slack email frequently), and the email itself is only available via a read-only `GET /users/{login}` public-profile lookup.
 - KTD7. **Channel naming = sanitized, state-prefixed, title-tailed, stored by id.** Pattern `<state>-<repo-slug>-<number>-<title-slug>` (e.g. `pr-unkey-api-6949-configure-amp-orb-setup-and-service-portals`), lowercased and slugified to satisfy Slack's ≤80-char, lowercase, `[a-z0-9-_]` rule (the title is trimmed to fit). `<state>-<repo>-<number>` uniquely identifies a PR; the title is the readable tail. The channel is always addressed by stored `channel_id`, never by re-deriving the name.
 - KTD8. **Rename-before-archive ordering.** Slack cannot rename an archived channel, so the close/merge handler renames to the terminal state first, then archives.
@@ -152,7 +152,7 @@ sequenceDiagram
   WH->>DB: persist job
   WH-->>GH: 200 OK
   W->>DB: load PR→channel + root ts
-  W->>W: build blob permalink (sha/path/#Lline)
+  W->>W: use comment.html_url (discussion link)
   W->>DB: resolve author github id → slack id
   W->>SL: chat.postMessage(blocks, thread_ts=root ts)
   W->>DB: record message ts
@@ -262,12 +262,12 @@ U1 → U2 are the foundation. U3 depends on U1/U2. U4 depends on U3. U5, U6, U7 
 - **Goal:** Mirror inline review comments and review submissions into the channel with a working "Open at line" link. (Marquee feature — the attached image.)
 - **Requirements:** R4, R5, R7.
 - **Dependencies:** U3, U4.
-- **Files:** `src/handlers/reviewComment.ts`, `src/handlers/review.ts`, `src/github/permalink.ts`, `src/slack/blocks.ts`, `src/handlers/reviewComment.test.ts`, `src/github/permalink.test.ts`, `src/slack/blocks.test.ts`.
-- **Approach:** On `pull_request_review_comment.created`, build the SHA-pinned blob permalink from `comment.commit_id` / `comment.path` / `comment.line` (KTD5), and compose a Block Kit message: a `section` with the comment body and a `context` block with `<permalink|Open> · \`path:line\` · by <@slackId>` (mirroring the image). The comment body is untrusted GitHub text, so escape/sanitize it before it enters the `mrkdwn` block (KTD11) — strip Slack control sequences (`<!channel>`, `<!here>`, `<!subteam^…>`) and escape `&`/`<`/`>`, or render as `plain_text`. Post directly in the channel as a top-level message (not a thread reply). Always set a top-level `text` fallback. **Out-of-order handling (KTD4):** if the PR row / `root_message_ts` doesn't exist yet (a child event overtook the `opened` event), lazily reconcile the channel and root message from the child payload's embedded `pull_request` object before threading, or requeue the job until the root exists. On `pull_request_review.submitted`, post an approved/changes-requested/commented summary (same sanitization). `issue_comment` filtered to PRs via `issue.pull_request`.
-- **Execution note:** Implement permalink construction and body sanitization test-first — the permalink is the feature's core (ranged anchors, path encoding) and sanitization is security-critical.
+- **Files:** `src/handlers/reviewComment.ts`, `src/handlers/review.ts`, `src/slack/blocks.ts`, `src/handlers/reviewComment.test.ts`, `src/slack/blocks.test.ts`.
+- **Approach:** On `pull_request_review_comment.created`, compose a Block Kit message: a `section` with the comment body and a `context` block with `<comment.html_url|Open> · \`path:line\` · by <@slackId>` (mirroring the image). The "Open" link is the comment's discussion URL (KTD5), so it lands in the PR conversation; `path:line` is text context. The comment body is untrusted GitHub text, so escape/sanitize it before it enters the `mrkdwn` block (KTD11) — strip Slack control sequences (`<!channel>`, `<!here>`, `<!subteam^…>`) and escape `&`/`<`/`>`, or render as `plain_text`. Post directly in the channel as a top-level message (not a thread reply). Always set a top-level `text` fallback. **Out-of-order handling (KTD4):** if the PR row / `root_message_ts` doesn't exist yet (a child event overtook the `opened` event), lazily reconcile the channel and root message from the child payload's embedded `pull_request` object before threading, or requeue the job until the root exists. On `pull_request_review.submitted`, post an approved/changes-requested/commented summary (same sanitization). `issue_comment` filtered to PRs via `issue.pull_request`.
+- **Execution note:** Implement body sanitization test-first — mirroring untrusted comment text into Slack is security-critical.
 - **Test scenarios:**
-  - Permalink builds as `.../blob/<sha>/<path>#L<line>` from a sample comment payload.
-  - Multi-line comment (`start_line`..`line`) produces a `#L<start>-L<line>` ranged anchor.
+  - The "Open" link uses `comment.html_url` (the discussion URL), not a `/blob/` file link.
+  - A comment with no line still renders (file shown, discussion link intact).
   - Path with spaces/special chars is URL-encoded correctly.
   - A comment body containing `<!channel>` / `<!here>` / crafted `<url|text>` cannot produce a broadcast or injected link (sanitized/escaped).
   - A `review_comment` job that arrives before the PR's `opened` event reconciles the channel + root from the child payload (or requeues), never posting to a null thread target.
@@ -275,7 +275,7 @@ U1 → U2 are the foundation. U3 depends on U1/U2. U4 depends on U3. U5, U6, U7 
   - `pull_request_review.submitted` with state `changes_requested` posts a distinct summary from `approved`.
   - `issue_comment` on a non-PR issue is ignored.
   - Fallback `text` is present on every posted message.
-- **Verification:** A real review comment appears as a channel message with an "Open" link that lands on the exact file and line at the reviewed commit, and a body with Slack control sequences renders inert.
+- **Verification:** A real review comment appears as a channel message with an "Open" link that lands on the comment in the PR discussion, the file:line shown as text, and a body with Slack control sequences renders inert.
 
 ### U7. Mergeability status reporting
 
@@ -343,7 +343,7 @@ Commands are established in U1 (greenfield repo); use the repo-standard toolchai
 | Local end-to-end smoke | Replay signed sample webhook fixtures (opened → review_requested → review_comment → check_run → merged) against a test Slack workspace | U3–U9 |
 
 - Each unit's enumerated Test Scenarios must pass.
-- Security- and feature-critical gates that must pass before merge: GitHub webhook signature verification and installation allowlist (U3), Slack slash-command signature verification (U9), comment-body sanitization (U6, KTD11), and permalink construction (U6).
+- Security- and feature-critical gates that must pass before merge: GitHub webhook signature verification and installation allowlist (U3), Slack slash-command signature verification (U9), and comment-body sanitization (U6, KTD11).
 - Slack calls in tests are mocked; the end-to-end smoke uses a scratch Slack workspace and a test GitHub App.
 
 ---
@@ -378,5 +378,5 @@ Commands are established in U1 (greenfield repo); use the repo-standard toolchai
 
 ## Sources / Research
 
-- GitHub App auth (JWT ≤10min → installation token 1h, cache/refresh), webhook events (`pull_request`, `pull_request_review`, `pull_request_review_comment`, `issue_comment`, `check_run`/`check_suite`, legacy `status`), HMAC-SHA256 verification on raw body, `X-GitHub-Delivery` dedupe, SHA-pinned blob permalink format, numeric-id identity: [Webhook events and payloads](https://docs.github.com/en/webhooks/webhook-events-and-payloads), [PR review comments](https://docs.github.com/en/rest/pulls/comments), [GitHub App rate limits](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/rate-limits-for-github-apps).
+- GitHub App auth (JWT ≤10min → installation token 1h, cache/refresh), webhook events (`pull_request`, `pull_request_review`, `pull_request_review_comment`, `issue_comment`, `check_run`/`check_suite`, legacy `status`), HMAC-SHA256 verification on raw body, `X-GitHub-Delivery` dedupe, review-comment `html_url` discussion links, numeric-id identity: [Webhook events and payloads](https://docs.github.com/en/webhooks/webhook-events-and-payloads), [PR review comments](https://docs.github.com/en/rest/pulls/comments), [GitHub App rate limits](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/rate-limits-for-github-apps).
 - Slack channel-per-entity mechanics (`conversations.create`/`rename`/`archive`/`invite`, ≤80-char lowercase names, can't rename archived, archived channels count toward limit), `users.lookupByEmail` (`users:read.email`), Block Kit `<url|text>` context blocks + `thread_ts` parent-only threading, tier rate limits and 429 `Retry-After`, Events API optional for push-only: [conversations.create](https://docs.slack.dev/reference/methods/conversations.create/), [conversations.invite](https://docs.slack.dev/reference/methods/conversations.invite/), [users.lookupByEmail](https://docs.slack.dev/reference/methods/users.lookupByEmail/), [chat.postMessage](https://docs.slack.dev/reference/methods/chat.postMessage/), [Slack rate limits](https://docs.slack.dev/apis/web-api/rate-limits/).

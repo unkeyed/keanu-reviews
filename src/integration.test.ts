@@ -107,7 +107,7 @@ describe("end-to-end webhook -> Slack smoke", () => {
     const comment = slack.messages.at(-1);
     expect(comment?.threadTs).toBeUndefined(); // posts directly in the channel, not threaded
     expect(JSON.stringify(comment?.blocks)).toContain(
-      "https://github.com/unkey/api/blob/sha1/src/handlers/auth.ts#L42|Open",
+      "https://github.com/unkey/api/pull/1423#r55|Open", // links to the discussion
     );
 
     // 3. CI completion -> mergeability status posted to the channel (by head_sha)

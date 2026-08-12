@@ -58,15 +58,14 @@ const seedChannel = async () => {
 };
 
 describe("handleReviewComment (U6)", () => {
-  it("posts a comment with an Open-at-line permalink directly in the channel", async () => {
+  it("links Open to the PR discussion, with file:line shown as text", async () => {
     await seedChannel();
     await handleReviewComment(deps(), payload());
     const msg = slack.messages.at(-1);
     expect(msg?.threadTs).toBeUndefined(); // direct channel post, not threaded
     const text = JSON.stringify(msg?.blocks);
-    expect(text).toContain(
-      "https://github.com/unkey/api/blob/abc123/src/handlers/auth.ts#L42|Open",
-    );
+    expect(text).toContain("https://github.com/unkey/api/pull/1423#discussion_r55|Open");
+    expect(text).not.toContain("/blob/"); // not the file/line view
     expect(text).toContain("`src/handlers/auth.ts:42`");
   });
 
