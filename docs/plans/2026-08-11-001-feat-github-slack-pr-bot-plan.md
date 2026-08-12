@@ -44,6 +44,7 @@ The build-vs-buy question is already settled: the team trialed axolo in producti
 - R5. Review submissions (approved / changes requested / commented) are mirrored into the channel.
 - R6. The PR's overall mergeability (ready to merge / blocked / conflicts / behind base / checks failing) is reported in the channel, refreshed when CI completes or a review is submitted, and posted only when the state changes. This replaces per-check CI messages: `mergeable_state` folds required checks, branch protection, and merge conflicts into one signal.
 - R7. PR lifecycle activity (opened, ready-for-review, converted-to-draft, closed, merged, reopened) and all mirrored activity are reported as top-level messages directly in the channel — not as thread replies. The channel itself is the per-PR conversation, so every update is a normal channel message.
+- R12. When a PR is **merged** (only merged, never a plain close), a clean announcement — `<repo>#<number> <title> has shipped` — is posted to a configured shared `#shipped` channel (`SLACK_SHIPPED_CHANNEL`, a channel id or name; unset disables it). Idempotent per PR.
 
 **Reviewers**
 - R8. The PR author is invited to the channel when it is created, and each requested reviewer is invited when the review is requested. Invites resolve the GitHub user to a linked Slack account (identity map, U9) and are idempotent; an unlinked user is skipped and retried on later events.

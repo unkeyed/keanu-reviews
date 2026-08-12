@@ -67,6 +67,21 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     expect(slack.invites).toHaveLength(0);
   });
 
+  it("announces a merge in the shipped channel (merged only)", async () => {
+    const d = { ...deps(), shippedChannel: "C0SHIPPED" };
+    await handlePullRequest(d, payload("opened"));
+    await handlePullRequest(d, payload("closed", { merged: true }));
+    const shipped = slack.messages.find((m) => m.channel === "C0SHIPPED");
+    expect(JSON.stringify(shipped?.blocks)).toContain("has shipped");
+  });
+
+  it("does not announce a plain close (not merged)", async () => {
+    const d = { ...deps(), shippedChannel: "C0SHIPPED" };
+    await handlePullRequest(d, payload("opened"));
+    await handlePullRequest(d, payload("closed", { merged: false }));
+    expect(slack.messages.some((m) => m.channel === "C0SHIPPED")).toBe(false);
+  });
+
   it("opened draft creates a draft-* channel, stores mapping + root ts", async () => {
     await handlePullRequest(deps(), payload("opened", { draft: true }));
     expect(slack.channels).toHaveLength(1);

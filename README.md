@@ -1,6 +1,6 @@
 # Unkey Slack PR Bot
 
-A self-hosted, one-way **GitHub → Slack** bot (axolo.co-style): one Slack channel per pull request, with state-tracking channel names, auto-archiving, author + reviewer invites, review-comment mirroring with file/line deep links, PR mergeability status (ready to merge / blocked / conflicts), and 12-hour review reminders. The bot writes to Slack and makes read-only GitHub REST/OAuth calls; it never mutates GitHub. Nothing typed in Slack is written back to GitHub — the PR stays the system of record.
+A self-hosted, one-way **GitHub → Slack** bot (axolo.co-style): one Slack channel per pull request, with state-tracking channel names, auto-archiving, author + reviewer invites, review-comment mirroring with file/line deep links, PR mergeability status (ready to merge / blocked / conflicts), a `#shipped` announcement on merge, and 12-hour review reminders. The bot writes to Slack and makes read-only GitHub REST/OAuth calls; it never mutates GitHub. Nothing typed in Slack is written back to GitHub — the PR stays the system of record.
 
 Full design: [`docs/plans/2026-08-11-001-feat-github-slack-pr-bot-plan.md`](docs/plans/2026-08-11-001-feat-github-slack-pr-bot-plan.md).
 

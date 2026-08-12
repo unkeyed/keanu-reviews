@@ -18,6 +18,7 @@ import { deliverSlackMessage } from "../slack/deliver.ts";
 import { channelName } from "../slack/naming.ts";
 import { RetryableError } from "../worker/retryable.ts";
 import type { PullRequestFetcher } from "./mergeability.ts";
+import { notifyShipped } from "./shipped.ts";
 
 export interface PullRequestPayload {
   action: string;
@@ -43,6 +44,8 @@ export interface PrHandlerDeps {
   fetchGithubEmail?: GithubEmailFetcher;
   /** Optional PR read used to report mergeability (replaces per-check CI messages). */
   fetchPullRequest?: PullRequestFetcher;
+  /** Optional #shipped channel (id or name); announces a PR when it merges. */
+  shippedChannel?: string;
 }
 
 export interface PullRequestHandlingOptions {
@@ -203,6 +206,20 @@ export async function handlePullRequest(
       }
 
       if (isTerminal(desiredState)) {
+        // Announce merges (only merged, never plain close) in #shipped.
+        if (desiredState === "merged") {
+          await notifyShipped(
+            { db, slack, logger, shippedChannel: deps.shippedChannel },
+            {
+              prId: current.id,
+              repoFullName: current.repoFullName,
+              number: current.number,
+              title: pr.title,
+              htmlUrl: pr.html_url,
+              authorMention: authorSlackId ? `<@${authorSlackId}>` : sanitizeMrkdwn(pr.user.login),
+            },
+          );
+        }
         await slack.archiveChannel(channelId); // ...then archive
         await cancelForPr(db, current.id, sourceUpdatedAt, options.sourceArrivalKey ?? ""); // stop pending reminders on close/merge
       }

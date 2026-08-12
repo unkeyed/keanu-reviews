@@ -60,6 +60,7 @@ function boot(): void {
     fetchGithubEmail: createGithubEmailFetcher(auth, installationId),
     fetchPrForSha: createPrForShaFetcher(auth, installationId),
     fetchPullRequest: createPullRequestFetcher(auth, installationId),
+    shippedChannel: config.SLACK_SHIPPED_CHANNEL,
     onReviewRequested: scheduler.onReviewRequested,
     onReviewSubmitted: scheduler.onReviewSubmitted,
     onReviewRequestRemoved: scheduler.onReviewRequestRemoved,

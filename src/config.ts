@@ -63,6 +63,10 @@ const ConfigSchema = z.object({
   SLACK_TEAM_ID: z
     .string()
     .regex(/^T[A-Z0-9]{2,}$/, "SLACK_TEAM_ID must be a Slack workspace ID beginning with T"),
+  // Optional channel that receives a "shipped" announcement when a PR is merged.
+  // Accepts a channel ID (e.g. C0123ABC) or a name (e.g. shipped / #shipped).
+  // Unset disables the feature.
+  SLACK_SHIPPED_CHANNEL: z.string().trim().min(1).optional(),
 
   // Storage (U2)
   DATABASE_URL: z.string().url("DATABASE_URL must be a valid connection URL"),
