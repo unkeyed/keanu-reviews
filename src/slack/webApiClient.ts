@@ -26,6 +26,7 @@ interface SlackWebApi {
     create(input: { name: string }): Promise<{ channel?: { id?: string } }>;
     join(input: { channel: string }): Promise<unknown>;
     rename(input: { channel: string; name: string }): Promise<unknown>;
+    setTopic(input: { channel: string; topic: string }): Promise<unknown>;
     archive(input: { channel: string }): Promise<unknown>;
     unarchive(input: { channel: string }): Promise<unknown>;
     invite(input: { channel: string; users: string }): Promise<unknown>;
@@ -198,6 +199,12 @@ export function createWebApiSlackClient(
       call(() =>
         withChannelMembership(channelId, async () => {
           await web.conversations.rename({ channel: channelId, name });
+        }),
+      ),
+    setTopic: (channelId, topic) =>
+      call(() =>
+        withChannelMembership(channelId, async () => {
+          await web.conversations.setTopic({ channel: channelId, topic });
         }),
       ),
     archiveChannel: (channelId) =>

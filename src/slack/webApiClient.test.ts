@@ -14,6 +14,7 @@ function fakeWebApi() {
       ),
       join: vi.fn(async () => ({})),
       rename: vi.fn(async () => ({})),
+      setTopic: vi.fn(async () => ({})),
       archive: vi.fn(async () => ({})),
       unarchive: vi.fn(async () => ({})),
       invite: vi.fn(async () => ({})),

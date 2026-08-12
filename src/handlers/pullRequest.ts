@@ -150,6 +150,16 @@ export async function handlePullRequest(
       current = { ...row, channelId, rootMessageTs: null };
       channelCreated = true;
       logger.info("channel created", { prId: row.id, channelId, state: row.currentState });
+
+      // Best-effort: a topic failure (e.g. missing scope) must not block the flow.
+      try {
+        await slack.setTopic(channelId, channelTopic(pr));
+      } catch (error) {
+        logger.warn("failed to set channel topic", {
+          prId: row.id,
+          err: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     const channelId = current.channelId;
@@ -332,6 +342,17 @@ function lifecycleBlocks(pr: PullRequestPayload["pull_request"], state: PrState)
       },
     },
   ];
+}
+
+const SLACK_TOPIC_MAX = 250;
+
+/** Channel topic: `PR 6949: author wants to merge into main from branch`, PR # linked. */
+function channelTopic(pr: PullRequestPayload["pull_request"]): string {
+  const base = pr.base?.ref ?? "the base branch";
+  const head = pr.head.ref ?? "this branch";
+  const topic = `<${pr.html_url}|PR ${pr.number}>: ${sanitizeMrkdwn(pr.user.login)} wants to merge into ${sanitizeMrkdwn(base)} from ${sanitizeMrkdwn(head)}`;
+  // The link is at the start, so trimming the tail (branch name) stays safe.
+  return topic.length > SLACK_TOPIC_MAX ? topic.slice(0, SLACK_TOPIC_MAX) : topic;
 }
 
 /** The channel's opening message: a linked PR number plus the branch flow. */

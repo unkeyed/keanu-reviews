@@ -119,6 +119,16 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     expect(root).toContain("wants to merge into `main` from `feat/auth`");
   });
 
+  it("sets the channel topic to a linked PR description", async () => {
+    await handlePullRequest(
+      deps(),
+      payload("opened", { base: { ref: "main" }, head: { sha: "sha1", ref: "fix/gates" } }),
+    );
+    expect(slack.channel("C1")?.topic).toBe(
+      "<https://github.com/unkey/api/pull/1423|PR 1423>: oz wants to merge into main from fix/gates",
+    );
+  });
+
   it("opened draft creates a draft-* channel, stores mapping + root ts", async () => {
     await handlePullRequest(deps(), payload("opened", { draft: true }));
     expect(slack.channels).toHaveLength(1);

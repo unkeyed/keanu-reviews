@@ -2,7 +2,7 @@ import type { SlackClient, SlackMessage } from "../slack/client.ts";
 
 /** In-memory Slack client for offline tests. Records every call for assertions. */
 export class FakeSlackClient implements SlackClient {
-  channels: { id: string; name: string; archived: boolean }[] = [];
+  channels: { id: string; name: string; archived: boolean; topic?: string }[] = [];
   messages: SlackMessage[] = [];
   invites: { channelId: string; userIds: string[] }[] = [];
   emailToUser = new Map<string, string>();
@@ -24,6 +24,10 @@ export class FakeSlackClient implements SlackClient {
   async renameChannel(channelId: string, name: string): Promise<void> {
     const ch = this.channels.find((c) => c.id === channelId);
     if (ch) ch.name = name;
+  }
+  async setTopic(channelId: string, topic: string): Promise<void> {
+    const ch = this.channels.find((c) => c.id === channelId);
+    if (ch) ch.topic = topic;
   }
   async archiveChannel(channelId: string): Promise<void> {
     const ch = this.channels.find((c) => c.id === channelId);
