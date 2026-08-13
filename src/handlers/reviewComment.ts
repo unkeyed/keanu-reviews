@@ -43,11 +43,16 @@ export async function handleReviewComment(
   // Link to the comment in the PR discussion (e.g. .../pull/7006#discussion_r…),
   // not the file/line blob view. The file:line still shows as text context.
   const permalink = c.html_url;
-  const slackUserId = await resolveSlackUser(
+  // The "by" mention is the PR author (the committer whose code is being
+  // reviewed and who needs to act), not the reviewer who wrote the comment.
+  const committer = payload.pull_request.user;
+  const committerSlackId = await resolveSlackUser(
     { db: deps.db, slack: deps.slack },
-    { githubId: c.user.id, login: c.user.login },
+    { githubId: committer.id, login: committer.login },
   );
-  const authorMention = slackUserId ? `<@${slackUserId}>` : sanitizeMrkdwn(c.user.login);
+  const committerMention = committerSlackId
+    ? `<@${committerSlackId}>`
+    : sanitizeMrkdwn(committer.login);
 
   await deliverSlackMessage(
     deps.db,
@@ -61,7 +66,7 @@ export async function handleReviewComment(
         permalink,
         path: c.path,
         line: c.line ?? undefined,
-        authorMention,
+        authorMention: committerMention,
       }),
     },
   );
