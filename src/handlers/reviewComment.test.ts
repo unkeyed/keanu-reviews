@@ -89,6 +89,15 @@ describe("handleReviewComment (U6)", () => {
     expect(slack.messages.at(-1)?.channel).toBeDefined();
   });
 
+  it("ignores an inline comment from a bot", async () => {
+    await seedChannel();
+    await handleReviewComment(
+      deps(),
+      payload({ user: { id: 9, login: "vercel[bot]", type: "Bot" } }),
+    );
+    expect(slack.messages).toHaveLength(0);
+  });
+
   it("does not double-post a re-delivered comment", async () => {
     await seedChannel();
     await handleReviewComment(deps(), payload());

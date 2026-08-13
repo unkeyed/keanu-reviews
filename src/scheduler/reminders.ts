@@ -15,6 +15,7 @@ import { isTerminal } from "../domain/prState.ts";
 import type { Logger } from "../logger.ts";
 import type { SlackClient } from "../slack/client.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
+import { type ReminderWindow, isWithinWindow } from "./window.ts";
 
 export interface ReminderDeps {
   db: Db;
@@ -26,6 +27,8 @@ export interface ReminderDeps {
   retryBaseMs?: number;
   batchSize?: number;
   now?: () => number;
+  /** Only deliver reminders during this daily window; omit to deliver anytime. */
+  deliveryWindow?: ReminderWindow;
 }
 
 /**
@@ -79,6 +82,9 @@ export function createReminderScheduler(deps: ReminderDeps) {
 
   const processDue = async (): Promise<number> => {
     const scanTime = new Date(now());
+    // Hold all due reminders until the delivery window opens. Checked before any
+    // claim so a reminder due off-hours stays pending, not consumed.
+    if (deps.deliveryWindow && !isWithinWindow(scanTime, deps.deliveryWindow)) return 0;
     const due = await listDue(deps.db, scanTime, leaseMs, batchSize);
     let posted = 0;
     for (const r of due) {

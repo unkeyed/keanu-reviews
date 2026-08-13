@@ -55,6 +55,27 @@ const advanceHours = (h: number) => {
 };
 
 describe("reminder scheduler (U8, R9)", () => {
+  it("holds a due reminder outside the delivery window, delivers it inside", async () => {
+    const s = createReminderScheduler({
+      db,
+      slack,
+      logger: createLogger("error"),
+      reminderHours: HOURS,
+      now: () => clock,
+      deliveryWindow: { startHour: 5, endHour: 14, timeZone: "America/New_York" },
+    });
+    clock = Date.parse("2026-08-12T18:00:00Z"); // schedule -> due 2026-08-13T06:00:00Z
+    await s.onReviewRequested(PR, 7);
+
+    clock = Date.parse("2026-08-13T07:00:00Z"); // 03:00 ET — outside the window
+    expect(await s.processDue()).toBe(0);
+    expect(slack.messages).toHaveLength(0);
+
+    clock = Date.parse("2026-08-13T13:00:00Z"); // 09:00 ET — inside the window
+    expect(await s.processDue()).toBe(1);
+    expect(slack.messages).toHaveLength(1);
+  });
+
   it("schedules a pending reminder ~12h out", async () => {
     await scheduler().onReviewRequested(PR, 7);
     const due = await listDue(db, new Date(clock + (HOURS + 0.1) * 60 * 60_000));

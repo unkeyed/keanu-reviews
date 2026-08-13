@@ -1,4 +1,5 @@
 import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
+import { isBotActor } from "../github/actors.ts";
 import { resolveSlackUser } from "../identity/resolve.ts";
 import { issueCommentBlocks, reviewSummaryBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
@@ -30,7 +31,7 @@ export interface ReviewPayload {
     body: string | null;
     html_url: string;
     submitted_at?: string;
-    user: { id: number; login: string };
+    user: { id: number; login: string; type?: string };
   };
 }
 
@@ -47,6 +48,7 @@ export async function handleReview(
   sourceVersion = String(payload.review.id),
 ): Promise<void> {
   if (payload.action !== "submitted") return;
+  if (isBotActor(payload.review.user)) return; // skip bot reviews
   const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
   if (!row.channelId) throw new RetryableError(`PR channel is not ready for ${row.id}`);
 
@@ -91,8 +93,7 @@ export interface IssueCommentPayload {
     id: number;
     body: string;
     html_url: string;
-    user: { id: number; login: string };
-    performed_via_github_app?: { id: number } | null;
+    user: { id: number; login: string; type?: string };
   };
 }
 
@@ -103,14 +104,9 @@ export async function handleIssueComment(
 ): Promise<void> {
   if (payload.action !== "created") return;
   if (!payload.issue.pull_request) return; // not a PR — ignore
-  // Echo guard: never mirror a comment the bot itself posted (e.g. the opt-in
-  // merge comment), which would otherwise loop back into Slack.
-  if (
-    deps.githubAppId &&
-    payload.comment.performed_via_github_app?.id === Number(deps.githubAppId)
-  ) {
-    return;
-  }
+  // Skip bot comments (Vercel/Mintlify deploy previews, our own merge comment, …).
+  // `type: "Bot"` covers our App's bot too, so this also serves as the echo guard.
+  if (isBotActor(payload.comment.user)) return;
   const row = await findByRepoNumber(deps.db, payload.repository.full_name, payload.issue.number);
   if (!row?.channelId) {
     throw new RetryableError(

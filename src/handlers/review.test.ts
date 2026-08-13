@@ -73,6 +73,13 @@ describe("handleReview (U6, R5)", () => {
     expect(approved).not.toBe(changes);
   });
 
+  it("ignores a review submitted by a bot", async () => {
+    const botReview = review("approved");
+    botReview.review.user.type = "Bot";
+    await handleReview(deps(), botReview);
+    expect(slack.messages).toHaveLength(0);
+  });
+
   it("fires the reminder-cancel hook for the reviewer", async () => {
     const onReviewSubmitted = vi.fn(async () => {});
     await handleReview(deps({ onReviewSubmitted }), review("approved"));
@@ -135,10 +142,10 @@ describe("handleIssueComment (U6)", () => {
     expect(slack.messages).toHaveLength(0);
   });
 
-  it("ignores a comment the bot itself authored (echo guard)", async () => {
-    const own = issueComment(true);
-    own.comment.performed_via_github_app = { id: 555 };
-    await handleIssueComment(deps({ githubAppId: "555" }), own);
+  it("ignores comments from bots (Vercel/Mintlify, and our own bot)", async () => {
+    const bot = issueComment(true);
+    bot.comment.user.type = "Bot";
+    await handleIssueComment(deps(), bot);
     expect(slack.messages).toHaveLength(0);
   });
 

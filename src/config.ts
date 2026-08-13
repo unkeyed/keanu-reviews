@@ -81,6 +81,22 @@ const ConfigSchema = z.object({
   // Reminder scheduler (U8) — tunable, with plan defaults.
   REMINDER_HOURS: z.coerce.number().positive().default(12),
   REMINDER_SCAN_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
+  // Reminders are only delivered during this daily window (in REMINDER_WINDOW_TZ).
+  // Default 05:00–14:00 Eastern. Start is inclusive, end exclusive; a window that
+  // wraps midnight (start > end) is allowed.
+  REMINDER_WINDOW_START_HOUR: z.coerce.number().int().min(0).max(23).default(5),
+  REMINDER_WINDOW_END_HOUR: z.coerce.number().int().min(0).max(23).default(14),
+  REMINDER_WINDOW_TZ: z
+    .string()
+    .default("America/New_York")
+    .refine((tz) => {
+      try {
+        new Intl.DateTimeFormat("en-US", { timeZone: tz });
+        return true;
+      } catch {
+        return false;
+      }
+    }, "REMINDER_WINDOW_TZ must be a valid IANA time zone (e.g. America/New_York)"),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

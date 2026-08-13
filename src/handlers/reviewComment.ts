@@ -1,3 +1,4 @@
+import { isBotActor } from "../github/actors.ts";
 import { resolveSlackUser } from "../identity/resolve.ts";
 import { reviewCommentBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
@@ -20,7 +21,7 @@ export interface ReviewCommentPayload {
     start_line?: number | null;
     body: string;
     html_url: string;
-    user: { id: number; login: string };
+    user: { id: number; login: string; type?: string };
   };
 }
 
@@ -34,6 +35,7 @@ export async function handleReviewComment(
   payload: ReviewCommentPayload,
 ): Promise<void> {
   if (payload.action !== "created") return;
+  if (isBotActor(payload.comment.user)) return; // skip bot comments (Vercel, Mintlify, …)
   const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
   if (!row.channelId) throw new RetryableError(`PR channel is not ready for ${row.id}`);
 

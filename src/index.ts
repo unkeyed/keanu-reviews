@@ -53,6 +53,11 @@ function boot(): void {
     slack,
     logger,
     reminderHours: config.REMINDER_HOURS,
+    deliveryWindow: {
+      startHour: config.REMINDER_WINDOW_START_HOUR,
+      endHour: config.REMINDER_WINDOW_END_HOUR,
+      timeZone: config.REMINDER_WINDOW_TZ,
+    },
   });
   const router = createRouter({
     db,
@@ -68,7 +73,6 @@ function boot(): void {
       ? createPrCommenter(auth, installationId)
       : undefined,
     slackTeamId: config.SLACK_TEAM_ID,
-    githubAppId: config.GITHUB_APP_ID,
     onReviewRequested: scheduler.onReviewRequested,
     onReviewSubmitted: scheduler.onReviewSubmitted,
     onReviewRequestRemoved: scheduler.onReviewRequestRemoved,

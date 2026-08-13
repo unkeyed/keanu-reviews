@@ -57,8 +57,6 @@ export interface PrHandlerDeps {
   postPrComment?: PrCommenter;
   /** Slack workspace id, used to build the channel deep link for the merge comment. */
   slackTeamId?: string;
-  /** Our GitHub App id, used to ignore comments the bot itself authored (echo guard). */
-  githubAppId?: string;
 }
 
 export interface PullRequestHandlingOptions {
