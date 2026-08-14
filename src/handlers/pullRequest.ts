@@ -279,6 +279,10 @@ export async function handlePullRequest(
                   current.number,
                   `💬 Slack discussion for this PR: ${url}`,
                 );
+                logger.info("posted merge comment to PR", {
+                  prId: current.id,
+                  number: current.number,
+                });
               }
             } catch (err) {
               await releaseMergeComment(db, current.id);
@@ -287,6 +291,13 @@ export async function handlePullRequest(
                 err: err instanceof Error ? err.message : String(err),
               });
             }
+          } else if (desiredState === "merged" && deps.commentOnMerge) {
+            // Enabled but a dependency is missing — surface it instead of silently no-op.
+            logger.warn("merge comment enabled but not configured", {
+              prId: current.id,
+              hasCommenter: Boolean(deps.postPrComment),
+              hasSlackTeamId: Boolean(deps.slackTeamId),
+            });
           }
         }
       }
