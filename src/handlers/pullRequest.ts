@@ -217,6 +217,13 @@ export async function handlePullRequest(
     const shouldPostLifecycle =
       !channelCreated && !rootReconciled && Boolean(target && current.rootMessageTs);
 
+    // A closed/merged PR never needs a reminder. Cancel independently of Slack
+    // reconciliation so a Slack failure can't leave a reminder live and fire a
+    // review ping after the PR is already done.
+    if (isTerminal(desiredState)) {
+      await cancelForPr(db, current.id, sourceUpdatedAt, options.sourceArrivalKey ?? "");
+    }
+
     if (needsSlackReconciliation) {
       // Either side being terminal can mean the real channel is archived after a
       // partial prior attempt. Make it writable before the idempotent rename.
@@ -232,40 +239,56 @@ export async function handlePullRequest(
       }
 
       if (isTerminal(desiredState)) {
-        // Announce merges (only merged, never plain close) in #shipped.
+        // Archive is the critical outcome; do it before the optional merge
+        // announcements so a shipped/comment failure can never leave the channel
+        // un-archived. Reminders were already cancelled above.
+        await slack.archiveChannel(channelId);
+
+        // Merge announcements are best-effort — a failure here must never throw,
+        // or it would block archiving and endlessly retry the reconciliation.
         if (desiredState === "merged") {
-          await notifyShipped(
-            { db, slack, logger, shippedChannel: deps.shippedChannel },
-            {
+          try {
+            await notifyShipped(
+              { db, slack, logger, shippedChannel: deps.shippedChannel },
+              {
+                prId: current.id,
+                repoFullName: current.repoFullName,
+                number: current.number,
+                title: pr.title,
+                htmlUrl: pr.html_url,
+                authorMention: authorSlackId
+                  ? `<@${authorSlackId}>`
+                  : sanitizeMrkdwn(pr.user.login),
+              },
+            );
+          } catch (err) {
+            logger.warn("merge announcement to #shipped failed", {
               prId: current.id,
-              repoFullName: current.repoFullName,
-              number: current.number,
-              title: pr.title,
-              htmlUrl: pr.html_url,
-              authorMention: authorSlackId ? `<@${authorSlackId}>` : sanitizeMrkdwn(pr.user.login),
-            },
-          );
+              err: err instanceof Error ? err.message : String(err),
+            });
+          }
 
           // Opt-in ONE-WAY-BOUNDARY EXCEPTION: post the Slack channel URL back to
           // the PR for context. Claimed atomically so it posts at most once.
           if (deps.commentOnMerge && deps.postPrComment && deps.slackTeamId) {
-            if (await claimMergeComment(db, current.id, options.now ?? new Date())) {
-              try {
+            try {
+              if (await claimMergeComment(db, current.id, options.now ?? new Date())) {
                 const url = slackChannelUrl(deps.slackTeamId, channelId);
                 await deps.postPrComment(
                   current.repoFullName,
                   current.number,
                   `💬 Slack discussion for this PR: ${url}`,
                 );
-              } catch (error) {
-                await releaseMergeComment(db, current.id); // allow a retry
-                throw error;
               }
+            } catch (err) {
+              await releaseMergeComment(db, current.id);
+              logger.warn("merge comment to GitHub failed", {
+                prId: current.id,
+                err: err instanceof Error ? err.message : String(err),
+              });
             }
           }
         }
-        await slack.archiveChannel(channelId); // ...then archive
-        await cancelForPr(db, current.id, sourceUpdatedAt, options.sourceArrivalKey ?? ""); // stop pending reminders on close/merge
       }
       await markSlackStateApplied(db, current.id, desiredState, desiredChannelName);
       logger.info("channel state reconciled", {

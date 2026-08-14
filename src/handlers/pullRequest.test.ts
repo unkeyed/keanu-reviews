@@ -1,7 +1,10 @@
+import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../db/client.ts";
 import { upsertIdentity } from "../db/repositories/identities.ts";
 import { findByRepoNumber, prId } from "../db/repositories/pullRequests.ts";
+import { scheduleReminder } from "../db/repositories/reminders.ts";
+import { reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createLogger } from "../logger.ts";
 import { FakeSlackClient } from "../testing/fakeSlack.ts";
@@ -73,6 +76,30 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     await handlePullRequest(d, payload("closed", { merged: true }));
     const shipped = slack.messages.find((m) => m.channel === "C0SHIPPED");
     expect(JSON.stringify(shipped?.blocks)).toContain("has shipped");
+  });
+
+  it("archives and cancels reminders on merge even if the #shipped post fails", async () => {
+    const d = { ...deps(), shippedChannel: "C0SHIPPED" };
+    await handlePullRequest(d, payload("opened")); // creates the PR row + channel C1
+    await scheduleReminder(db, {
+      prId: prId("unkey/api", 1423),
+      reviewerGithubId: 7,
+      dueAt: new Date("2026-08-13T00:00:00Z"),
+    });
+    const realPost = slack.postMessage.bind(slack);
+    slack.postMessage = async (m) => {
+      if (m.channel === "C0SHIPPED") throw new Error("shipped channel unreachable");
+      return realPost(m);
+    };
+
+    await handlePullRequest(d, payload("closed", { merged: true }));
+
+    expect(slack.channel("C1")?.archived).toBe(true); // archived despite shipped failure
+    const [rem] = await db
+      .select()
+      .from(reminders)
+      .where(eq(reminders.id, `${prId("unkey/api", 1423)}::7`));
+    expect(rem?.status).toBe("cancelled"); // reminder cancelled despite shipped failure
   });
 
   it("does not announce a plain close (not merged)", async () => {
