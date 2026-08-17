@@ -239,9 +239,10 @@ export async function handlePullRequest(
       }
 
       if (isTerminal(desiredState)) {
-        // Archive is the critical outcome; do it before the optional merge
-        // announcements so a shipped/comment failure can never leave the channel
-        // un-archived. Reminders were already cancelled above.
+        // Clear human membership before archiving so Slack does not send each
+        // participant an archival notification. Archive remains the critical
+        // outcome and still precedes optional merge announcements.
+        await slack.removeChannelMembers(channelId);
         await slack.archiveChannel(channelId);
 
         // Merge announcements are best-effort — a failure here must never throw,

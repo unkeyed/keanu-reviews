@@ -5,7 +5,9 @@ export class FakeSlackClient implements SlackClient {
   channels: { id: string; name: string; archived: boolean; topic?: string }[] = [];
   messages: SlackMessage[] = [];
   invites: { channelId: string; userIds: string[] }[] = [];
+  removedMembers: { channelId: string; userIds: string[] }[] = [];
   emailToUser = new Map<string, string>();
+  private memberships = new Map<string, Set<string>>();
   private chanSeq = 0;
   private tsSeq = 0;
   private clientMessageIds = new Map<string, string>();
@@ -29,6 +31,12 @@ export class FakeSlackClient implements SlackClient {
     const ch = this.channels.find((c) => c.id === channelId);
     if (ch) ch.topic = topic;
   }
+  async removeChannelMembers(channelId: string): Promise<void> {
+    const members = this.memberships.get(channelId);
+    const userIds = [...(members ?? [])];
+    if (userIds.length > 0) this.removedMembers.push({ channelId, userIds });
+    members?.clear();
+  }
   async archiveChannel(channelId: string): Promise<void> {
     const ch = this.channels.find((c) => c.id === channelId);
     if (ch) ch.archived = true;
@@ -44,7 +52,12 @@ export class FakeSlackClient implements SlackClient {
           (invite) => invite.channelId === channelId && invite.userIds.includes(userId),
         ),
     );
-    if (missing.length > 0) this.invites.push({ channelId, userIds: missing });
+    if (missing.length > 0) {
+      this.invites.push({ channelId, userIds: missing });
+      const members = this.memberships.get(channelId) ?? new Set<string>();
+      for (const userId of missing) members.add(userId);
+      this.memberships.set(channelId, members);
+    }
   }
   async postMessage(msg: SlackMessage): Promise<{ ts: string }> {
     if (msg.clientMsgId) {

@@ -27,6 +27,8 @@ interface SlackWebApi {
     join(input: { channel: string }): Promise<unknown>;
     rename(input: { channel: string; name: string }): Promise<unknown>;
     setTopic(input: { channel: string; topic: string }): Promise<unknown>;
+    members(input: { channel: string; cursor?: string; limit: number }): Promise<unknown>;
+    kick(input: { channel: string; user: string }): Promise<unknown>;
     archive(input: { channel: string }): Promise<unknown>;
     unarchive(input: { channel: string }): Promise<unknown>;
     invite(input: { channel: string; users: string }): Promise<unknown>;
@@ -207,6 +209,49 @@ export function createWebApiSlackClient(
           await web.conversations.setTopic({ channel: channelId, topic });
         }),
       ),
+    removeChannelMembers: async (channelId) => {
+      const members: string[] = [];
+      let cursor: string | undefined;
+      const seenCursors = new Set<string>();
+      do {
+        const result = (await call(() =>
+          withChannelMembership(channelId, () =>
+            web.conversations.members({ channel: channelId, cursor, limit: 200 }),
+          ),
+        )) as { members?: unknown; response_metadata?: { next_cursor?: unknown } };
+        if (
+          !Array.isArray(result.members) ||
+          !result.members.every((member) => typeof member === "string")
+        ) {
+          throw new Error("Slack conversations.members response did not include a members array");
+        }
+        members.push(...result.members);
+        const nextCursor = result.response_metadata?.next_cursor;
+        if (nextCursor !== undefined && typeof nextCursor !== "string") {
+          throw new Error("Slack conversations.members response included an invalid cursor");
+        }
+        cursor = nextCursor?.trim() || undefined;
+        if (cursor && seenCursors.has(cursor)) {
+          throw new Error("Slack conversations.members returned a repeated cursor");
+        }
+        if (cursor) seenCursors.add(cursor);
+      } while (cursor);
+
+      for (const user of members) {
+        await call(async () => {
+          try {
+            await withChannelMembership(channelId, () =>
+              web.conversations.kick({ channel: channelId, user }),
+            );
+          } catch (error) {
+            // A previous attempt may already have removed the user. Slack cannot
+            // kick the bot itself; leave it in place so it can archive the channel.
+            const code = slackErrorCode(error);
+            if (code !== "not_in_channel" && code !== "cant_kick_self") throw error;
+          }
+        });
+      }
+    },
     archiveChannel: (channelId) =>
       call(async () => {
         try {
