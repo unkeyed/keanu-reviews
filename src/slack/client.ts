@@ -21,6 +21,8 @@ export interface SlackClient {
   findChannelByName(name: string): Promise<string | undefined>;
   renameChannel(channelId: string, name: string): Promise<void>;
   setTopic(channelId: string, topic: string): Promise<void>;
+  /** Remove human members before archiving so Slack does not notify them. */
+  removeChannelMembers(channelId: string): Promise<void>;
   archiveChannel(channelId: string): Promise<void>;
   unarchiveChannel(channelId: string): Promise<void>;
   inviteUsers(channelId: string, userIds: string[]): Promise<void>;

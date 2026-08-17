@@ -15,6 +15,13 @@ function fakeWebApi() {
       join: vi.fn(async () => ({})),
       rename: vi.fn(async () => ({})),
       setTopic: vi.fn(async () => ({})),
+      members: vi.fn(
+        async (): Promise<unknown> => ({
+          members: [],
+          response_metadata: { next_cursor: "" },
+        }),
+      ),
+      kick: vi.fn(async () => ({})),
       archive: vi.fn(async () => ({})),
       unarchive: vi.fn(async () => ({})),
       invite: vi.fn(async () => ({})),
@@ -48,12 +55,17 @@ describe("Slack Web API adapter", () => {
     });
   });
 
-  it("maps channel operations and skips an empty invite", async () => {
+  it("maps channel operations and removes every listed member before archiving", async () => {
     const web = fakeWebApi();
+    web.conversations.members.mockResolvedValueOnce({
+      members: ["U1", "U2"],
+      response_metadata: { next_cursor: "" },
+    });
     const slack = createWebApiSlackClient("unused", { web });
 
     await expect(slack.createChannel("pr-123")).resolves.toEqual({ channelId: "C123" });
     await slack.renameChannel("C123", "renamed");
+    await slack.removeChannelMembers("C123");
     await slack.archiveChannel("C123");
     await slack.unarchiveChannel("C123");
     await slack.inviteUsers("C123", ["U1", "U2"]);
@@ -61,10 +73,56 @@ describe("Slack Web API adapter", () => {
 
     expect(web.conversations.create).toHaveBeenCalledWith({ name: "pr-123" });
     expect(web.conversations.rename).toHaveBeenCalledWith({ channel: "C123", name: "renamed" });
+    expect(web.conversations.members).toHaveBeenCalledWith({
+      channel: "C123",
+      cursor: undefined,
+      limit: 200,
+    });
+    expect(web.conversations.kick).toHaveBeenCalledWith({ channel: "C123", user: "U1" });
+    expect(web.conversations.kick).toHaveBeenCalledWith({ channel: "C123", user: "U2" });
     expect(web.conversations.archive).toHaveBeenCalledWith({ channel: "C123" });
     expect(web.conversations.unarchive).toHaveBeenCalledWith({ channel: "C123" });
     expect(web.conversations.invite).toHaveBeenCalledOnce();
     expect(web.conversations.invite).toHaveBeenCalledWith({ channel: "C123", users: "U1,U2" });
+  });
+
+  it("paginates channel members before kicking the collected snapshot", async () => {
+    const web = fakeWebApi();
+    web.conversations.members
+      .mockResolvedValueOnce({ members: ["U1"], response_metadata: { next_cursor: "page-2" } })
+      .mockResolvedValueOnce({ members: ["U2"], response_metadata: { next_cursor: "" } });
+    const slack = createWebApiSlackClient("unused", { web });
+
+    await slack.removeChannelMembers("C123");
+
+    expect(web.conversations.members).toHaveBeenNthCalledWith(1, {
+      channel: "C123",
+      cursor: undefined,
+      limit: 200,
+    });
+    expect(web.conversations.members).toHaveBeenNthCalledWith(2, {
+      channel: "C123",
+      cursor: "page-2",
+      limit: 200,
+    });
+    expect(web.conversations.kick).toHaveBeenNthCalledWith(1, { channel: "C123", user: "U1" });
+    expect(web.conversations.kick).toHaveBeenNthCalledWith(2, { channel: "C123", user: "U2" });
+  });
+
+  it("keeps cleanup idempotent when Slack cannot kick the bot or an absent member", async () => {
+    const web = fakeWebApi();
+    web.conversations.members.mockResolvedValueOnce({
+      members: ["U_BOT", "U_GONE"],
+      response_metadata: { next_cursor: "" },
+    });
+    web.conversations.kick
+      .mockRejectedValueOnce({ data: { error: "cant_kick_self" } })
+      .mockRejectedValueOnce({ data: { error: "not_in_channel" } })
+      .mockRejectedValueOnce({ data: { error: "not_in_channel" } });
+    const slack = createWebApiSlackClient("unused", { web });
+
+    await expect(slack.removeChannelMembers("C123")).resolves.toBeUndefined();
+    expect(web.conversations.join).toHaveBeenCalledWith({ channel: "C123" });
   });
 
   it("finds an exact channel name across paginated public channels", async () => {

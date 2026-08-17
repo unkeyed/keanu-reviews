@@ -173,6 +173,11 @@ pick your workspace.
 - `chat:write`
 - `users:read.email`
 
+`channels:manage` is also required for the terminal cleanup: the bot removes
+PR-channel participants before archiving, which prevents Slack from notifying
+each participant that the channel was archived. The bot remains in the channel
+until after the archive request succeeds.
+
 (For private PR channels later you'd also add the `groups:*` equivalents — not
 needed for the default public-channel setup.)
 
@@ -259,7 +264,10 @@ should see:
 - an opening message describing the PR,
 - the author invited (once they're linked — see Step 7).
 
-Request a review, push commits (CI), merge — each drives channel activity.
+Request a review, push commits (CI), merge — each drives channel activity. On
+merge or closure, the bot posts the terminal update, removes channel
+participants, then archives the channel. This prevents archive notifications
+from being sent to the PR participants.
 
 ---
 
