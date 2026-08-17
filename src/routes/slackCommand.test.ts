@@ -209,3 +209,38 @@ describe("slash command /link-github (U9)", () => {
     expect(await findByGithubId(db, 583231)).toBeUndefined();
   });
 });
+
+describe("slash command /link-slack (quiet archive)", () => {
+  const slackDeps = {
+    slackOauthClientId: "1234.5678",
+    slackOauthCallbackUrl: "https://bot.example.com/oauth/slack/callback",
+  };
+  const body = new URLSearchParams({
+    command: "/link-slack",
+    user_id: "U7",
+    team_id: TEAM_ID,
+  }).toString();
+
+  it("returns a signed Slack authorize URL for the requesting user", async () => {
+    const res = await post(createApp(slackDeps), body);
+    const json = (await res.json()) as { text: string };
+    const match = /<(https:\/\/slack\.com\/oauth\/v2\/authorize[^|]+)\|/.exec(json.text);
+    expect(match?.[1]).toBeTruthy();
+    const url = new URL(match?.[1] ?? "");
+    expect(url.searchParams.get("client_id")).toBe("1234.5678");
+    expect(url.searchParams.get("user_scope")).toBe("channels:write");
+    // State must verify and carry the requesting Slack user.
+    const verified = verifyOAuthState({
+      state: url.searchParams.get("state") ?? "",
+      secret: STATE_SECRET,
+      expectedSlackTeamId: TEAM_ID,
+      now: () => NOW,
+    });
+    expect(verified?.slackUserId).toBe("U7");
+  });
+
+  it("reports not-configured when Slack OAuth is disabled", async () => {
+    const res = await post(createApp(), body);
+    expect(await res.json()).toMatchObject({ text: expect.stringContaining("isn't configured") });
+  });
+});

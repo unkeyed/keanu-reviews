@@ -1,6 +1,6 @@
 # Unkey Slack PR Bot
 
-A self-hosted, one-way **GitHub → Slack** bot (axolo.co-style): one Slack channel per pull request, with state-tracking channel names, author + reviewer invites, review-comment mirroring with file/line deep links, PR mergeability status (ready to merge / blocked / conflicts), a `#shipped` announcement on merge, 12-hour review reminders, and quiet auto-archiving. On PR closure, it removes channel participants before archiving so Slack does not send them an archival notification. The bot writes to Slack and makes read-only GitHub REST/OAuth calls; it never mutates GitHub. Nothing typed in Slack is written back to GitHub — the PR stays the system of record.
+A self-hosted, one-way **GitHub → Slack** bot (axolo.co-style): one Slack channel per pull request, with state-tracking channel names, auto-archiving, author + reviewer invites, review-comment mirroring with file/line deep links, PR mergeability status (ready to merge / blocked / conflicts), a `#shipped` announcement on merge, and 12-hour review reminders. The bot writes to Slack and makes read-only GitHub REST/OAuth calls; it never mutates GitHub. Nothing typed in Slack is written back to GitHub — the PR stays the system of record.
 
 Full design: [`docs/plans/2026-08-11-001-feat-github-slack-pr-bot-plan.md`](docs/plans/2026-08-11-001-feat-github-slack-pr-bot-plan.md).
 
@@ -8,7 +8,8 @@ Full design: [`docs/plans/2026-08-11-001-feat-github-slack-pr-bot-plan.md`](docs
 
 - **Runtime:** TypeScript + [Hono](https://hono.dev), a long-running Node service on **Unkey Deploy**.
 - **Storage:** PlanetScale Postgres (via Drizzle — added in U2).
-- **Inbound:** GitHub App webhooks; a Slack `/link-github` slash command (U9).
+- **Inbound:** GitHub App webhooks; Slack `/link-github` (U9) and optional
+  `/link-slack` (quiet archiving) slash commands.
 - **Outbound:** Slack Web API writes and user lookup; read-only GitHub REST/OAuth calls.
 
 ## Getting started
@@ -123,16 +124,29 @@ idempotent and safe to rerun; invalid files or invocations exit nonzero.
 `chat:write`, `users:read.email` (`groups:*` for private channels, deferred).
 `channels:join` lets the bot re-join a channel it manages but was removed from,
 or one recovered by name, so posting/inviting there recovers from
-`not_in_channel` instead of failing. `channels:manage` lets it remove channel
-participants before terminal archive, preventing Slack's archive notification
-from reaching PR participants; the bot stays long enough to perform the archive.
-The `/link-github` command needs
+`not_in_channel` instead of failing. The `/link-github` command needs
 slash-command interactivity plus the signing secret; its request URL is
 `${PUBLIC_URL}/slack/commands`.
 
 > **After adding or changing scopes you must reinstall the app** to the
 > workspace, or Slack keeps issuing the old token without the new scope
 > (`missing_scope` errors).
+
+### Quiet archiving (optional)
+
+Archiving a channel makes Slack notify every member ("_… archived the channel_"),
+and kicking members first is worse (each gets "_you were removed by …_"). To
+archive silently — like Axolo — the bot instead makes each participant **leave**
+on their own token before archiving; a self-leave is silent, and once no humans
+remain, the archive notifies nobody. Members who haven't authorized are simply
+left in place (they get the one archive notice), so the flow degrades gracefully.
+
+This is off unless `SLACK_OAUTH_CLIENT_ID`, `SLACK_OAUTH_CLIENT_SECRET`, and
+`SLACK_USER_TOKEN_ENC_KEY` are all set. When enabled, each user runs `/link-slack`
+once to grant the **`channels:write` user scope** (the only user-token scope
+required — it lets `conversations.leave` remove them from public channels). The
+OAuth redirect URL is `${PUBLIC_URL}/oauth/slack/callback`. Tokens are stored
+encrypted at rest (AES-256-GCM); a revoked token is dropped automatically.
 
 ## Status
 

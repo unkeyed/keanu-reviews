@@ -55,7 +55,8 @@ these into GitHub and Slack in the next steps:
 | --- | --- | --- |
 | `PUBLIC_URL/webhooks/github` | GitHub App webhook | Step 3 |
 | `PUBLIC_URL/oauth/github/callback` | GitHub OAuth (account linking) | Step 3 |
-| `PUBLIC_URL/slack/commands` | Slack `/link-github` command | Step 4 |
+| `PUBLIC_URL/slack/commands` | Slack `/link-github` + `/link-slack` commands | Step 4 |
+| `PUBLIC_URL/oauth/slack/callback` | Slack OAuth (quiet archiving, optional) | Step 4.2b |
 
 > `PUBLIC_URL` must be `https://` with no path/query (plain `http://` is allowed
 > only for `localhost` during local dev).
@@ -173,11 +174,6 @@ pick your workspace.
 - `chat:write`
 - `users:read.email`
 
-`channels:manage` is also required for the terminal cleanup: the bot removes
-PR-channel participants before archiving, which prevents Slack from notifying
-each participant that the channel was archived. The bot remains in the channel
-until after the archive request succeeds.
-
 (For private PR channels later you'd also add the `groups:*` equivalents — not
 needed for the default public-channel setup.)
 
@@ -188,6 +184,28 @@ needed for the default public-channel setup.)
 - **Command:** `/link-github`
 - **Request URL:** `PUBLIC_URL/slack/commands`
 - **Short description:** "Link your GitHub account"
+
+### 4.2b (Optional) Quiet archiving via `/link-slack`
+
+Skip this section unless you want channels archived with **no** notification to
+members (see "Quiet archiving" in the README for why this needs a per-user
+token). If you skip it, channels still archive — members just get Slack's one
+"archived the channel" notice.
+
+1. **OAuth & Permissions → Scopes → User Token Scopes**, add `channels:write`
+   (this is the only user scope; it lets the bot make a user leave a channel).
+2. **OAuth & Permissions → Redirect URLs**, add `PUBLIC_URL/oauth/slack/callback`.
+3. **Slash Commands → Create New Command:**
+   - **Command:** `/link-slack`
+   - **Request URL:** `PUBLIC_URL/slack/commands` (same endpoint as `/link-github`)
+   - **Short description:** "Enable quiet archiving of PR channels"
+4. **Basic Information → App Credentials**: copy **Client ID** →
+   `SLACK_OAUTH_CLIENT_ID` and **Client Secret** → `SLACK_OAUTH_CLIENT_SECRET`.
+5. Generate a 32-byte key for `SLACK_USER_TOKEN_ENC_KEY` (encrypts stored user
+   tokens at rest): `openssl rand -hex 32`.
+
+All three env vars must be set together or the service refuses to boot. Each
+teammate then runs `/link-slack` once and approves.
 
 ### 4.3 Install to workspace + collect credentials
 
@@ -237,6 +255,14 @@ SLACK_TEAM_ID=            # Step 4.3 (T…)
 DATABASE_URL=             # Step 2
 ```
 
+Optional — set all three to enable quiet archiving (Step 4.2b):
+
+```bash
+SLACK_OAUTH_CLIENT_ID=       # Step 4.2b (Client ID)
+SLACK_OAUTH_CLIENT_SECRET=   # Step 4.2b (Client Secret)
+SLACK_USER_TOKEN_ENC_KEY=    # Step 4.2b (openssl rand -hex 32)
+```
+
 See the [full reference](#environment-variable-reference) for the optional ones.
 
 ---
@@ -264,10 +290,7 @@ should see:
 - an opening message describing the PR,
 - the author invited (once they're linked — see Step 7).
 
-Request a review, push commits (CI), merge — each drives channel activity. On
-merge or closure, the bot posts the terminal update, removes channel
-participants, then archives the channel. This prevents archive notifications
-from being sent to the PR participants.
+Request a review, push commits (CI), merge — each drives channel activity.
 
 ---
 

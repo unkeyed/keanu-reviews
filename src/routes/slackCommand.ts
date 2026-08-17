@@ -5,6 +5,7 @@ import type { Db } from "../db/client.ts";
 import { confirmGithubLink } from "../db/repositories/githubLinks.ts";
 import { createGithubAuthorizeUrl, createOAuthState } from "../github/oauth.ts";
 import type { Logger } from "../logger.ts";
+import { createSlackAuthorizeUrl } from "../slack/oauth.ts";
 import { verifySlackSignature } from "../slack/verify.ts";
 
 export interface SlackCommandDeps {
@@ -15,6 +16,9 @@ export interface SlackCommandDeps {
   oauthStateSecret: string;
   githubOauthClientId: string;
   githubOauthCallbackUrl: string;
+  /** Slack user-token OAuth for `/link-slack`; omit to disable quiet archiving. */
+  slackOauthClientId?: string;
+  slackOauthCallbackUrl?: string;
   now?: () => number;
   randomBytes?: (size: number) => Buffer;
 }
@@ -63,6 +67,33 @@ export function createSlackCommandRoute(deps: SlackCommandDeps): Hono {
     }
     const slackUserId = params.get("user_id");
     if (!slackUserId) return c.json({ error: "missing_user" }, 400);
+
+    // `/link-slack` grants the user token that lets the bot make this user leave
+    // PR channels quietly before archive (no Slackbot "archived the channel" ping).
+    if ((params.get("command") ?? "").trim() === "/link-slack") {
+      if (!deps.slackOauthClientId || !deps.slackOauthCallbackUrl) {
+        return c.json({
+          response_type: "ephemeral",
+          text: "Quiet archiving isn't configured on this workspace.",
+        });
+      }
+      const slackState = createOAuthState({
+        secret: deps.oauthStateSecret,
+        slackUserId,
+        slackTeamId: deps.slackTeamId,
+        now: deps.now,
+        randomBytes: deps.randomBytes,
+      });
+      const slackAuthorizeUrl = createSlackAuthorizeUrl({
+        clientId: deps.slackOauthClientId,
+        callbackUrl: deps.slackOauthCallbackUrl,
+        state: slackState,
+      });
+      return c.json({
+        response_type: "ephemeral",
+        text: `Enable quiet archiving of PR channels: <${slackAuthorizeUrl}|Authorize with Slack>`,
+      });
+    }
 
     const commandText = (params.get("text") ?? "").trim();
     if (commandText) {

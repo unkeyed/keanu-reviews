@@ -1,5 +1,5 @@
 import { ErrorCode, WebClient, type WebClientOptions } from "@slack/web-api";
-import type { SlackClient, SlackMessage } from "./client.ts";
+import type { LeaveChannelOutcome, SlackClient, SlackMessage } from "./client.ts";
 import { Pacer, type SleepFn, withRetry } from "./rateLimiter.ts";
 
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -27,11 +27,11 @@ interface SlackWebApi {
     join(input: { channel: string }): Promise<unknown>;
     rename(input: { channel: string; name: string }): Promise<unknown>;
     setTopic(input: { channel: string; topic: string }): Promise<unknown>;
-    members(input: { channel: string; cursor?: string; limit: number }): Promise<unknown>;
-    kick(input: { channel: string; user: string }): Promise<unknown>;
     archive(input: { channel: string }): Promise<unknown>;
     unarchive(input: { channel: string }): Promise<unknown>;
     invite(input: { channel: string; users: string }): Promise<unknown>;
+    members(input: { channel: string; cursor?: string; limit: number }): Promise<unknown>;
+    leave(input: { channel: string }): Promise<unknown>;
     list(input: {
       cursor?: string;
       exclude_archived: boolean;
@@ -43,10 +43,21 @@ interface SlackWebApi {
   apiCall(method: string, options?: Record<string, unknown>): Promise<unknown>;
 }
 
+/** Slack error codes that mean a stored user token can never succeed again. */
+const DEAD_TOKEN_ERRORS = new Set([
+  "token_revoked",
+  "invalid_auth",
+  "account_inactive",
+  "not_authed",
+  "token_expired",
+]);
+
 export interface WebApiSlackClientOptions {
   /** Injected by offline adapter tests; production creates the official WebClient. */
   web?: SlackWebApi;
   webFactory?: (token: string, options: WebClientOptions) => SlackWebApi;
+  /** Builds a Slack client bound to a *user* token (for silent leave). */
+  userWebFactory?: (token: string) => SlackWebApi;
   sleep?: SleepFn;
   now?: () => number;
 }
@@ -93,6 +104,14 @@ export function createWebApiSlackClient(
       rejectRateLimitedCalls: true,
       timeout: REQUEST_TIMEOUT_MS,
     });
+  const userWebFactory =
+    options.userWebFactory ??
+    ((userToken: string) =>
+      webFactory(userToken, {
+        retryConfig: { retries: 0 },
+        rejectRateLimitedCalls: true,
+        timeout: REQUEST_TIMEOUT_MS,
+      }));
   const postPacer = new Pacer(1000, options.sleep, options.now);
   const createPacer = new Pacer(3000, options.sleep, options.now); // ~20/min Tier-2 headroom
 
@@ -209,49 +228,6 @@ export function createWebApiSlackClient(
           await web.conversations.setTopic({ channel: channelId, topic });
         }),
       ),
-    removeChannelMembers: async (channelId) => {
-      const members: string[] = [];
-      let cursor: string | undefined;
-      const seenCursors = new Set<string>();
-      do {
-        const result = (await call(() =>
-          withChannelMembership(channelId, () =>
-            web.conversations.members({ channel: channelId, cursor, limit: 200 }),
-          ),
-        )) as { members?: unknown; response_metadata?: { next_cursor?: unknown } };
-        if (
-          !Array.isArray(result.members) ||
-          !result.members.every((member) => typeof member === "string")
-        ) {
-          throw new Error("Slack conversations.members response did not include a members array");
-        }
-        members.push(...result.members);
-        const nextCursor = result.response_metadata?.next_cursor;
-        if (nextCursor !== undefined && typeof nextCursor !== "string") {
-          throw new Error("Slack conversations.members response included an invalid cursor");
-        }
-        cursor = nextCursor?.trim() || undefined;
-        if (cursor && seenCursors.has(cursor)) {
-          throw new Error("Slack conversations.members returned a repeated cursor");
-        }
-        if (cursor) seenCursors.add(cursor);
-      } while (cursor);
-
-      for (const user of members) {
-        await call(async () => {
-          try {
-            await withChannelMembership(channelId, () =>
-              web.conversations.kick({ channel: channelId, user }),
-            );
-          } catch (error) {
-            // A previous attempt may already have removed the user. Slack cannot
-            // kick the bot itself; leave it in place so it can archive the channel.
-            const code = slackErrorCode(error);
-            if (code !== "not_in_channel" && code !== "cant_kick_self") throw error;
-          }
-        });
-      }
-    },
     archiveChannel: (channelId) =>
       call(async () => {
         try {
@@ -284,6 +260,50 @@ export function createWebApiSlackClient(
             // already-present response as the idempotent success it represents.
             if (slackErrorCode(error) !== "already_in_channel") throw error;
           }
+        }
+      }),
+    listChannelMembers: async (channelId) => {
+      const members: string[] = [];
+      let cursor: string | undefined;
+      const seenCursors = new Set<string>();
+      do {
+        const result = (await call(() =>
+          withChannelMembership(channelId, () =>
+            web.conversations.members({ channel: channelId, cursor, limit: 200 }),
+          ),
+        )) as { members?: unknown; response_metadata?: { next_cursor?: unknown } };
+        if (
+          !Array.isArray(result.members) ||
+          !result.members.every((member) => typeof member === "string")
+        ) {
+          throw new Error("Slack conversations.members response did not include a members array");
+        }
+        members.push(...(result.members as string[]));
+        const nextCursor = result.response_metadata?.next_cursor;
+        if (nextCursor !== undefined && typeof nextCursor !== "string") {
+          throw new Error("Slack conversations.members response included an invalid cursor");
+        }
+        cursor = nextCursor?.trim() || undefined;
+        if (cursor && seenCursors.has(cursor)) {
+          throw new Error("Slack conversations.members returned a repeated cursor");
+        }
+        if (cursor) seenCursors.add(cursor);
+      } while (cursor);
+      return members;
+    },
+    leaveChannelAsUser: (channelId, userToken): Promise<LeaveChannelOutcome> =>
+      call(async () => {
+        const userWeb = userWebFactory(userToken);
+        try {
+          await userWeb.conversations.leave({ channel: channelId });
+          return "left";
+        } catch (error) {
+          const code = slackErrorCode(error);
+          // Already gone is an idempotent success; a dead token is reported so
+          // the caller can drop it. Anything else is transient — let it retry.
+          if (code === "not_in_channel") return "already_out";
+          if (code && DEAD_TOKEN_ERRORS.has(code)) return "invalid_token";
+          throw error;
         }
       }),
     postMessage: (msg: SlackMessage) =>

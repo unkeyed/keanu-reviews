@@ -1,12 +1,16 @@
-import type { SlackClient, SlackMessage } from "../slack/client.ts";
+import type { LeaveChannelOutcome, SlackClient, SlackMessage } from "../slack/client.ts";
 
 /** In-memory Slack client for offline tests. Records every call for assertions. */
 export class FakeSlackClient implements SlackClient {
   channels: { id: string; name: string; archived: boolean; topic?: string }[] = [];
   messages: SlackMessage[] = [];
   invites: { channelId: string; userIds: string[] }[] = [];
-  removedMembers: { channelId: string; userIds: string[] }[] = [];
+  leftMembers: { channelId: string; userId: string }[] = [];
   emailToUser = new Map<string, string>();
+  /** Test-set map of Slack user id -> the (decrypted) token leave calls expect. */
+  userTokens = new Map<string, string>();
+  /** Tokens the fake should treat as revoked/invalid. */
+  invalidTokens = new Set<string>();
   private memberships = new Map<string, Set<string>>();
   private chanSeq = 0;
   private tsSeq = 0;
@@ -31,12 +35,6 @@ export class FakeSlackClient implements SlackClient {
     const ch = this.channels.find((c) => c.id === channelId);
     if (ch) ch.topic = topic;
   }
-  async removeChannelMembers(channelId: string): Promise<void> {
-    const members = this.memberships.get(channelId);
-    const userIds = [...(members ?? [])];
-    if (userIds.length > 0) this.removedMembers.push({ channelId, userIds });
-    members?.clear();
-  }
   async archiveChannel(channelId: string): Promise<void> {
     const ch = this.channels.find((c) => c.id === channelId);
     if (ch) ch.archived = true;
@@ -52,12 +50,22 @@ export class FakeSlackClient implements SlackClient {
           (invite) => invite.channelId === channelId && invite.userIds.includes(userId),
         ),
     );
-    if (missing.length > 0) {
-      this.invites.push({ channelId, userIds: missing });
-      const members = this.memberships.get(channelId) ?? new Set<string>();
-      for (const userId of missing) members.add(userId);
-      this.memberships.set(channelId, members);
-    }
+    if (missing.length > 0) this.invites.push({ channelId, userIds: missing });
+    const members = this.memberships.get(channelId) ?? new Set<string>();
+    for (const userId of userIds) members.add(userId);
+    this.memberships.set(channelId, members);
+  }
+  async listChannelMembers(channelId: string): Promise<string[]> {
+    return [...(this.memberships.get(channelId) ?? [])];
+  }
+  async leaveChannelAsUser(channelId: string, userToken: string): Promise<LeaveChannelOutcome> {
+    if (this.invalidTokens.has(userToken)) return "invalid_token";
+    const userId = [...this.userTokens.entries()].find(([, token]) => token === userToken)?.[0];
+    const members = this.memberships.get(channelId);
+    if (!userId || !members?.has(userId)) return "already_out";
+    members.delete(userId);
+    this.leftMembers.push({ channelId, userId });
+    return "left";
   }
   async postMessage(msg: SlackMessage): Promise<{ ts: string }> {
     if (msg.clientMsgId) {

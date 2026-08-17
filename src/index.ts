@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server";
 import { type Config, ConfigError, SECRET_KEYS, loadConfig } from "./config.ts";
 import { createDb } from "./db/client.ts";
 import { createDbReadyCheck } from "./db/readiness.ts";
+import { deleteSlackUserToken, getSlackUserToken } from "./db/repositories/slackUserTokens.ts";
 import { createInstallationAuth } from "./github/auth.ts";
 import { createPrCommenter } from "./github/comments.ts";
 import { createGithubOAuthClient } from "./github/oauth.ts";
@@ -15,9 +16,13 @@ import { createLogger, registerSecretValues } from "./logger.ts";
 import { createGithubOAuthRoute } from "./routes/githubOAuth.ts";
 import { createGithubWebhookRoute } from "./routes/githubWebhook.ts";
 import { createSlackCommandRoute } from "./routes/slackCommand.ts";
+import { createSlackOAuthRoute } from "./routes/slackOAuth.ts";
 import { startReminderLoop } from "./scheduler/loop.ts";
 import { createReminderScheduler } from "./scheduler/reminders.ts";
 import { createApp } from "./server.ts";
+import { quietlyRemoveMembers } from "./slack/memberCleanup.ts";
+import { createSlackOAuthClient } from "./slack/oauth.ts";
+import { createTokenCipher } from "./slack/tokenCipher.ts";
 import { createWebApiSlackClient } from "./slack/webApiClient.ts";
 import { createWorker, startWorkerLoop } from "./worker/loop.ts";
 import { createRouter } from "./worker/router.ts";
@@ -46,6 +51,50 @@ function boot(): void {
     octokitMintFn(config.GITHUB_APP_ID, config.GITHUB_APP_PRIVATE_KEY),
   );
   const installationId = config.GITHUB_INSTALLATION_ID;
+
+  // Quiet archiving (opt-in): when Slack user-OAuth is configured, collect
+  // per-user tokens so PR channels can be emptied of members before archive,
+  // suppressing Slack's "archived the channel" notification. Config enforces
+  // that the three settings are present together, so testing one is sufficient.
+  const githubOauthCallbackUrl = `${config.PUBLIC_URL}/oauth/github/callback`;
+  const slackOauthCallbackUrl = `${config.PUBLIC_URL}/oauth/slack/callback`;
+  let quietArchive: ((channelId: string) => Promise<void>) | undefined;
+  let slackOauthRoute: ReturnType<typeof createSlackOAuthRoute> | undefined;
+  if (
+    config.SLACK_OAUTH_CLIENT_ID &&
+    config.SLACK_OAUTH_CLIENT_SECRET &&
+    config.SLACK_USER_TOKEN_ENC_KEY
+  ) {
+    const cipher = createTokenCipher(config.SLACK_USER_TOKEN_ENC_KEY);
+    slackOauthRoute = createSlackOAuthRoute({
+      db,
+      logger,
+      oauthClient: createSlackOAuthClient({
+        clientId: config.SLACK_OAUTH_CLIENT_ID,
+        clientSecret: config.SLACK_OAUTH_CLIENT_SECRET,
+      }),
+      oauthStateSecret: config.OAUTH_STATE_SECRET,
+      slackTeamId: config.SLACK_TEAM_ID,
+      callbackUrl: slackOauthCallbackUrl,
+      cipher,
+    });
+    quietArchive = async (channelId) => {
+      await quietlyRemoveMembers(
+        {
+          slack,
+          logger,
+          getUserToken: async (slackUserId) => {
+            const encrypted = await getSlackUserToken(db, config.SLACK_TEAM_ID, slackUserId);
+            return encrypted ? cipher.decrypt(encrypted) : undefined;
+          },
+          onInvalidToken: (slackUserId) =>
+            deleteSlackUserToken(db, config.SLACK_TEAM_ID, slackUserId),
+        },
+        channelId,
+      );
+    };
+    logger.info("quiet archiving enabled (Slack user OAuth configured)");
+  }
 
   // Scheduler + router + worker
   const scheduler = createReminderScheduler({
@@ -76,6 +125,7 @@ function boot(): void {
     onReviewRequested: scheduler.onReviewRequested,
     onReviewSubmitted: scheduler.onReviewSubmitted,
     onReviewRequestRemoved: scheduler.onReviewRequestRemoved,
+    quietArchive,
   });
   const worker = createWorker({ db, logger, router });
 
@@ -86,7 +136,6 @@ function boot(): void {
     webhookSecret: config.GITHUB_WEBHOOK_SECRET,
     allowedInstallationIds: [installationId],
   });
-  const githubOauthCallbackUrl = `${config.PUBLIC_URL}/oauth/github/callback`;
   const githubOauth = createGithubOAuthRoute({
     db,
     logger,
@@ -106,12 +155,19 @@ function boot(): void {
     oauthStateSecret: config.OAUTH_STATE_SECRET,
     githubOauthClientId: config.GITHUB_OAUTH_CLIENT_ID,
     githubOauthCallbackUrl,
+    slackOauthClientId: config.SLACK_OAUTH_CLIENT_ID,
+    slackOauthCallbackUrl: slackOauthRoute ? slackOauthCallbackUrl : undefined,
   });
 
   const app = createApp({
     logger,
     checkReady: createDbReadyCheck(db),
-    mounts: [githubWebhook, githubOauth, slackCommand],
+    mounts: [
+      githubWebhook,
+      githubOauth,
+      slackCommand,
+      ...(slackOauthRoute ? [slackOauthRoute] : []),
+    ],
   });
 
   // Background loops (single active writer, KTD10)

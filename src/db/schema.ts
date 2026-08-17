@@ -152,6 +152,27 @@ export const githubLinkConfirmations = pgTable(
   }),
 );
 
+/**
+ * Encrypted Slack user tokens (`xoxp-`) collected via the per-user OAuth flow.
+ * They let the bot make each PR-channel participant *leave* the channel with
+ * their own token before archiving, which is silent — unlike a bot-token kick
+ * ("removed from #channel by …") or archiving with members still present
+ * (Slackbot "archived the channel"). Keyed by Slack user id within a workspace.
+ * The token is stored only as ciphertext (see tokenCipher.ts).
+ */
+export const slackUserTokens = pgTable(
+  "slack_user_tokens",
+  {
+    slackUserId: text("slack_user_id").primaryKey(),
+    slackTeamId: text("slack_team_id").notNull(),
+    encryptedToken: text("encrypted_token").notNull(),
+    scopes: text("scopes").notNull().default(""),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ teamIdx: index("slack_user_tokens_team_idx").on(t.slackTeamId) }),
+);
+
 export const reminders = pgTable(
   "reminders",
   {
@@ -206,3 +227,4 @@ export type IdentityRow = typeof identities.$inferSelect;
 export type ReminderRow = typeof reminders.$inferSelect;
 export type JobRow = typeof jobs.$inferSelect;
 export type MessageRow = typeof messages.$inferSelect;
+export type SlackUserTokenRow = typeof slackUserTokens.$inferSelect;

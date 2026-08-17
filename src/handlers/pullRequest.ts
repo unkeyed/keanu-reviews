@@ -57,6 +57,13 @@ export interface PrHandlerDeps {
   postPrComment?: PrCommenter;
   /** Slack workspace id, used to build the channel deep link for the merge comment. */
   slackTeamId?: string;
+  /**
+   * Optional silent-archive hook (U-quiet). When set, it makes members who have
+   * authorized us leave the channel before it's archived, so Slack sends no
+   * "archived the channel" notification. Best-effort — it must never throw or
+   * block the archive. Omitted when Slack user-OAuth isn't configured.
+   */
+  quietArchive?: (channelId: string) => Promise<void>;
 }
 
 export interface PullRequestHandlingOptions {
@@ -239,10 +246,12 @@ export async function handlePullRequest(
       }
 
       if (isTerminal(desiredState)) {
-        // Clear human membership before archiving so Slack does not send each
-        // participant an archival notification. Archive remains the critical
-        // outcome and still precedes optional merge announcements.
-        await slack.removeChannelMembers(channelId);
+        // Before archiving, make members who authorized us leave on their own
+        // token so Slack sends no "archived the channel" notification. This is
+        // best-effort and must never throw — archiving is the critical outcome
+        // and precedes the optional merge announcements so a later failure can
+        // never leave the channel un-archived. Reminders were cancelled above.
+        if (deps.quietArchive) await deps.quietArchive(channelId);
         await slack.archiveChannel(channelId);
 
         // Merge announcements are best-effort — a failure here must never throw,

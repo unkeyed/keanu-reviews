@@ -15,16 +15,19 @@ function fakeWebApi() {
       join: vi.fn(async () => ({})),
       rename: vi.fn(async () => ({})),
       setTopic: vi.fn(async () => ({})),
+      archive: vi.fn(async () => ({})),
+      unarchive: vi.fn(async () => ({})),
+      invite: vi.fn(async () => ({})),
       members: vi.fn(
-        async (): Promise<unknown> => ({
+        async (): Promise<{
+          members?: unknown;
+          response_metadata?: { next_cursor?: unknown };
+        }> => ({
           members: [],
           response_metadata: { next_cursor: "" },
         }),
       ),
-      kick: vi.fn(async () => ({})),
-      archive: vi.fn(async () => ({})),
-      unarchive: vi.fn(async () => ({})),
-      invite: vi.fn(async () => ({})),
+      leave: vi.fn(async () => ({})),
       list: vi.fn(
         async (): Promise<{
           channels?: unknown;
@@ -55,17 +58,12 @@ describe("Slack Web API adapter", () => {
     });
   });
 
-  it("maps channel operations and removes every listed member before archiving", async () => {
+  it("maps channel operations and skips an empty invite", async () => {
     const web = fakeWebApi();
-    web.conversations.members.mockResolvedValueOnce({
-      members: ["U1", "U2"],
-      response_metadata: { next_cursor: "" },
-    });
     const slack = createWebApiSlackClient("unused", { web });
 
     await expect(slack.createChannel("pr-123")).resolves.toEqual({ channelId: "C123" });
     await slack.renameChannel("C123", "renamed");
-    await slack.removeChannelMembers("C123");
     await slack.archiveChannel("C123");
     await slack.unarchiveChannel("C123");
     await slack.inviteUsers("C123", ["U1", "U2"]);
@@ -73,56 +71,76 @@ describe("Slack Web API adapter", () => {
 
     expect(web.conversations.create).toHaveBeenCalledWith({ name: "pr-123" });
     expect(web.conversations.rename).toHaveBeenCalledWith({ channel: "C123", name: "renamed" });
-    expect(web.conversations.members).toHaveBeenCalledWith({
-      channel: "C123",
-      cursor: undefined,
-      limit: 200,
-    });
-    expect(web.conversations.kick).toHaveBeenCalledWith({ channel: "C123", user: "U1" });
-    expect(web.conversations.kick).toHaveBeenCalledWith({ channel: "C123", user: "U2" });
     expect(web.conversations.archive).toHaveBeenCalledWith({ channel: "C123" });
     expect(web.conversations.unarchive).toHaveBeenCalledWith({ channel: "C123" });
     expect(web.conversations.invite).toHaveBeenCalledOnce();
     expect(web.conversations.invite).toHaveBeenCalledWith({ channel: "C123", users: "U1,U2" });
   });
 
-  it("paginates channel members before kicking the collected snapshot", async () => {
+  it("lists channel members across pages", async () => {
     const web = fakeWebApi();
     web.conversations.members
       .mockResolvedValueOnce({ members: ["U1"], response_metadata: { next_cursor: "page-2" } })
-      .mockResolvedValueOnce({ members: ["U2"], response_metadata: { next_cursor: "" } });
+      .mockResolvedValueOnce({ members: ["U2", "UBOT"], response_metadata: { next_cursor: "" } });
     const slack = createWebApiSlackClient("unused", { web });
 
-    await slack.removeChannelMembers("C123");
-
+    await expect(slack.listChannelMembers("C1")).resolves.toEqual(["U1", "U2", "UBOT"]);
     expect(web.conversations.members).toHaveBeenNthCalledWith(1, {
-      channel: "C123",
+      channel: "C1",
       cursor: undefined,
       limit: 200,
     });
     expect(web.conversations.members).toHaveBeenNthCalledWith(2, {
-      channel: "C123",
+      channel: "C1",
       cursor: "page-2",
       limit: 200,
     });
-    expect(web.conversations.kick).toHaveBeenNthCalledWith(1, { channel: "C123", user: "U1" });
-    expect(web.conversations.kick).toHaveBeenNthCalledWith(2, { channel: "C123", user: "U2" });
   });
 
-  it("keeps cleanup idempotent when Slack cannot kick the bot or an absent member", async () => {
+  it("leaves a channel with the user's own token and reports the outcome", async () => {
     const web = fakeWebApi();
-    web.conversations.members.mockResolvedValueOnce({
-      members: ["U_BOT", "U_GONE"],
-      response_metadata: { next_cursor: "" },
+    const userLeave = vi.fn(async () => ({}));
+    const tokensSeen: string[] = [];
+    const slack = createWebApiSlackClient("unused", {
+      web,
+      userWebFactory: (token) => {
+        tokensSeen.push(token);
+        return { conversations: { leave: userLeave } } as never;
+      },
     });
-    web.conversations.kick
-      .mockRejectedValueOnce({ data: { error: "cant_kick_self" } })
-      .mockRejectedValueOnce({ data: { error: "not_in_channel" } })
-      .mockRejectedValueOnce({ data: { error: "not_in_channel" } });
-    const slack = createWebApiSlackClient("unused", { web });
 
-    await expect(slack.removeChannelMembers("C123")).resolves.toBeUndefined();
-    expect(web.conversations.join).toHaveBeenCalledWith({ channel: "C123" });
+    await expect(slack.leaveChannelAsUser("C1", "xoxp-u1")).resolves.toBe("left");
+    expect(userLeave).toHaveBeenCalledWith({ channel: "C1" });
+    expect(tokensSeen).toEqual(["xoxp-u1"]); // the user token, not the bot token
+    // The bot token must never be used to leave (that would be a kick path).
+    expect(web.conversations.leave).not.toHaveBeenCalled();
+  });
+
+  it("treats not_in_channel as an idempotent leave and dead tokens as invalid", async () => {
+    const web = fakeWebApi();
+    const leave = vi
+      .fn()
+      .mockRejectedValueOnce({ data: { error: "not_in_channel" } })
+      .mockRejectedValueOnce({ data: { error: "token_revoked" } })
+      .mockRejectedValueOnce({ data: { error: "invalid_auth" } });
+    const slack = createWebApiSlackClient("unused", {
+      web,
+      userWebFactory: () => ({ conversations: { leave } }) as never,
+    });
+
+    await expect(slack.leaveChannelAsUser("C1", "t")).resolves.toBe("already_out");
+    await expect(slack.leaveChannelAsUser("C1", "t")).resolves.toBe("invalid_token");
+    await expect(slack.leaveChannelAsUser("C1", "t")).resolves.toBe("invalid_token");
+  });
+
+  it("propagates an unexpected leave error so the durable job can retry", async () => {
+    const web = fakeWebApi();
+    const leave = vi.fn().mockRejectedValue({ data: { error: "internal_error" } });
+    const slack = createWebApiSlackClient("unused", {
+      web,
+      userWebFactory: () => ({ conversations: { leave } }) as never,
+    });
+    await expect(slack.leaveChannelAsUser("C1", "t")).rejects.toBeTruthy();
   });
 
   it("finds an exact channel name across paginated public channels", async () => {

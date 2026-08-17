@@ -62,6 +62,45 @@ describe("loadConfig", () => {
     expect(SECRET_KEYS).toContain("SLACK_SIGNING_SECRET");
     expect(SECRET_KEYS).toContain("GITHUB_OAUTH_CLIENT_SECRET");
     expect(SECRET_KEYS).toContain("OAUTH_STATE_SECRET");
+    expect(SECRET_KEYS).toContain("SLACK_OAUTH_CLIENT_SECRET");
+    expect(SECRET_KEYS).toContain("SLACK_USER_TOKEN_ENC_KEY");
+  });
+
+  const ENC_KEY = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
+  it("leaves quiet archiving disabled when none of its vars are set", () => {
+    const cfg = loadConfig(validEnv());
+    expect(cfg.SLACK_OAUTH_CLIENT_ID).toBeUndefined();
+    expect(cfg.SLACK_USER_TOKEN_ENC_KEY).toBeUndefined();
+  });
+
+  it("enables quiet archiving when all three vars are set", () => {
+    const cfg = loadConfig({
+      ...validEnv(),
+      SLACK_OAUTH_CLIENT_ID: "1234.5678",
+      SLACK_OAUTH_CLIENT_SECRET: "slack-oauth-secret",
+      SLACK_USER_TOKEN_ENC_KEY: ENC_KEY,
+    });
+    expect(cfg.SLACK_OAUTH_CLIENT_ID).toBe("1234.5678");
+  });
+
+  it("rejects a partial quiet-archiving configuration naming the missing var", () => {
+    const env = {
+      ...validEnv(),
+      SLACK_OAUTH_CLIENT_ID: "1234.5678",
+      SLACK_OAUTH_CLIENT_SECRET: "slack-oauth-secret",
+    };
+    expect(() => loadConfig(env)).toThrowError(/SLACK_USER_TOKEN_ENC_KEY/);
+  });
+
+  it("rejects a token encryption key that is not 32 bytes", () => {
+    const env = {
+      ...validEnv(),
+      SLACK_OAUTH_CLIENT_ID: "1234.5678",
+      SLACK_OAUTH_CLIENT_SECRET: "slack-oauth-secret",
+      SLACK_USER_TOKEN_ENC_KEY: "too-short",
+    };
+    expect(() => loadConfig(env)).toThrowError(/SLACK_USER_TOKEN_ENC_KEY/);
   });
 
   it.each([

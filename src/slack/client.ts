@@ -16,16 +16,27 @@ export interface SlackMessage {
   clientMsgId?: string; // deterministic idempotency key for ambiguous retries
 }
 
+/**
+ * Result of asking a user (via their own token) to leave a channel:
+ * - `left`: the user left the channel now.
+ * - `already_out`: the user was not a member (a no-op success).
+ * - `invalid_token`: the user's stored token is dead (revoked/invalid); the
+ *   caller should drop it so it isn't retried on every future archive.
+ */
+export type LeaveChannelOutcome = "left" | "already_out" | "invalid_token";
+
 export interface SlackClient {
   createChannel(name: string): Promise<{ channelId: string }>;
   findChannelByName(name: string): Promise<string | undefined>;
   renameChannel(channelId: string, name: string): Promise<void>;
   setTopic(channelId: string, topic: string): Promise<void>;
-  /** Remove human members before archiving so Slack does not notify them. */
-  removeChannelMembers(channelId: string): Promise<void>;
   archiveChannel(channelId: string): Promise<void>;
   unarchiveChannel(channelId: string): Promise<void>;
   inviteUsers(channelId: string, userIds: string[]): Promise<void>;
+  /** All member IDs of a channel (bot token, paginated). Includes the bot. */
+  listChannelMembers(channelId: string): Promise<string[]>;
+  /** Make a specific user leave `channelId` using their own token (silent). */
+  leaveChannelAsUser(channelId: string, userToken: string): Promise<LeaveChannelOutcome>;
   postMessage(msg: SlackMessage): Promise<{ ts: string }>;
   lookupUserByEmail(email: string): Promise<string | undefined>;
 }

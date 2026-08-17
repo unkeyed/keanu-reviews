@@ -174,33 +174,12 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     expect(slack.channel("C1")?.name).toBe("draft-unkey-api-1423-add-auth");
   });
 
-  it("removes channel members after the closing note and before archiving", async () => {
+  it("closed+merged renames to merged then archives (rename precedes archive)", async () => {
     await handlePullRequest(deps(), payload("opened"));
-    await upsertIdentity(db, {
-      githubUserId: 100,
-      githubLogin: "oz",
-      slackUserId: "U_AUTHOR",
-      source: "self-link",
-    });
-    await handlePullRequest(deps(), payload("synchronize"));
-
-    const operations: string[] = [];
-    const removeMembers = slack.removeChannelMembers.bind(slack);
-    const archive = slack.archiveChannel.bind(slack);
-    slack.removeChannelMembers = async (channelId) => {
-      operations.push("remove-members");
-      await removeMembers(channelId);
-    };
-    slack.archiveChannel = async (channelId) => {
-      operations.push("archive");
-      await archive(channelId);
-    };
     await handlePullRequest(deps(), payload("closed", { merged: true }));
     const ch = slack.channel("C1");
     expect(ch?.name).toBe("merged-unkey-api-1423-add-auth");
     expect(ch?.archived).toBe(true);
-    expect(slack.removedMembers).toEqual([{ channelId: "C1", userIds: ["U_AUTHOR"] }]);
-    expect(operations).toEqual(["remove-members", "archive"]);
   });
 
   it("closed without merge renames to closed then archives", async () => {
@@ -330,12 +309,11 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     expect(slack.channel("C1")?.archived).toBe(true);
   });
 
-  it("posts a terminal lifecycle note, removes members, then archives", async () => {
+  it("posts a terminal lifecycle note after rename and before archive", async () => {
     await handlePullRequest(deps(), payload("opened"));
     const operations: string[] = [];
     const rename = slack.renameChannel.bind(slack);
     const post = slack.postMessage.bind(slack);
-    const removeMembers = slack.removeChannelMembers.bind(slack);
     const archive = slack.archiveChannel.bind(slack);
     slack.renameChannel = async (channelId, name) => {
       operations.push("rename");
@@ -345,10 +323,6 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       operations.push("post");
       return post(message);
     };
-    slack.removeChannelMembers = async (channelId) => {
-      operations.push("remove-members");
-      await removeMembers(channelId);
-    };
     slack.archiveChannel = async (channelId) => {
       operations.push("archive");
       await archive(channelId);
@@ -356,7 +330,28 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
 
     await handlePullRequest(deps(), payload("closed", { updated_at: "2026-08-11T12:01:00Z" }));
 
-    expect(operations).toEqual(["rename", "post", "remove-members", "archive"]);
+    expect(operations).toEqual(["rename", "post", "archive"]);
+    expect(slack.channel("C1")?.archived).toBe(true);
+  });
+
+  it("runs the quiet-archive member cleanup immediately before archiving", async () => {
+    await handlePullRequest(deps(), payload("opened"));
+    const operations: string[] = [];
+    const archive = slack.archiveChannel.bind(slack);
+    slack.archiveChannel = async (channelId) => {
+      operations.push("archive");
+      await archive(channelId);
+    };
+    const quietArchive = async (channelId: string) => {
+      operations.push(`quiet:${channelId}`);
+    };
+
+    await handlePullRequest(
+      { ...deps(), quietArchive },
+      payload("closed", { merged: true, updated_at: "2026-08-11T12:01:00Z" }),
+    );
+
+    expect(operations).toEqual(["quiet:C1", "archive"]);
     expect(slack.channel("C1")?.archived).toBe(true);
   });
 
