@@ -1,5 +1,4 @@
 import { isBotActor } from "../github/actors.ts";
-import { resolveSlackUser } from "../identity/resolve.ts";
 import { reviewCommentBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { RetryableError } from "../worker/retryable.ts";
@@ -36,6 +35,7 @@ export async function handleReviewComment(
 ): Promise<void> {
   if (payload.action !== "created") return;
   if (isBotActor(payload.comment.user)) return; // skip bot comments (Vercel, Mintlify, …)
+  if (payload.comment.user.id === payload.pull_request.user.id) return; // PR author comments stay on GitHub
   const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
   if (!row.channelId) throw new RetryableError(`PR channel is not ready for ${row.id}`);
 
@@ -43,16 +43,7 @@ export async function handleReviewComment(
   // Link to the comment in the PR discussion (e.g. .../pull/7006#discussion_r…),
   // not the file/line blob view. The file:line still shows as text context.
   const permalink = c.html_url;
-  // The "by" mention is the PR author (the committer whose code is being
-  // reviewed and who needs to act), not the reviewer who wrote the comment.
-  const committer = payload.pull_request.user;
-  const committerSlackId = await resolveSlackUser(
-    { db: deps.db, slack: deps.slack },
-    { githubId: committer.id, login: committer.login },
-  );
-  const committerMention = committerSlackId
-    ? `<@${committerSlackId}>`
-    : sanitizeMrkdwn(committer.login);
+  const commenter = sanitizeMrkdwn(c.user.login);
 
   await deliverSlackMessage(
     deps.db,
@@ -66,7 +57,7 @@ export async function handleReviewComment(
         permalink,
         path: c.path,
         line: c.line ?? undefined,
-        authorMention: committerMention,
+        authorMention: commenter,
       }),
     },
   );

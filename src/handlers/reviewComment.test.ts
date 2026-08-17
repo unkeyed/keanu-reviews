@@ -69,15 +69,8 @@ describe("handleReviewComment (U6)", () => {
     expect(text).toContain("`src/handlers/auth.ts:42`");
   });
 
-  it("mentions the committer (PR author), not the commenter who wrote it", async () => {
+  it("shows the commenter as plain text without mentioning anyone", async () => {
     await seedChannel();
-    // PR author is oz/100; the comment is by flo/7. Both linked.
-    await upsertIdentity(db, {
-      githubUserId: 100,
-      githubLogin: "oz",
-      slackUserId: "U100",
-      source: "self-link",
-    });
     await upsertIdentity(db, {
       githubUserId: 7,
       githubLogin: "flo",
@@ -86,8 +79,14 @@ describe("handleReviewComment (U6)", () => {
     });
     await handleReviewComment(deps(), payload());
     const blocks = JSON.stringify(slack.messages.at(-1)?.blocks);
-    expect(blocks).toContain("<@U100>"); // committer
-    expect(blocks).not.toContain("<@U7>"); // not the commenter
+    expect(blocks).toContain("by flo");
+    expect(blocks).not.toContain("<@");
+  });
+
+  it("ignores an inline comment from the PR author", async () => {
+    await handleReviewComment(deps(), payload({ user: { id: 100, login: "oz" } }));
+    expect(slack.messages).toHaveLength(0);
+    expect(slack.channels).toHaveLength(0);
   });
 
   it("reconciles the channel from the payload when the comment arrives first (out-of-order)", async () => {
