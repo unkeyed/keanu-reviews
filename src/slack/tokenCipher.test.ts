@@ -25,7 +25,11 @@ describe("Slack token cipher", () => {
   it("rejects a tampered ciphertext instead of returning garbage", () => {
     const payload = cipher.encrypt("xoxp-secret");
     const [v, iv, tag, ct] = payload.split(".") as [string, string, string, string];
-    const flipped = ct.slice(0, -1) + (ct.at(-1) === "A" ? "B" : "A");
+    // Flip a real byte of the ciphertext (not a base64 char, which can be
+    // non-canonical and decode unchanged) so GCM authentication must fail.
+    const bytes = Buffer.from(ct, "base64url");
+    bytes.writeUInt8(bytes.readUInt8(0) ^ 0xff, 0);
+    const flipped = bytes.toString("base64url");
     expect(() => cipher.decrypt([v, iv, tag, flipped].join("."))).toThrow();
   });
 

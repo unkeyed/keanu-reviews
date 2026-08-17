@@ -197,6 +197,48 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     expect(slack.channel("C1")?.name).toBe("pr-unkey-api-1423-add-auth");
   });
 
+  it("does not write to an archived channel on a later event for a merged PR (no is_archived)", async () => {
+    await handlePullRequest(deps(), payload("opened"));
+    await handlePullRequest(deps(), payload("closed", { merged: true }));
+    expect(slack.channel("C1")?.archived).toBe(true);
+
+    // The author links their Slack account only AFTER the merge. A subsequent
+    // pull_request event must NOT try to post the author-invite into the now
+    // archived channel (that would throw is_archived and poison the job).
+    await upsertIdentity(db, {
+      githubUserId: 100,
+      githubLogin: "oz",
+      slackUserId: "U100",
+      source: "self-link",
+    });
+    const before = slack.messages.length;
+
+    await expect(
+      handlePullRequest(deps(), payload("edited", { updated_at: "2026-08-11T13:00:00Z" })),
+    ).resolves.toBeUndefined();
+    expect(slack.channel("C1")?.archived).toBe(true); // stays archived
+    expect(slack.messages.length).toBe(before); // nothing posted to the archived channel
+  });
+
+  it("unarchives before writing when a merged PR is reopened after the author links late", async () => {
+    await handlePullRequest(deps(), payload("opened"));
+    await handlePullRequest(deps(), payload("closed", { merged: true }));
+    // Author links after the archive; reopen must unarchive before the invite.
+    await upsertIdentity(db, {
+      githubUserId: 100,
+      githubLogin: "oz",
+      slackUserId: "U100",
+      source: "self-link",
+    });
+
+    await expect(
+      handlePullRequest(deps(), payload("reopened", { updated_at: "2026-08-11T13:00:00Z" })),
+    ).resolves.toBeUndefined();
+    expect(slack.channel("C1")?.archived).toBe(false);
+    const blocks = JSON.stringify(slack.messages);
+    expect(blocks).toContain("<@U100>"); // author invite posted to the live channel
+  });
+
   it("re-delivered opened event does not create a second channel", async () => {
     await handlePullRequest(deps(), payload("opened"));
     await handlePullRequest(deps(), payload("opened"));

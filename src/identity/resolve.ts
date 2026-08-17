@@ -1,5 +1,6 @@
 import type { Db } from "../db/client.ts";
 import { findByGithubId, upsertIdentity } from "../db/repositories/identities.ts";
+import { sanitizeMrkdwn } from "../slack/blocks.ts";
 import type { SlackClient } from "../slack/client.ts";
 
 /** Fetch a GitHub user's public email (read-only; does not cross the one-way boundary). */
@@ -39,4 +40,19 @@ export async function resolveSlackUser(
     source: "email-match",
   });
   return slackUserId;
+}
+
+/**
+ * A non-pinging, Slack-safe label for a reviewer/commenter: their Slack display
+ * name when linked, else their GitHub login. We deliberately never emit an
+ * `<@id>` mention for reviewers — pinging someone for their own review activity
+ * (or for a review request they're already invited to the channel for) is noise.
+ */
+export async function reviewerDisplayLabel(
+  slack: SlackClient,
+  slackUserId: string | undefined,
+  login: string,
+): Promise<string> {
+  const name = slackUserId ? await slack.lookupUserName(slackUserId) : undefined;
+  return sanitizeMrkdwn(name ?? login);
 }

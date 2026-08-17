@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../db/client.ts";
+import { upsertIdentity } from "../db/repositories/identities.ts";
 import { setChannel, upsertPullRequest } from "../db/repositories/pullRequests.ts";
 import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
@@ -71,6 +72,32 @@ describe("handleReview (U6, R5)", () => {
     expect(approved).toContain("approved");
     expect(changes).toContain("requested changes");
     expect(approved).not.toBe(changes);
+  });
+
+  it.each(["approved", "changes_requested", "commented"])(
+    "shows the reviewer's plain Slack name without pinging them (%s)",
+    async (state) => {
+      await upsertIdentity(db, {
+        githubUserId: 7,
+        githubLogin: "flo",
+        slackUserId: "U7",
+        source: "self-link",
+      });
+      slack.userNames.set("U7", "James Perkins");
+
+      await handleReview(deps(), review(state));
+      const blocks = JSON.stringify(slack.messages.at(-1)?.blocks);
+      expect(blocks).toContain("James Perkins");
+      expect(blocks).not.toContain("<@U7>"); // never a mention = never a notification
+    },
+  );
+
+  it("falls back to the GitHub login when the reviewer has no Slack name", async () => {
+    // No identity mapping and no display name available.
+    await handleReview(deps(), review("approved"));
+    const blocks = JSON.stringify(slack.messages.at(-1)?.blocks);
+    expect(blocks).toContain("flo");
+    expect(blocks).not.toContain("<@");
   });
 
   it("ignores a review submitted by a bot", async () => {

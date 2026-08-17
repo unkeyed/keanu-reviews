@@ -39,4 +39,6 @@ export interface SlackClient {
   leaveChannelAsUser(channelId: string, userToken: string): Promise<LeaveChannelOutcome>;
   postMessage(msg: SlackMessage): Promise<{ ts: string }>;
   lookupUserByEmail(email: string): Promise<string | undefined>;
+  /** The user's Slack display name (no ping), or undefined if unknown. */
+  lookupUserName(userId: string): Promise<string | undefined>;
 }

@@ -1,4 +1,8 @@
-import { type GithubEmailFetcher, resolveSlackUser } from "../identity/resolve.ts";
+import {
+  type GithubEmailFetcher,
+  resolveSlackUser,
+  reviewerDisplayLabel,
+} from "../identity/resolve.ts";
 import { sanitizeInlineCode, sanitizeMrkdwn } from "../slack/blocks.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { RetryableError } from "../worker/retryable.ts";
@@ -81,6 +85,9 @@ export async function handleReviewRequest(
   });
 
   if (slackUserId) {
+    // The reviewer is added to the channel (which notifies them), so we don't
+    // also ping them here — show their Slack display name as plain text.
+    const reviewerLabel = await reviewerDisplayLabel(slack, slackUserId, reviewer.login);
     await deliverSlackMessage(
       db,
       slack,
@@ -91,7 +98,7 @@ export async function handleReviewRequest(
         blocks: [
           {
             type: "section",
-            text: { type: "mrkdwn", text: `👀 Review requested from <@${slackUserId}>` },
+            text: { type: "mrkdwn", text: `👀 Review requested from ${reviewerLabel}` },
           },
         ],
       },

@@ -170,7 +170,19 @@ export async function handlePullRequest(
     const channelId = current.channelId;
     if (!channelId) throw new Error(`PR channel mapping is missing for ${current.id}`);
 
-    if (!current.rootMessageTs) {
+    // A channel whose last applied state is terminal is archived in Slack, and
+    // posting to an archived channel throws `is_archived` (which, unlike
+    // `not_in_channel`, is not auto-recovered). If this event keeps the PR
+    // terminal, skip every channel write below; if it revives the PR (e.g.
+    // reopened), unarchive up front so the writes that precede the reconciliation
+    // block don't hit an archived channel.
+    const wasArchived = Boolean(current.appliedState && isTerminal(current.appliedState));
+    const stayingArchived = wasArchived && isTerminal(current.currentState);
+    if (wasArchived && !isTerminal(current.currentState)) {
+      await slack.unarchiveChannel(channelId);
+    }
+
+    if (!current.rootMessageTs && !stayingArchived) {
       rootReconciled = true;
       const root = await deliverSlackMessage(
         db,
@@ -193,7 +205,7 @@ export async function handlePullRequest(
       githubId: pr.user.id,
       login: pr.user.login,
     });
-    if (authorSlackId) {
+    if (authorSlackId && !stayingArchived) {
       await deliverSlackMessage(
         db,
         slack,
@@ -320,8 +332,9 @@ export async function handlePullRequest(
       });
     }
 
-    // Thread a lifecycle note under the root for notable transitions.
-    if (shouldPostLifecycle && !needsSlackReconciliation) {
+    // Thread a lifecycle note under the root for notable transitions. Never post
+    // to a channel that is (and stays) archived — that throws is_archived.
+    if (shouldPostLifecycle && !needsSlackReconciliation && !stayingArchived) {
       await postLifecycleNote(db, slack, current, payload, desiredState, channelId);
     }
   } finally {

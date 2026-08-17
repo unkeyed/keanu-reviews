@@ -15,6 +15,38 @@ export function isSlackChannelAlreadyInState(
 
 interface SlackUserLookupApi {
   lookupByEmail(input: { email: string }): Promise<{ user?: { id?: string } }>;
+  info(input: { user: string }): Promise<{
+    user?: {
+      name?: string;
+      real_name?: string;
+      profile?: { display_name?: string; real_name?: string };
+    };
+  }>;
+}
+
+/**
+ * The reviewer's Slack display name (what Slack shows in the client): their
+ * chosen display name if set, otherwise their real name. Returns undefined for
+ * an unknown user so callers can fall back to the GitHub login. Requires the
+ * `users:read` scope (already implied by `users:read.email`).
+ */
+export async function lookupSlackUserName(
+  users: Pick<SlackUserLookupApi, "info">,
+  userId: string,
+): Promise<string | undefined> {
+  try {
+    const result = await users.info({ user: userId });
+    const profile = result.user?.profile;
+    const name =
+      profile?.display_name?.trim() ||
+      profile?.real_name?.trim() ||
+      result.user?.real_name?.trim() ||
+      result.user?.name?.trim();
+    return name || undefined;
+  } catch (error) {
+    if (slackErrorCode(error) === "user_not_found") return undefined;
+    throw error;
+  }
 }
 
 function slackErrorCode(error: unknown): string | undefined {
@@ -71,7 +103,7 @@ function requireNonEmptyString(value: unknown, description: string): string {
 
 /** Slack uses `users_not_found` for a legitimate lookup miss; all other errors are operational. */
 export async function lookupSlackUserByEmail(
-  users: SlackUserLookupApi,
+  users: Pick<SlackUserLookupApi, "lookupByEmail">,
   email: string,
 ): Promise<string | undefined> {
   try {
@@ -324,6 +356,10 @@ export function createWebApiSlackClient(
     lookupUserByEmail: (email) =>
       call(async () => {
         return lookupSlackUserByEmail(web.users, email);
+      }),
+    lookupUserName: (userId) =>
+      call(async () => {
+        return lookupSlackUserName(web.users, userId);
       }),
   };
 }

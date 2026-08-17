@@ -1,6 +1,6 @@
 import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
 import { isBotActor } from "../github/actors.ts";
-import { resolveSlackUser } from "../identity/resolve.ts";
+import { resolveSlackUser, reviewerDisplayLabel } from "../identity/resolve.ts";
 import { issueCommentBlocks, reviewSummaryBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { RetryableError } from "../worker/retryable.ts";
@@ -65,6 +65,9 @@ export async function handleReview(
     { db: deps.db, slack: deps.slack },
     { githubId: r.user.id, login: r.user.login },
   );
+  // Never ping the reviewer for their own review activity (approve, request
+  // changes, comment) — show their Slack display name as plain text instead.
+  const authorLabel = await reviewerDisplayLabel(deps.slack, slackUserId, r.user.login);
   await deliverSlackMessage(
     deps.db,
     deps.slack,
@@ -76,7 +79,7 @@ export async function handleReview(
         state: r.state,
         body: r.body ?? "",
         htmlUrl: r.html_url,
-        authorMention: slackUserId ? `<@${slackUserId}>` : sanitizeMrkdwn(r.user.login),
+        authorMention: authorLabel,
       }),
     },
   );
@@ -119,7 +122,8 @@ export async function handleIssueComment(
     { db: deps.db, slack: deps.slack },
     { githubId: c.user.id, login: c.user.login },
   );
-  const authorMention = slackUserId ? `<@${slackUserId}>` : sanitizeMrkdwn(c.user.login);
+  // Don't ping the commenter for their own comment — plain display name.
+  const authorMention = await reviewerDisplayLabel(deps.slack, slackUserId, c.user.login);
   await deliverSlackMessage(
     deps.db,
     deps.slack,

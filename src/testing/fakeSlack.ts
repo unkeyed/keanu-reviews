@@ -7,6 +7,7 @@ export class FakeSlackClient implements SlackClient {
   invites: { channelId: string; userIds: string[] }[] = [];
   leftMembers: { channelId: string; userId: string }[] = [];
   emailToUser = new Map<string, string>();
+  userNames = new Map<string, string>();
   /** Test-set map of Slack user id -> the (decrypted) token leave calls expect. */
   userTokens = new Map<string, string>();
   /** Tokens the fake should treat as revoked/invalid. */
@@ -82,6 +83,9 @@ export class FakeSlackClient implements SlackClient {
   }
   async lookupUserByEmail(email: string): Promise<string | undefined> {
     return this.emailToUser.get(email);
+  }
+  async lookupUserName(userId: string): Promise<string | undefined> {
+    return this.userNames.get(userId);
   }
 
   channel(id: string) {

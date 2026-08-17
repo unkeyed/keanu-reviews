@@ -4,6 +4,7 @@ import {
   createWebApiSlackClient,
   isSlackChannelAlreadyInState,
   lookupSlackUserByEmail,
+  lookupSlackUserName,
 } from "./webApiClient.ts";
 
 function fakeWebApi() {
@@ -38,6 +39,15 @@ function fakeWebApi() {
     users: {
       lookupByEmail: vi.fn(
         async (): Promise<{ user?: { id?: string } }> => ({ user: { id: "U123" } }),
+      ),
+      info: vi.fn(
+        async (): Promise<{
+          user?: {
+            name?: string;
+            real_name?: string;
+            profile?: { display_name?: string; real_name?: string };
+          };
+        }> => ({ user: { real_name: "Real Name", profile: { display_name: "Display Name" } } }),
       ),
     },
     apiCall: vi.fn(async (): Promise<{ ts?: unknown }> => ({ ts: "171234.5678" })),
@@ -343,5 +353,29 @@ describe("Slack user lookup", () => {
     await expect(lookupSlackUserByEmail({ lookupByEmail }, "person@example.com")).rejects.toBe(
       authError,
     );
+  });
+
+  it("prefers display_name, then real_name, for a user's name", async () => {
+    const info = vi.fn(async () => ({
+      user: { real_name: "James Perkins", profile: { display_name: "jperkins" } },
+    }));
+    await expect(lookupSlackUserName({ info }, "U7")).resolves.toBe("jperkins");
+
+    const infoNoDisplay = vi.fn(async () => ({
+      user: { real_name: "James Perkins", profile: { display_name: "" } },
+    }));
+    await expect(lookupSlackUserName({ info: infoNoDisplay }, "U7")).resolves.toBe("James Perkins");
+  });
+
+  it("returns undefined for an unknown user but rethrows other errors", async () => {
+    const notFound = vi.fn(async () => {
+      throw { data: { error: "user_not_found" } };
+    });
+    await expect(lookupSlackUserName({ info: notFound }, "U0")).resolves.toBeUndefined();
+
+    const boom = vi.fn(async () => {
+      throw { data: { error: "invalid_auth" } };
+    });
+    await expect(lookupSlackUserName({ info: boom }, "U0")).rejects.toBeTruthy();
   });
 });
