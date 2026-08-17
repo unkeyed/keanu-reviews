@@ -1,4 +1,4 @@
-import { isBotActor } from "../github/actors.ts";
+import { shouldSkipActor } from "../github/actors.ts";
 import { reviewCommentBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { RetryableError } from "../worker/retryable.ts";
@@ -34,8 +34,10 @@ export async function handleReviewComment(
   payload: ReviewCommentPayload,
 ): Promise<void> {
   if (payload.action !== "created") return;
-  if (isBotActor(payload.comment.user)) return; // skip bot comments (Vercel, Mintlify, …)
-  if (payload.comment.user.id === payload.pull_request.user.id) return; // PR author comments stay on GitHub
+  if (shouldSkipActor(payload.comment.user, deps.allowedBots)) return; // skip non-allowed bots
+  // The PR author's inline replies ARE mirrored — replying to review feedback is
+  // the core channel conversation (previously these were dropped, which left only
+  // an empty "commented by …" wrapper in Slack).
   const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
   if (!row.channelId) throw new RetryableError(`PR channel is not ready for ${row.id}`);
 

@@ -83,10 +83,28 @@ describe("handleReviewComment (U6)", () => {
     expect(blocks).not.toContain("<@");
   });
 
-  it("ignores an inline comment from the PR author", async () => {
+  it("mirrors an inline reply from the PR author (their replies are conversation)", async () => {
+    await seedChannel();
     await handleReviewComment(deps(), payload({ user: { id: 100, login: "oz" } }));
-    expect(slack.messages).toHaveLength(0);
-    expect(slack.channels).toHaveLength(0);
+    expect(slack.messages).toHaveLength(1);
+    expect(JSON.stringify(slack.messages.at(-1)?.blocks)).toContain("by oz");
+  });
+
+  it("mirrors an allow-listed bot's comment but still skips other bots", async () => {
+    await seedChannel();
+    const allowed = { ...deps(), allowedBots: new Set(["pullfrog"]) };
+    // Pullfrog is allow-listed (matches "pullfrog[bot]" after normalization).
+    await handleReviewComment(
+      allowed,
+      payload({ id: 71, user: { id: 20, login: "pullfrog[bot]", type: "Bot" } }),
+    );
+    expect(slack.messages).toHaveLength(1);
+    // A different bot is still filtered even with an allowlist present.
+    await handleReviewComment(
+      allowed,
+      payload({ id: 72, user: { id: 21, login: "vercel[bot]", type: "Bot" } }),
+    );
+    expect(slack.messages).toHaveLength(1);
   });
 
   it("reconciles the channel from the payload when the comment arrives first (out-of-order)", async () => {

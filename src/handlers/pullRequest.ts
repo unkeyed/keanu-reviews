@@ -57,6 +57,8 @@ export interface PrHandlerDeps {
   postPrComment?: PrCommenter;
   /** Slack workspace id, used to build the channel deep link for the merge comment. */
   slackTeamId?: string;
+  /** Bot logins (normalized) whose comments/reviews should be mirrored anyway. */
+  allowedBots?: ReadonlySet<string>;
   /**
    * Optional silent-archive hook (U-quiet). When set, it makes members who have
    * authorized us leave the channel before it's archived, so Slack sends no

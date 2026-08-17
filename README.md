@@ -80,6 +80,13 @@ permission to **Read & write** (PR comments post via the Issues API) and
 **reinstall/reapprove** the app — otherwise the comment POST returns `403`.
 Leave `GITHUB_COMMENT_ON_MERGE` unset/`false` to keep the app fully read-only.
 
+**Allowing specific bots.** Bot accounts (`type: "Bot"`) are filtered out of
+comment/review mirroring by default, since most are deploy-preview noise. To
+surface a chosen review bot (e.g. Pullfrog), list its login in `ALLOWED_BOTS`
+(comma-separated; case- and `[bot]`-suffix-insensitive, so `pullfrog` matches
+`pullfrog[bot]`). Everything else stays filtered. Don't list this App's own bot,
+or it would echo its own merge comments.
+
 ### GitHub account linking
 
 `/link-github` never trusts a typed GitHub username. With no arguments it returns

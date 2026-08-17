@@ -124,6 +124,12 @@ describe("loadConfig", () => {
     },
   );
 
+  it("parses ALLOWED_BOTS into a normalized set (default empty)", () => {
+    expect([...loadConfig(validEnv()).ALLOWED_BOTS]).toEqual([]);
+    const cfg = loadConfig({ ...validEnv(), ALLOWED_BOTS: "Pullfrog[bot], dependabot ,," });
+    expect([...cfg.ALLOWED_BOTS].sort()).toEqual(["dependabot", "pullfrog"]);
+  });
+
   it.each(["workspace-name", "E123", "T-123"])("rejects an invalid SLACK_TEAM_ID: %s", (teamId) => {
     const env = validEnv();
     env.SLACK_TEAM_ID = teamId;

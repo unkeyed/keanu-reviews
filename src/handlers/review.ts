@@ -1,5 +1,5 @@
 import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
-import { isBotActor } from "../github/actors.ts";
+import { shouldSkipActor } from "../github/actors.ts";
 import { resolveSlackUser, reviewerDisplayLabel } from "../identity/resolve.ts";
 import { issueCommentBlocks, reviewSummaryBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
@@ -48,7 +48,7 @@ export async function handleReview(
   sourceVersion = String(payload.review.id),
 ): Promise<void> {
   if (payload.action !== "submitted") return;
-  if (isBotActor(payload.review.user)) return; // skip bot reviews
+  if (shouldSkipActor(payload.review.user, deps.allowedBots)) return; // skip non-allowed bots
   const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
   if (!row.channelId) throw new RetryableError(`PR channel is not ready for ${row.id}`);
 
@@ -65,24 +65,31 @@ export async function handleReview(
     { db: deps.db, slack: deps.slack },
     { githubId: r.user.id, login: r.user.login },
   );
-  // Never ping the reviewer for their own review activity (approve, request
-  // changes, comment) — show their Slack display name as plain text instead.
-  const authorLabel = await reviewerDisplayLabel(deps.slack, slackUserId, r.user.login);
-  await deliverSlackMessage(
-    deps.db,
-    deps.slack,
-    { prId: row.id, kind: "review", githubEventRef: String(r.id) },
-    {
-      channel: row.channelId,
-      text: sanitizeMrkdwn(`Review ${r.state} by ${r.user.login}`),
-      blocks: reviewSummaryBlocks({
-        state: r.state,
-        body: r.body ?? "",
-        htmlUrl: r.html_url,
-        authorMention: authorLabel,
-      }),
-    },
-  );
+  // A "commented" review with no body is just the wrapper GitHub emits around
+  // inline review comments — the real content arrives as review_comment events.
+  // Posting it would be an empty "💬 commented by …" line, so skip the message
+  // (but still cancel the reminder above and report mergeability below).
+  const isEmptyCommentWrapper = r.state === "commented" && !(r.body ?? "").trim();
+  if (!isEmptyCommentWrapper) {
+    // Never ping the reviewer for their own review activity (approve, request
+    // changes, comment) — show their Slack display name as plain text instead.
+    const authorLabel = await reviewerDisplayLabel(deps.slack, slackUserId, r.user.login);
+    await deliverSlackMessage(
+      deps.db,
+      deps.slack,
+      { prId: row.id, kind: "review", githubEventRef: String(r.id) },
+      {
+        channel: row.channelId,
+        text: sanitizeMrkdwn(`Review ${r.state} by ${r.user.login}`),
+        blocks: reviewSummaryBlocks({
+          state: r.state,
+          body: r.body ?? "",
+          htmlUrl: r.html_url,
+          authorMention: authorLabel,
+        }),
+      },
+    );
+  }
 
   // A submitted review can flip mergeability (e.g. required approval satisfied).
   await reportMergeability(deps, row, `review:${r.id}`);
@@ -107,9 +114,10 @@ export async function handleIssueComment(
 ): Promise<void> {
   if (payload.action !== "created") return;
   if (!payload.issue.pull_request) return; // not a PR — ignore
-  // Skip bot comments (Vercel/Mintlify deploy previews, our own merge comment, …).
-  // `type: "Bot"` covers our App's bot too, so this also serves as the echo guard.
-  if (isBotActor(payload.comment.user)) return;
+  // Skip bot comments (Vercel/Mintlify deploy previews, our own merge comment, …)
+  // unless allow-listed. `type: "Bot"` covers our App's bot, so this also guards
+  // against echoing our own merge comment (never allow-list our App's login).
+  if (shouldSkipActor(payload.comment.user, deps.allowedBots)) return;
   const row = await findByRepoNumber(deps.db, payload.repository.full_name, payload.issue.number);
   if (!row?.channelId) {
     throw new RetryableError(

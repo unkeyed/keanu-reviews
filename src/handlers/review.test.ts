@@ -144,6 +144,28 @@ describe("handleReview (U6, R5)", () => {
     expect(slack.channels).toHaveLength(1);
     expect(slack.messages.at(-1)?.channel).toBeDefined();
   });
+
+  it("suppresses the empty 'commented' wrapper but still cancels the reminder", async () => {
+    const onReviewSubmitted = vi.fn(async () => {});
+    const emptyCommented = review("commented");
+    emptyCommented.review.body = null; // inline-comments-only review, no summary text
+    await handleReview(deps({ onReviewSubmitted }), emptyCommented);
+    expect(slack.messages).toHaveLength(0); // no "💬 commented by …" noise
+    expect(onReviewSubmitted).toHaveBeenCalled(); // reminder still cancelled
+  });
+
+  it("still posts a 'commented' review that has body text", async () => {
+    await handleReview(deps(), review("commented")); // body "looks good"
+    expect(JSON.stringify(slack.messages.at(-1)?.blocks)).toContain("commented");
+  });
+
+  it("mirrors an allow-listed bot's review", async () => {
+    const botReview = review("changes_requested");
+    botReview.review.user.type = "Bot";
+    botReview.review.user.login = "pullfrog[bot]";
+    await handleReview(deps({ allowedBots: new Set(["pullfrog"]) }), botReview);
+    expect(slack.messages).toHaveLength(1);
+  });
 });
 
 describe("handleIssueComment (U6)", () => {

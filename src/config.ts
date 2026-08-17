@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeBotName } from "./github/actors.ts";
 import { createTokenCipher } from "./slack/tokenCipher.ts";
 
 const PublicUrlSchema = z
@@ -96,6 +97,20 @@ const ConfigSchema = z
     // Accepts a channel ID (e.g. C0123ABC) or a name (e.g. shipped / #shipped).
     // Unset disables the feature.
     SLACK_SHIPPED_CHANNEL: z.string().trim().min(1).optional(),
+    // Comma-separated bot logins whose comments/reviews SHOULD be mirrored
+    // (e.g. "pullfrog,dependabot"). All other bots stay filtered. The `[bot]`
+    // suffix and case are ignored, so "Pullfrog" matches "pullfrog[bot]".
+    ALLOWED_BOTS: z
+      .string()
+      .default("")
+      .transform((value) => {
+        const set = new Set<string>();
+        for (const raw of value.split(",")) {
+          const name = normalizeBotName(raw);
+          if (name) set.add(name);
+        }
+        return set as ReadonlySet<string>;
+      }),
 
     // Storage (U2)
     DATABASE_URL: z.string().url("DATABASE_URL must be a valid connection URL"),

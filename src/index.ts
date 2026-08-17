@@ -126,6 +126,7 @@ function boot(): void {
     onReviewSubmitted: scheduler.onReviewSubmitted,
     onReviewRequestRemoved: scheduler.onReviewRequestRemoved,
     quietArchive,
+    allowedBots: config.ALLOWED_BOTS,
   });
   const worker = createWorker({ db, logger, router });
 
