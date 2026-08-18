@@ -1,7 +1,12 @@
 import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
-import { shouldSkipActor } from "../github/actors.ts";
+import { isBotActor, shouldSkipActor } from "../github/actors.ts";
 import { resolveSlackUser, reviewerDisplayLabel } from "../identity/resolve.ts";
-import { issueCommentBlocks, reviewSummaryBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
+import {
+  cleanGithubMarkdown,
+  issueCommentBlocks,
+  reviewSummaryBlocks,
+  sanitizeMrkdwn,
+} from "../slack/blocks.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { RetryableError } from "../worker/retryable.ts";
 import { reportMergeability } from "./mergeability.ts";
@@ -65,11 +70,12 @@ export async function handleReview(
     { db: deps.db, slack: deps.slack },
     { githubId: r.user.id, login: r.user.login },
   );
-  // A "commented" review with no body is just the wrapper GitHub emits around
-  // inline review comments — the real content arrives as review_comment events.
-  // Posting it would be an empty "💬 commented by …" line, so skip the message
-  // (but still cancel the reminder above and report mergeability below).
-  const isEmptyCommentWrapper = r.state === "commented" && !(r.body ?? "").trim();
+  // A "commented" review whose body is empty after cleaning is just the wrapper
+  // GitHub emits around inline review comments — the real content arrives as
+  // review_comment events. Posting it would be an empty "💬 commented by …" line,
+  // so skip the message (but still cancel the reminder above and report
+  // mergeability below).
+  const isEmptyCommentWrapper = r.state === "commented" && !cleanGithubMarkdown(r.body ?? "");
   if (!isEmptyCommentWrapper) {
     // Never ping the reviewer for their own review activity (approve, request
     // changes, comment) — show their Slack display name as plain text instead.
@@ -80,6 +86,8 @@ export async function handleReview(
       { prId: row.id, kind: "review", githubEventRef: String(r.id) },
       {
         channel: row.channelId,
+        // Thread bot reviews under the PR root to keep the channel readable.
+        threadTs: isBotActor(r.user) ? (row.rootMessageTs ?? undefined) : undefined,
         text: sanitizeMrkdwn(`Review ${r.state} by ${r.user.login}`),
         blocks: reviewSummaryBlocks({
           state: r.state,
@@ -138,6 +146,8 @@ export async function handleIssueComment(
     { prId: row.id, kind: "issue_comment", githubEventRef: String(c.id) },
     {
       channel: row.channelId,
+      // Thread bot comments under the PR root to keep the channel readable.
+      threadTs: isBotActor(c.user) ? (row.rootMessageTs ?? undefined) : undefined,
       text: sanitizeMrkdwn(`Comment by ${c.user.login}`),
       blocks: issueCommentBlocks({
         body: c.body,

@@ -99,12 +99,19 @@ describe("handleReviewComment (U6)", () => {
       payload({ id: 71, user: { id: 20, login: "pullfrog[bot]", type: "Bot" } }),
     );
     expect(slack.messages).toHaveLength(1);
+    expect(slack.messages.at(-1)?.threadTs).toBe("ts-root"); // bot comment is threaded
     // A different bot is still filtered even with an allowlist present.
     await handleReviewComment(
       allowed,
       payload({ id: 72, user: { id: 21, login: "vercel[bot]", type: "Bot" } }),
     );
     expect(slack.messages).toHaveLength(1);
+  });
+
+  it("does not thread a human review comment", async () => {
+    await seedChannel();
+    await handleReviewComment(deps(), payload());
+    expect(slack.messages.at(-1)?.threadTs).toBeUndefined();
   });
 
   it("reconciles the channel from the payload when the comment arrives first (out-of-order)", async () => {

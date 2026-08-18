@@ -1,4 +1,4 @@
-import { shouldSkipActor } from "../github/actors.ts";
+import { isBotActor, shouldSkipActor } from "../github/actors.ts";
 import { reviewCommentBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { RetryableError } from "../worker/retryable.ts";
@@ -53,6 +53,8 @@ export async function handleReviewComment(
     { prId: row.id, kind: "review_comment", githubEventRef: String(c.id) },
     {
       channel: row.channelId,
+      // Thread bot review comments under the PR root to keep the channel readable.
+      threadTs: isBotActor(c.user) ? (row.rootMessageTs ?? undefined) : undefined,
       text: sanitizeMrkdwn(`New review comment on ${c.path}${c.line ? `:${c.line}` : ""}`),
       blocks: reviewCommentBlocks({
         body: c.body,

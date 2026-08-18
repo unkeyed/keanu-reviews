@@ -18,6 +18,36 @@ export function sanitizeLinkLabel(text: string): string {
   return sanitizeMrkdwn(text).replace(/\|/g, "¦");
 }
 
+/**
+ * Clean a GitHub comment/review body for Slack. GitHub bodies (especially from
+ * review bots like Pullfrog) embed HTML that Slack's mrkdwn can't render — HTML
+ * comments carrying machine metadata, `<sup>` marketing footers, `<picture>`/
+ * `<img>` logos, and `<a>` link wrappers. Left as-is they'd be escaped and shown
+ * verbatim, so we strip them to the human-readable text before sanitizing.
+ */
+export function cleanGithubMarkdown(body: string): string {
+  return (
+    body
+      // Metadata + divider markers GitHub bots hide in HTML comments.
+      .replace(/<!--[\s\S]*?-->/g, "")
+      // The whole `<sup>…</sup>` marketing/footer block (logos, "Fix all" links).
+      .replace(/<sup>[\s\S]*?<\/sup>/gi, "")
+      // Media/void elements have no text to keep.
+      .replace(/<(?:picture|source|img)\b[^>]*>/gi, "")
+      .replace(/<\/(?:picture|source)>/gi, "")
+      // Keep the link text, drop the <a> wrapper (URLs are usually in the text).
+      .replace(/<a\b[^>]*>([\s\S]*?)<\/a>/gi, "$1")
+      // Any remaining stray tags.
+      .replace(/<\/?[a-zA-Z][^>]*>/g, "")
+      // Non-breaking spaces GitHub emits in footers.
+      .replace(/&nbsp;/gi, " ")
+      // Collapse the blank space the removals leave behind.
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+  );
+}
+
 export const SLACK_SECTION_TEXT_LIMIT = 3_000;
 
 /** Apply the limit after every prefix, link, and quote marker is rendered. */
@@ -36,7 +66,7 @@ export interface ReviewCommentBlockInput {
 /** Mirror of a GitHub review comment: quoted body + an "Open at line" context row. */
 export function reviewCommentBlocks(input: ReviewCommentBlockInput): SlackBlock[] {
   const quoted = clipSlackText(
-    sanitizeMrkdwn(input.body)
+    sanitizeMrkdwn(cleanGithubMarkdown(input.body))
       .split("\n")
       .map((l) => `> ${l}`)
       .join("\n"),
@@ -79,10 +109,11 @@ export function reviewSummaryBlocks(input: ReviewSummaryInput): SlackBlock[] {
       text: { type: "mrkdwn", text: `<${input.htmlUrl}|${label}> by ${input.authorMention}` },
     },
   ];
-  if (input.body.trim()) {
+  const cleaned = cleanGithubMarkdown(input.body);
+  if (cleaned) {
     blocks.push({
       type: "section",
-      text: { type: "mrkdwn", text: clipSlackText(sanitizeMrkdwn(input.body)) },
+      text: { type: "mrkdwn", text: clipSlackText(sanitizeMrkdwn(cleaned)) },
     });
   }
   return blocks;
@@ -99,7 +130,7 @@ export function issueCommentBlocks(input: {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: clipSlackText(`${prefix}${sanitizeMrkdwn(input.body)}`),
+        text: clipSlackText(`${prefix}${sanitizeMrkdwn(cleanGithubMarkdown(input.body))}`),
       },
     },
   ];

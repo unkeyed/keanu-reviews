@@ -166,6 +166,26 @@ describe("handleReview (U6, R5)", () => {
     await handleReview(deps({ allowedBots: new Set(["pullfrog"]) }), botReview);
     expect(slack.messages).toHaveLength(1);
   });
+
+  it("threads a bot review under the PR root and cleans its HTML body", async () => {
+    const botReview = review("commented");
+    botReview.review.user.type = "Bot";
+    botReview.review.user.login = "pullfrog[bot]";
+    botReview.review.body =
+      "Looks good overall.\n<!-- pullfrog meta -->\n<sup>marketing footer</sup>";
+    await handleReview(deps({ allowedBots: new Set(["pullfrog"]) }), botReview);
+    const msg = slack.messages.at(-1);
+    expect(msg?.threadTs).toBe("ts-root"); // threaded, not a top-level post
+    const blocks = JSON.stringify(msg?.blocks);
+    expect(blocks).toContain("Looks good overall.");
+    expect(blocks).not.toContain("<!--");
+    expect(blocks).not.toContain("marketing footer");
+  });
+
+  it("does not thread a human review", async () => {
+    await handleReview(deps(), review("approved"));
+    expect(slack.messages.at(-1)?.threadTs).toBeUndefined();
+  });
 });
 
 describe("handleIssueComment (U6)", () => {

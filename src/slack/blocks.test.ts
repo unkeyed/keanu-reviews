@@ -1,5 +1,50 @@
 import { describe, expect, it } from "vitest";
-import { reviewCommentBlocks, sanitizeMrkdwn } from "./blocks.ts";
+import { cleanGithubMarkdown, reviewCommentBlocks, sanitizeMrkdwn } from "./blocks.ts";
+
+describe("cleanGithubMarkdown", () => {
+  it("strips a Pullfrog-style body down to the human-readable review", () => {
+    const body = [
+      "No critical issues — one documentation-contract mismatch remains inline.",
+      "",
+      "**Reviewed changes** Reviewed the portal identifier changes.",
+      "",
+      "<!--",
+      "Pullfrog review metadata. These findings were written against 6291898ece;",
+      "- Mode: IncrementalReview",
+      "-->",
+      "",
+      "<!-- PULLFROG_DIVIDER_DO_NOT_REMOVE_PLZ -->",
+      '<sup><a href="https://pullfrog.com"><picture><source media="(prefers-color-scheme: dark)" srcset="https://pullfrog.com/logos/frog-white.png"><img src="https://pullfrog.com/logos/frog.png" width="9px"></picture></a>&nbsp;&nbsp; | Fix all → | Using GPT</sup>',
+    ].join("\n");
+
+    const out = cleanGithubMarkdown(body);
+    expect(out).toContain("No critical issues");
+    expect(out).toContain("**Reviewed changes**");
+    // None of the HTML noise survives.
+    expect(out).not.toContain("<!--");
+    expect(out).not.toContain("PULLFROG_DIVIDER");
+    expect(out).not.toContain("<sup>");
+    expect(out).not.toContain("<img");
+    expect(out).not.toContain("pullfrog.com/logos");
+    expect(out).not.toContain("&nbsp;");
+    expect(out).not.toContain("Using GPT"); // the whole footer block is gone
+  });
+
+  it("keeps the link text when unwrapping an <a> tag", () => {
+    expect(cleanGithubMarkdown('see <a href="https://x.com">the docs</a> now')).toBe(
+      "see the docs now",
+    );
+  });
+
+  it("returns empty for a body that is only metadata/footer", () => {
+    expect(cleanGithubMarkdown("<!-- only metadata -->\n<sup>footer</sup>")).toBe("");
+  });
+
+  it("leaves ordinary markdown untouched", () => {
+    const md = "**bold** and a list:\n- one\n- two";
+    expect(cleanGithubMarkdown(md)).toBe(md);
+  });
+});
 
 describe("sanitizeMrkdwn (KTD11)", () => {
   it("neutralizes a broadcast control sequence", () => {
