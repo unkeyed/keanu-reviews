@@ -32,7 +32,7 @@ const PublicUrlSchema = z
 /**
  * Typed service configuration, validated at boot (U1).
  *
- * Secrets (KTD12) are loaded from the environment, which on Unkey Deploy is
+ * Secrets (KTD12) are loaded from the environment, which on a managed host is
  * backed by the platform secret store. The keys enumerated in {@link SECRET_KEYS}
  * are never emitted by the logger (see `logger.ts`).
  */

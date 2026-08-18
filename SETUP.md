@@ -9,7 +9,7 @@ Plan for ~30 minutes.
 
 - [0. Before you start](#0-before-you-start)
 - [1. Pick your public URL and generate secrets](#1-pick-your-public-url-and-generate-secrets)
-- [2. Database (PlanetScale Postgres)](#2-database-planetscale-postgres)
+- [2. Database (PostgreSQL)](#2-database-postgresql)
 - [3. Create the GitHub App](#3-create-the-github-app)
 - [4. Create the Slack app](#4-create-the-slack-app)
 - [5. Fill in `.env`](#5-fill-in-env)
@@ -28,11 +28,11 @@ You need:
 
 - **Node ≥ 22** and **pnpm** (`npm i -g pnpm`).
 - A **public HTTPS URL** that reaches this service. GitHub and Slack must be able
-  to POST to it. For production use your real host (e.g. Unkey Deploy). For local
+  to POST to it. For production use your real host (a managed Node platform, container, etc.). For local
   testing, run a tunnel: `ngrok http 3000` and use the `https://…ngrok…` URL.
 - Admin access to a **GitHub organization** (to create + install a GitHub App).
 - Admin access to a **Slack workspace** (to create + install a Slack app).
-- A **PlanetScale Postgres** database (or any Postgres) for `DATABASE_URL`.
+- A **PostgreSQL** database for `DATABASE_URL` (any Postgres provider works).
 
 Install dependencies once:
 
@@ -70,9 +70,9 @@ openssl rand -hex 32   # -> OAUTH_STATE_SECRET   (must be >= 32 chars)
 
 ---
 
-## 2. Database (PlanetScale Postgres)
+## 2. Database (PostgreSQL)
 
-1. Create a Postgres database/branch in PlanetScale.
+1. Create a PostgreSQL database (any provider).
 2. Copy its connection string into **`DATABASE_URL`** in `.env`
    (e.g. `postgres://user:pass@host:5432/dbname?sslmode=require`).
 3. Apply the schema:
@@ -139,7 +139,7 @@ Click **Create GitHub App**. On the app's **General** page, collect:
 | **Private keys → Generate a private key** (downloads a `.pem`) | `GITHUB_APP_PRIVATE_KEY` (paste the full file contents, including the `-----BEGIN/END-----` lines) |
 
 > Multi-line private key in `.env`: keep the newlines. Most process managers
-> accept a quoted multi-line value; on Unkey Deploy paste it into the secret
+> accept a quoted multi-line value; on a managed host paste it into the secret
 > store as-is.
 
 ### 3.6 Install the app + get the installation ID
@@ -356,7 +356,7 @@ Leave it `false` (or unset) to keep the app fully read-only and one-way.
 
 ## 9. Deploy
 
-On **Unkey Deploy** (or any long-running Node host):
+On any long-running Node host (a managed Node platform, a container, etc.):
 
 1. Put every variable from Step 5 (plus any optional ones) into the platform's
    **secret store** — never commit real secrets. The service loads them from the
@@ -414,7 +414,7 @@ Every Slack/GitHub API error is logged with actionable detail. Common ones:
 | `SLACK_BOT_TOKEN` | Slack → OAuth & Permissions | `xoxb-…` |
 | `SLACK_SIGNING_SECRET` | Slack → Basic Information | secret |
 | `SLACK_TEAM_ID` | `auth.test`, or workspace settings | `T…` |
-| `DATABASE_URL` | PlanetScale | Postgres connection URL |
+| `DATABASE_URL` | Step 2 | Postgres connection URL |
 
 **Optional (have sensible defaults)**
 

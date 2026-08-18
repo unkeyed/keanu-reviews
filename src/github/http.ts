@@ -48,7 +48,7 @@ export async function githubGetJson<T>(
         headers: {
           authorization: `Bearer ${token}`,
           accept: "application/vnd.github+json",
-          "user-agent": "unkey-slack-pr-bot",
+          "user-agent": "keanu-reviews",
         },
         signal,
       });
@@ -119,7 +119,7 @@ export async function githubPostJson(
           authorization: `Bearer ${token}`,
           accept: "application/vnd.github+json",
           "content-type": "application/json",
-          "user-agent": "unkey-slack-pr-bot",
+          "user-agent": "keanu-reviews",
         },
         body: JSON.stringify(body),
         signal,

@@ -173,7 +173,7 @@ export function createGithubOAuthClient(input: {
           headers: {
             accept: "application/json",
             "content-type": "application/x-www-form-urlencoded",
-            "user-agent": "unkey-slack-pr-bot",
+            "user-agent": "keanu-reviews",
           },
           body: new URLSearchParams({
             client_id: input.clientId,
@@ -203,7 +203,7 @@ export function createGithubOAuthClient(input: {
           headers: {
             accept: "application/vnd.github+json",
             authorization: `Bearer ${accessToken}`,
-            "user-agent": "unkey-slack-pr-bot",
+            "user-agent": "keanu-reviews",
             "x-github-api-version": "2022-11-28",
           },
         },

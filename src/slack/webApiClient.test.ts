@@ -75,7 +75,9 @@ describe("Slack Web API adapter", () => {
       .mockResolvedValueOnce({ ts: "1.2" });
     const slack = createWebApiSlackClient("unused", { web });
 
-    await expect(slack.postMessage({ channel: "C123", text: "hi" })).resolves.toEqual({ ts: "1.2" });
+    await expect(slack.postMessage({ channel: "C123", text: "hi" })).resolves.toEqual({
+      ts: "1.2",
+    });
     expect(web.conversations.unarchive).toHaveBeenCalledWith({ channel: "C123" });
     expect(web.conversations.join).toHaveBeenCalledWith({ channel: "C123" });
   });

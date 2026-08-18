@@ -1,9 +1,10 @@
 {
-  "name": "unkey-slack-pr-bot",
+  "name": "keanu-reviews",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "One-way GitHub -> Slack PR bot: one channel per PR, axolo.co-style.",
+  "license": "MIT",
   "engines": {
     "node": ">=22"
   },

@@ -16,7 +16,7 @@ export function createHealthRoutes(checkReady: ReadyCheck): Hono {
   health.get("/health", (c) =>
     c.json({
       status: "ok",
-      service: "unkey-slack-pr-bot",
+      service: "keanu-reviews",
       uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
     }),
   );
@@ -24,9 +24,9 @@ export function createHealthRoutes(checkReady: ReadyCheck): Hono {
   health.get("/ready", async (c) => {
     try {
       await checkReady();
-      return c.json({ status: "ready", service: "unkey-slack-pr-bot" });
+      return c.json({ status: "ready", service: "keanu-reviews" });
     } catch {
-      return c.json({ status: "unavailable", service: "unkey-slack-pr-bot" }, 503);
+      return c.json({ status: "unavailable", service: "keanu-reviews" }, 503);
     }
   });
 

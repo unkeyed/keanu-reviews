@@ -8,7 +8,7 @@ describe("health route", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { status: string; service: string };
     expect(body.status).toBe("ok");
-    expect(body.service).toBe("unkey-slack-pr-bot");
+    expect(body.service).toBe("keanu-reviews");
   });
 
   it("returns ready after the dependency check succeeds", async () => {
@@ -16,7 +16,7 @@ describe("health route", () => {
     const res = await health.request("/ready");
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: "ready", service: "unkey-slack-pr-bot" });
+    expect(await res.json()).toEqual({ status: "ready", service: "keanu-reviews" });
   });
 
   it("returns 503 without leaking details when the dependency check fails", async () => {
@@ -28,7 +28,7 @@ describe("health route", () => {
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({
       status: "unavailable",
-      service: "unkey-slack-pr-bot",
+      service: "keanu-reviews",
     });
   });
 });

@@ -42,7 +42,7 @@ function boot(): void {
   registerSecretValues(
     SECRET_KEYS.map((k) => config[k]).filter((v): v is string => typeof v === "string"),
   );
-  const logger = createLogger(config.LOG_LEVEL, { service: "unkey-slack-pr-bot" });
+  const logger = createLogger(config.LOG_LEVEL, { service: "keanu-reviews" });
 
   // Infrastructure
   const { db } = createDb(config.DATABASE_URL);
