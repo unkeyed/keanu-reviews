@@ -1,4 +1,7 @@
 # Keanu Reviews — GitHub → Slack PR Bot
+<p align="center">
+<img width="512" height="512" alt="keanu-reviews-pixel-neon-bar" src="https://github.com/user-attachments/assets/33e7acc7-f7c2-4aee-bd8f-cda8e51a97ac" />
+</p>
 
 A self-hosted, one-way **GitHub → Slack** pull-request bot. It
 gives every pull request its own Slack channel and mirrors the PR's lifecycle
