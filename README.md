@@ -1,6 +1,6 @@
 # Keanu Reviews — GitHub → Slack PR Bot
 
-A self-hosted, one-way **GitHub → Slack** pull-request bot (axolo.co-style). It
+A self-hosted, one-way **GitHub → Slack** pull-request bot. It
 gives every pull request its own Slack channel and mirrors the PR's lifecycle
 into Slack so reviewers can discuss, get reminded, and see status without leaving
 Slack.
@@ -358,4 +358,4 @@ at `/health` and readiness probes at `/ready`.
 
 ## License
 
-[MIT](LICENSE) © Keanu Reviews contributors.
+[MIT](LICENSE)
