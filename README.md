@@ -77,9 +77,6 @@ GitHub App webhook  ──►  /webhooks/github  ──►  jobs table  ──�
 - **One-way boundary.** The bot reads GitHub and writes Slack. It never mutates
   GitHub except the opt-in merge comment.
 
-The full design lives in
-[`docs/plans/2026-08-11-001-feat-github-slack-pr-bot-plan.md`](docs/plans/2026-08-11-001-feat-github-slack-pr-bot-plan.md).
-
 ## Requirements
 
 - **Node.js 20+** (developed on Node 24) and **pnpm**.
