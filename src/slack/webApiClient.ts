@@ -187,16 +187,32 @@ export function createWebApiSlackClient(
       },
     );
 
-  // The bot must be a member of any channel it posts to or invites into. A
-  // channel recovered by name (or one the bot was removed from) yields
-  // `not_in_channel`; join it once and retry. Requires the `channels:join` scope.
-  const withChannelMembership = async <T>(channel: string, op: () => Promise<T>): Promise<T> => {
-    try {
-      return await op();
-    } catch (error) {
-      if (slackErrorCode(error) !== "not_in_channel") throw error;
-      await web.conversations.join({ channel });
-      return op();
+  // Make a channel writable before an op that must succeed. Two recoverable
+  // states, each fixed once then retried:
+  //   • `not_in_channel` — the bot was removed or recovered a channel by name;
+  //     rejoin it (needs `channels:join`).
+  //   • `is_archived` — the channel was archived (a prior terminal event, an
+  //     out-of-order merge, or a manual archive). Any write/rename to it fails,
+  //     which otherwise poisons every future job for that PR. Unarchive and retry
+  //     (needs `channels:manage`); the reconciler re-archives later if terminal.
+  // Bounded to two recoveries so a channel that is both archived AND left can be
+  // healed in one call without risking an infinite loop.
+  const withWritableChannel = async <T>(channel: string, op: () => Promise<T>): Promise<T> => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await op();
+      } catch (error) {
+        const code = slackErrorCode(error);
+        if (attempt < 2 && code === "not_in_channel") {
+          await web.conversations.join({ channel });
+          continue;
+        }
+        if (attempt < 2 && code === "is_archived") {
+          await web.conversations.unarchive({ channel });
+          continue;
+        }
+        throw error;
+      }
     }
   };
 
@@ -250,20 +266,20 @@ export function createWebApiSlackClient(
     },
     renameChannel: (channelId, name) =>
       call(() =>
-        withChannelMembership(channelId, async () => {
+        withWritableChannel(channelId, async () => {
           await web.conversations.rename({ channel: channelId, name });
         }),
       ),
     setTopic: (channelId, topic) =>
       call(() =>
-        withChannelMembership(channelId, async () => {
+        withWritableChannel(channelId, async () => {
           await web.conversations.setTopic({ channel: channelId, topic });
         }),
       ),
     archiveChannel: (channelId) =>
       call(async () => {
         try {
-          await withChannelMembership(channelId, () =>
+          await withWritableChannel(channelId, () =>
             web.conversations.archive({ channel: channelId }),
           );
         } catch (error) {
@@ -273,7 +289,7 @@ export function createWebApiSlackClient(
     unarchiveChannel: (channelId) =>
       call(async () => {
         try {
-          await withChannelMembership(channelId, () =>
+          await withWritableChannel(channelId, () =>
             web.conversations.unarchive({ channel: channelId }),
           );
         } catch (error) {
@@ -284,7 +300,7 @@ export function createWebApiSlackClient(
       call(async () => {
         if (userIds.length > 0) {
           try {
-            await withChannelMembership(channelId, () =>
+            await withWritableChannel(channelId, () =>
               web.conversations.invite({ channel: channelId, users: userIds.join(",") }),
             );
           } catch (error) {
@@ -300,7 +316,7 @@ export function createWebApiSlackClient(
       const seenCursors = new Set<string>();
       do {
         const result = (await call(() =>
-          withChannelMembership(channelId, () =>
+          withWritableChannel(channelId, () =>
             web.conversations.members({ channel: channelId, cursor, limit: 200 }),
           ),
         )) as { members?: unknown; response_metadata?: { next_cursor?: unknown } };
@@ -341,7 +357,7 @@ export function createWebApiSlackClient(
     postMessage: (msg: SlackMessage) =>
       postPacer.run(msg.channel, () =>
         call(async () => {
-          const res = (await withChannelMembership(msg.channel, () =>
+          const res = (await withWritableChannel(msg.channel, () =>
             web.apiCall("chat.postMessage", {
               channel: msg.channel,
               text: msg.text,

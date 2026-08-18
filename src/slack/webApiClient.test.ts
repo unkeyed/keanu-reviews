@@ -55,6 +55,31 @@ function fakeWebApi() {
 }
 
 describe("Slack Web API adapter", () => {
+  it("unarchives and retries a write that hits is_archived (recovers stuck channels)", async () => {
+    const web = fakeWebApi();
+    web.conversations.rename
+      .mockRejectedValueOnce({ data: { error: "is_archived" } })
+      .mockResolvedValueOnce({});
+    const slack = createWebApiSlackClient("unused", { web });
+
+    await slack.renameChannel("C123", "pr-renamed");
+    expect(web.conversations.unarchive).toHaveBeenCalledWith({ channel: "C123" });
+    expect(web.conversations.rename).toHaveBeenCalledTimes(2);
+  });
+
+  it("heals a channel that is both archived and left, then posts", async () => {
+    const web = fakeWebApi();
+    web.apiCall
+      .mockRejectedValueOnce({ data: { error: "is_archived" } })
+      .mockRejectedValueOnce({ data: { error: "not_in_channel" } })
+      .mockResolvedValueOnce({ ts: "1.2" });
+    const slack = createWebApiSlackClient("unused", { web });
+
+    await expect(slack.postMessage({ channel: "C123", text: "hi" })).resolves.toEqual({ ts: "1.2" });
+    expect(web.conversations.unarchive).toHaveBeenCalledWith({ channel: "C123" });
+    expect(web.conversations.join).toHaveBeenCalledWith({ channel: "C123" });
+  });
+
   it("configures the production client to keep network retries inside durable leases", () => {
     const web = fakeWebApi();
     const webFactory = vi.fn(() => web);
