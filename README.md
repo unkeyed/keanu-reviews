@@ -42,7 +42,8 @@ default.
   thread is posted as a Slack **threaded reply** under the original comment
   (configurable via `THREAD_COMMENTS`), mirroring GitHub's own threading.
 - **Mergeability status.** Posts a line when a PR becomes ready to merge, blocked,
-  behind, or has conflicts — only when the state changes.
+  or has conflicts — only when the state changes. The "behind the base branch"
+  state is intentionally not announced (a noisy update-your-branch nudge).
 - **Review reminders.** If a requested review is still pending after a
   configurable delay (default 12h), the reviewer gets one reminder — delivered
   only during a configurable daily window, **on weekdays only**.

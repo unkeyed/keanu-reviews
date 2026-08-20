@@ -55,12 +55,26 @@ describe("reportMergeability", () => {
     ["clean", "Ready to merge"],
     ["blocked", "Blocked"],
     ["dirty", "Merge conflicts"],
-    ["behind", "Behind the base branch"],
     ["unstable", "some checks are failing"],
   ])("posts the %s state as a channel message", async (s, expected) => {
     await reportMergeability(deps(state(s)), await row(), "evt-1");
     expect(JSON.stringify(slack.messages.at(-1)?.blocks)).toContain(expected);
     expect(slack.messages.at(-1)?.threadTs).toBeUndefined(); // direct channel post
+  });
+
+  it("does not announce the 'behind' state (noisy update-your-branch nudge)", async () => {
+    await reportMergeability(deps(state("behind")), await row(), "evt-1");
+    expect(slack.messages).toHaveLength(0);
+  });
+
+  it("keeps quiet on a 'behind' blip without losing later state changes", async () => {
+    await reportMergeability(deps(state("clean")), await row(), "evt-1"); // announced
+    await reportMergeability(deps(state("behind")), await row(), "evt-2"); // silent
+    await reportMergeability(deps(state("dirty")), await row(), "evt-3"); // announced
+    const texts = slack.messages.map((m) => JSON.stringify(m.blocks));
+    expect(texts).toHaveLength(2);
+    expect(texts[0]).toContain("Ready to merge");
+    expect(texts[1]).toContain("Merge conflicts");
   });
 
   it("stays quiet when the mergeability is unchanged", async () => {

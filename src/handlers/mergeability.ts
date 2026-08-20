@@ -26,15 +26,21 @@ export interface MergeabilityDeps {
   fetchPullRequest?: PullRequestFetcher;
 }
 
-/** Friendly channel message per GitHub `mergeable_state`. */
+/**
+ * Friendly channel message per GitHub `mergeable_state`. `behind` is
+ * deliberately absent: "update the branch before merging" is a noisy nudge the
+ * author acts on in GitHub, not something the channel needs announced.
+ */
 const LABEL: Record<string, string> = {
   clean: "✅ Ready to merge",
   has_hooks: "✅ Ready to merge",
   unstable: "⚠️ Mergeable, but some checks are failing",
   blocked: "⛔ Blocked — required reviews or checks are not satisfied",
   dirty: "❌ Merge conflicts — this branch needs a rebase or merge",
-  behind: "🔄 Behind the base branch — update the branch before merging",
 };
+
+/** States we intentionally never announce (no channel message, no log noise). */
+const SILENT_STATES = new Set(["behind"]);
 
 /**
  * Report a PR's mergeability into its channel (replaces per-check CI messages).
@@ -65,7 +71,9 @@ export async function reportMergeability(
 
   const label = LABEL[pr.mergeableState];
   if (!label) {
-    deps.logger.debug("unmapped mergeable_state", { state: pr.mergeableState });
+    if (!SILENT_STATES.has(pr.mergeableState)) {
+      deps.logger.debug("unmapped mergeable_state", { state: pr.mergeableState });
+    }
     return;
   }
 
