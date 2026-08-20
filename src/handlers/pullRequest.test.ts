@@ -78,6 +78,23 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     expect(JSON.stringify(shipped?.blocks)).toContain("has shipped");
   });
 
+  it("shows the shipped author's plain Slack name, never an @-ping", async () => {
+    await upsertIdentity(db, {
+      githubUserId: 100,
+      githubLogin: "oz",
+      slackUserId: "U100",
+      source: "self-link",
+    });
+    slack.userNames.set("U100", "Oz Perkins");
+    const d = { ...deps(), shippedChannel: "C0SHIPPED" };
+    await handlePullRequest(d, payload("opened"));
+    await handlePullRequest(d, payload("closed", { merged: true }));
+    const shipped = slack.messages.find((m) => m.channel === "C0SHIPPED");
+    const blocks = JSON.stringify(shipped?.blocks);
+    expect(blocks).toContain("Oz Perkins");
+    expect(blocks).not.toContain("<@U100>"); // broadcast channel: no ping
+  });
+
   it("archives and cancels reminders on merge even if the #shipped post fails", async () => {
     const d = { ...deps(), shippedChannel: "C0SHIPPED" };
     await handlePullRequest(d, payload("opened")); // creates the PR row + channel C1

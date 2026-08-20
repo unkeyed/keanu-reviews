@@ -18,7 +18,7 @@ export interface ShippedInput {
   number: number;
   title: string;
   htmlUrl: string;
-  authorMention: string; // `<@U123>` when linked, else a plain login
+  authorMention: string; // plain Slack display name (no @-ping), else the login
 }
 
 const looksLikeChannelId = (value: string): boolean => /^[CGD][A-Z0-9]{5,}$/.test(value);

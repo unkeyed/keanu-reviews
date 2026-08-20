@@ -13,7 +13,11 @@ import {
 import { cancelForPr } from "../db/repositories/reminders.ts";
 import { type PrState, computeTargetState, isTerminal } from "../domain/prState.ts";
 import type { PrCommenter } from "../github/comments.ts";
-import { type GithubEmailFetcher, resolveSlackUser } from "../identity/resolve.ts";
+import {
+  type GithubEmailFetcher,
+  resolveSlackUser,
+  reviewerDisplayLabel,
+} from "../identity/resolve.ts";
 import type { Logger } from "../logger.ts";
 import { sanitizeInlineCode, sanitizeLinkLabel, sanitizeMrkdwn } from "../slack/blocks.ts";
 import type { SlackBlock, SlackClient } from "../slack/client.ts";
@@ -280,9 +284,9 @@ export async function handlePullRequest(
                 number: current.number,
                 title: pr.title,
                 htmlUrl: pr.html_url,
-                authorMention: authorSlackId
-                  ? `<@${authorSlackId}>`
-                  : sanitizeMrkdwn(pr.user.login),
+                // #shipped is a broadcast channel — show the author's Slack
+                // display name as plain text, don't @-ping them on merge.
+                authorMention: await reviewerDisplayLabel(slack, authorSlackId, pr.user.login),
               },
             );
           } catch (err) {
