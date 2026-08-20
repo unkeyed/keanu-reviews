@@ -14,6 +14,7 @@ const startedAt = Date.now();
  * SHA). Reads a generic override first, then common platform-provided vars.
  */
 const version =
+  process.env.UNKEY_GIT_COMMIT_SHA ||
   process.env.GIT_SHA ||
   process.env.RENDER_GIT_COMMIT ||
   process.env.RAILWAY_GIT_COMMIT_SHA ||
