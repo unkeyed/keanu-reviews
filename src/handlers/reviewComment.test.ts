@@ -62,14 +62,13 @@ describe("handleReviewComment (U6)", () => {
     await seedChannel();
     await handleReviewComment(deps(), payload());
     const msg = slack.messages.at(-1);
-    expect(msg?.threadTs).toBeUndefined(); // direct channel post, not threaded
     const text = JSON.stringify(msg?.blocks);
     expect(text).toContain("https://github.com/unkey/api/pull/1423#discussion_r55|Open");
     expect(text).not.toContain("/blob/"); // not the file/line view
     expect(text).toContain("`src/handlers/auth.ts:42`");
   });
 
-  it("shows the commenter as plain text without mentioning anyone", async () => {
+  it("attributes the comment to the commenter's Slack display name, no ping", async () => {
     await seedChannel();
     await upsertIdentity(db, {
       githubUserId: 7,
@@ -77,10 +76,11 @@ describe("handleReviewComment (U6)", () => {
       slackUserId: "U7",
       source: "self-link",
     });
+    slack.userNames.set("U7", "Flo Rider");
     await handleReviewComment(deps(), payload());
     const blocks = JSON.stringify(slack.messages.at(-1)?.blocks);
-    expect(blocks).toContain("by flo");
-    expect(blocks).not.toContain("<@");
+    expect(blocks).toContain("Flo Rider"); // the Slack user, not the GitHub login
+    expect(blocks).not.toContain("<@"); // never a mention
   });
 
   it("mirrors an inline reply from the PR author (their replies are conversation)", async () => {
@@ -108,9 +108,15 @@ describe("handleReviewComment (U6)", () => {
     expect(slack.messages).toHaveLength(1);
   });
 
-  it("does not thread a human review comment", async () => {
+  it("threads a human review comment under the PR root by default", async () => {
     await seedChannel();
     await handleReviewComment(deps(), payload());
+    expect(slack.messages.at(-1)?.threadTs).toBe("ts-root");
+  });
+
+  it("posts a human review comment top-level when THREAD_COMMENTS is disabled", async () => {
+    await seedChannel();
+    await handleReviewComment({ ...deps(), threadComments: false }, payload());
     expect(slack.messages.at(-1)?.threadTs).toBeUndefined();
   });
 

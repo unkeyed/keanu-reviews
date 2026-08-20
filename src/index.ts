@@ -127,6 +127,7 @@ function boot(): void {
     onReviewRequestRemoved: scheduler.onReviewRequestRemoved,
     quietArchive,
     allowedBots: config.ALLOWED_BOTS,
+    threadComments: config.THREAD_COMMENTS,
   });
   const worker = createWorker({ db, logger, router });
 

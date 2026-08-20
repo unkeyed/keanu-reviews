@@ -13,6 +13,7 @@ import { reportMergeability } from "./mergeability.ts";
 import {
   type PrHandlerDeps,
   type PullRequestPayload,
+  commentThreadTs,
   ensurePullRequestChannel,
 } from "./pullRequest.ts";
 
@@ -146,8 +147,8 @@ export async function handleIssueComment(
     { prId: row.id, kind: "issue_comment", githubEventRef: String(c.id) },
     {
       channel: row.channelId,
-      // Thread bot comments under the PR root to keep the channel readable.
-      threadTs: isBotActor(c.user) ? (row.rootMessageTs ?? undefined) : undefined,
+      // Thread the comment under the PR root (bots always; humans per THREAD_COMMENTS).
+      threadTs: commentThreadTs(deps, isBotActor(c.user), row.rootMessageTs),
       text: sanitizeMrkdwn(`Comment by ${c.user.login}`),
       blocks: issueCommentBlocks({
         body: c.body,

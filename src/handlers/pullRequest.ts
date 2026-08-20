@@ -64,6 +64,13 @@ export interface PrHandlerDeps {
   /** Bot logins (normalized) whose comments/reviews should be mirrored anyway. */
   allowedBots?: ReadonlySet<string>;
   /**
+   * When true (default), human comments and inline review-comment replies are
+   * posted as threaded replies under the PR root instead of top-level channel
+   * messages. Bot messages are always threaded regardless. Configurable so each
+   * workspace can choose how chatty its PR channels are.
+   */
+  threadComments?: boolean;
+  /**
    * Optional silent-archive hook (U-quiet). When set, it makes members who have
    * authorized us leave the channel before it's archived, so Slack sends no
    * "archived the channel" notification. Best-effort — it must never throw or
@@ -83,6 +90,22 @@ export class PullRequestLifecycleBusyError extends Error {
     super(`GitHub PR ${githubPrId} is already being reconciled`);
     this.name = "PullRequestLifecycleBusyError";
   }
+}
+
+/**
+ * Decide the `thread_ts` for a mirrored comment. Bot messages are always
+ * threaded under the PR root (pure noise). Human comments thread when
+ * `threadComments` is on (the default), and post top-level when it's off, so a
+ * workspace can choose how chatty its PR channels are. Falls back to a top-level
+ * post if the root message ts isn't known yet.
+ */
+export function commentThreadTs(
+  deps: { threadComments?: boolean },
+  isBot: boolean,
+  rootMessageTs: string | null | undefined,
+): string | undefined {
+  const shouldThread = isBot || (deps.threadComments ?? true);
+  return shouldThread ? (rootMessageTs ?? undefined) : undefined;
 }
 
 /**

@@ -97,6 +97,14 @@ const ConfigSchema = z
     // Accepts a channel ID (e.g. C0123ABC) or a name (e.g. shipped / #shipped).
     // Unset disables the feature.
     SLACK_SHIPPED_CHANNEL: z.string().trim().min(1).optional(),
+    // When true (default), human PR comments and inline review-comment replies are
+    // posted as threaded replies under the PR's root message, keeping the channel
+    // clean. Set to "false" to post them as top-level channel messages instead.
+    // (Bot comments are always threaded regardless of this setting.)
+    THREAD_COMMENTS: z
+      .enum(["true", "false"])
+      .default("true")
+      .transform((value) => value === "true"),
     // Comma-separated bot logins whose comments/reviews SHOULD be mirrored
     // (e.g. "pullfrog,dependabot"). All other bots stay filtered. The `[bot]`
     // suffix and case are ignored, so "Pullfrog" matches "pullfrog[bot]".

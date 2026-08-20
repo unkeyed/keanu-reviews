@@ -206,6 +206,16 @@ describe("handleIssueComment (U6)", () => {
     expect(slack.messages.at(-1)?.text).toContain("flo");
   });
 
+  it("threads a conversation comment under the PR root by default", async () => {
+    await handleIssueComment(deps(), issueComment(true));
+    expect(slack.messages.at(-1)?.threadTs).toBe("ts-root");
+  });
+
+  it("posts a conversation comment top-level when THREAD_COMMENTS is disabled", async () => {
+    await handleIssueComment(deps({ threadComments: false }), issueComment(true));
+    expect(slack.messages.at(-1)?.threadTs).toBeUndefined();
+  });
+
   it("ignores a comment on a non-PR issue", async () => {
     await handleIssueComment(deps(), issueComment(false));
     expect(slack.messages).toHaveLength(0);

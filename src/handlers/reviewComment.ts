@@ -1,10 +1,12 @@
 import { isBotActor, shouldSkipActor } from "../github/actors.ts";
+import { resolveSlackUser, reviewerDisplayLabel } from "../identity/resolve.ts";
 import { reviewCommentBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { RetryableError } from "../worker/retryable.ts";
 import {
   type PrHandlerDeps,
   type PullRequestPayload,
+  commentThreadTs,
   ensurePullRequestChannel,
 } from "./pullRequest.ts";
 
@@ -45,7 +47,10 @@ export async function handleReviewComment(
   // Link to the comment in the PR discussion (e.g. .../pull/7006#discussion_r…),
   // not the file/line blob view. The file:line still shows as text context.
   const permalink = c.html_url;
-  const commenter = sanitizeMrkdwn(c.user.login);
+  // Attribute the reply to the commenter's Slack display name (no @-ping), not
+  // their raw GitHub login, so it reads as coming from the Slack user.
+  const slackUserId = await resolveSlackUser(deps, { githubId: c.user.id, login: c.user.login });
+  const commenter = await reviewerDisplayLabel(deps.slack, slackUserId, c.user.login);
 
   await deliverSlackMessage(
     deps.db,
@@ -53,8 +58,8 @@ export async function handleReviewComment(
     { prId: row.id, kind: "review_comment", githubEventRef: String(c.id) },
     {
       channel: row.channelId,
-      // Thread bot review comments under the PR root to keep the channel readable.
-      threadTs: isBotActor(c.user) ? (row.rootMessageTs ?? undefined) : undefined,
+      // Thread the reply under the PR root (bots always; humans per THREAD_COMMENTS).
+      threadTs: commentThreadTs(deps, isBotActor(c.user), row.rootMessageTs),
       text: sanitizeMrkdwn(`New review comment on ${c.path}${c.line ? `:${c.line}` : ""}`),
       blocks: reviewCommentBlocks({
         body: c.body,

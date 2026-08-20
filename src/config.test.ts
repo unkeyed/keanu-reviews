@@ -24,6 +24,12 @@ describe("loadConfig", () => {
     expect(cfg.PUBLIC_URL).toBe("https://bot.example.com");
     expect(cfg.PORT).toBe(3000); // default
     expect(cfg.REMINDER_HOURS).toBe(12); // plan default
+    expect(cfg.THREAD_COMMENTS).toBe(true); // threading on by default
+  });
+
+  it("parses THREAD_COMMENTS as a boolean and lets it be disabled", () => {
+    expect(loadConfig({ ...validEnv(), THREAD_COMMENTS: "false" }).THREAD_COMMENTS).toBe(false);
+    expect(loadConfig({ ...validEnv(), THREAD_COMMENTS: "true" }).THREAD_COMMENTS).toBe(true);
   });
 
   it("fails fast naming a missing required variable", () => {

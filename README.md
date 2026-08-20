@@ -37,8 +37,10 @@ default.
   invited to the channel once their GitHub↔Slack identity is known.
 - **Comment & review mirroring.** Review summaries, inline review comments (with
   file/line deep links), and PR conversation comments are mirrored into the
-  channel. Reviewers are shown by their Slack display name and are **never
-  @-pinged** for their own activity.
+  channel, attributed to the author's Slack display name and **never @-pinging**
+  them for their own activity. Comments and replies are **threaded** under the
+  PR's root message by default (configurable via `THREAD_COMMENTS`) to keep the
+  channel clean.
 - **Mergeability status.** Posts a line when a PR becomes ready to merge, blocked,
   behind, or has conflicts — only when the state changes.
 - **Review reminders.** If a requested review is still pending after a
@@ -139,6 +141,7 @@ managed host, from its secret store) and are **never written to logs**. See
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`. |
 | `SLACK_SHIPPED_CHANNEL` | _(off)_ | Channel ID or name that gets a "shipped" note on merge. |
 | `GITHUB_COMMENT_ON_MERGE` | `false` | Opt-in: post the Slack channel URL on the merged PR (the only GitHub write). |
+| `THREAD_COMMENTS` | `true` | Thread human comments & inline replies under the PR root (`false` posts them top-level). |
 | `ALLOWED_BOTS` | _(none)_ | Comma-separated bot logins to mirror (e.g. `pullfrog`). |
 | `REMINDER_HOURS` | `12` | Hours a review can be pending before one reminder fires. |
 | `REMINDER_SCAN_INTERVAL_MS` | `60000` | How often the reminder scanner runs. |
