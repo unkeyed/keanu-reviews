@@ -388,19 +388,33 @@ export function createWebApiSlackClient(
     postMessage: (msg: SlackMessage) =>
       postPacer.run(msg.channel, () =>
         call(async () => {
-          const res = (await withWritableChannel(msg.channel, () =>
-            web.apiCall("chat.postMessage", {
-              channel: msg.channel,
-              text: msg.text,
-              blocks: msg.blocks,
-              thread_ts: msg.threadTs,
-              client_msg_id: msg.clientMsgId,
-              // Author the message as the linked Slack user when provided
-              // (requires the `chat:write.customize` scope; otherwise ignored).
-              username: msg.username,
-              icon_url: msg.iconUrl,
-            }),
-          )) as { ts?: unknown };
+          const customize = Boolean(msg.username || msg.iconUrl);
+          // Author the message as the linked Slack user when provided. This needs
+          // the `chat:write.customize` scope; if it isn't granted Slack rejects the
+          // post with `missing_scope`, so fall back to a plain bot post rather than
+          // letting comment mirroring break (poisoning the job).
+          const post = (withAuthor: boolean) =>
+            withWritableChannel(msg.channel, () =>
+              web.apiCall("chat.postMessage", {
+                channel: msg.channel,
+                text: msg.text,
+                blocks: msg.blocks,
+                thread_ts: msg.threadTs,
+                client_msg_id: msg.clientMsgId,
+                username: withAuthor ? msg.username : undefined,
+                icon_url: withAuthor ? msg.iconUrl : undefined,
+              }),
+            );
+          let res: { ts?: unknown };
+          try {
+            res = (await post(customize)) as { ts?: unknown };
+          } catch (error) {
+            if (customize && slackErrorCode(error) === "missing_scope") {
+              res = (await post(false)) as { ts?: unknown };
+            } else {
+              throw error;
+            }
+          }
           return { ts: requireNonEmptyString(res.ts, "chat.postMessage timestamp") };
         }),
       ),

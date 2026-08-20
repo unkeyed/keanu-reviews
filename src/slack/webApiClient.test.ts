@@ -267,6 +267,26 @@ describe("Slack Web API adapter", () => {
     );
   });
 
+  it("falls back to a plain bot post when chat:write.customize is missing", async () => {
+    const web = fakeWebApi();
+    // First attempt (with username) is rejected for the missing scope; the retry
+    // without author overrides succeeds so comment mirroring never breaks.
+    web.apiCall
+      .mockRejectedValueOnce({ data: { error: "missing_scope", needed: "chat:write.customize" } })
+      .mockResolvedValueOnce({ ts: "171234.5678" });
+    const slack = createWebApiSlackClient("unused", { web });
+
+    await expect(
+      slack.postMessage({ channel: "C123", text: "hi", username: "James" }),
+    ).resolves.toEqual({ ts: "171234.5678" });
+    // The retry omitted the author override.
+    expect(web.apiCall).toHaveBeenNthCalledWith(
+      2,
+      "chat.postMessage",
+      expect.objectContaining({ channel: "C123", username: undefined, icon_url: undefined }),
+    );
+  });
+
   it("joins the channel and retries when a post hits not_in_channel", async () => {
     const web = fakeWebApi();
     web.apiCall
