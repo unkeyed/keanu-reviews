@@ -6,9 +6,10 @@ describe("health route", () => {
     const health = createHealthRoutes(async () => {});
     const res = await health.request("/health");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { status: string; service: string };
+    const body = (await res.json()) as { status: string; service: string; version: string };
     expect(body.status).toBe("ok");
     expect(body.service).toBe("keanu-reviews");
+    expect(typeof body.version).toBe("string"); // build SHA (or "unknown") for deploy verification
   });
 
   it("returns ready after the dependency check succeeds", async () => {

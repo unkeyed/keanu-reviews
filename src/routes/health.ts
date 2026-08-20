@@ -8,6 +8,19 @@ import type { ReadyCheck } from "../db/readiness.ts";
  */
 const startedAt = Date.now();
 
+/**
+ * The git commit this build was deployed from, so `/health` can confirm which
+ * code is actually live (a redeploy that didn't restart still shows the old
+ * SHA). Reads a generic override first, then common platform-provided vars.
+ */
+const version =
+  process.env.GIT_SHA ||
+  process.env.RENDER_GIT_COMMIT ||
+  process.env.RAILWAY_GIT_COMMIT_SHA ||
+  process.env.VERCEL_GIT_COMMIT_SHA ||
+  process.env.SOURCE_VERSION ||
+  "unknown";
+
 export function createHealthRoutes(checkReady: ReadyCheck): Hono {
   const health = new Hono();
 
@@ -17,6 +30,7 @@ export function createHealthRoutes(checkReady: ReadyCheck): Hono {
     c.json({
       status: "ok",
       service: "keanu-reviews",
+      version,
       uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
     }),
   );
