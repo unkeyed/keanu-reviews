@@ -35,12 +35,12 @@ default.
   `closed`/`merged`) via rename, and the channel is archived on close/merge.
 - **Author + reviewer invites.** The PR author and each requested reviewer are
   invited to the channel once their GitHub↔Slack identity is known.
-- **Comment & review mirroring.** Review summaries, inline review comments (with
-  file/line deep links), and PR conversation comments are mirrored into the
-  channel, attributed to the author's Slack display name and **never @-pinging**
-  them for their own activity. Comments and replies are **threaded** under the
-  PR's root message by default (configurable via `THREAD_COMMENTS`) to keep the
-  channel clean.
+- **Comment & review mirroring.** Inline review comments (with file/line deep
+  links) and PR conversation comments are mirrored into the channel, **authored
+  as the commenter's linked Slack user** (their name + avatar) rather than the
+  bot. Comments post top-level in the channel; a **reply** within a GitHub review
+  thread is posted as a Slack **threaded reply** under the original comment
+  (configurable via `THREAD_COMMENTS`), mirroring GitHub's own threading.
 - **Mergeability status.** Posts a line when a PR becomes ready to merge, blocked,
   behind, or has conflicts — only when the state changes.
 - **Review reminders.** If a requested review is still pending after a
@@ -49,9 +49,9 @@ default.
 - **`#shipped` announcement.** Optionally announces each merge into a channel of
   your choice.
 - **Allow-listed bots.** Bot accounts are filtered out by default (deploy-preview
-  noise); you can allow specific review bots (e.g. Pullfrog) by login. Allowed
-  bots' messages are threaded under the PR root and their HTML/marketing cruft is
-  stripped.
+  noise); you can allow specific review bots (e.g. Pullfrog) by login. An allowed
+  bot's review summary is threaded under the PR root and its HTML/marketing cruft
+  is stripped.
 - **Quiet archiving (optional).** With per-user Slack OAuth, the bot archives
   channels **silently** — no "archived the channel" notifications — by having
   participants leave on their own token first (the way Axolo does it).
@@ -141,7 +141,7 @@ managed host, from its secret store) and are **never written to logs**. See
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`. |
 | `SLACK_SHIPPED_CHANNEL` | _(off)_ | Channel ID or name that gets a "shipped" note on merge. |
 | `GITHUB_COMMENT_ON_MERGE` | `false` | Opt-in: post the Slack channel URL on the merged PR (the only GitHub write). |
-| `THREAD_COMMENTS` | `true` | Thread human comments & inline replies under the PR root (`false` posts them top-level). |
+| `THREAD_COMMENTS` | `true` | Thread a review-comment reply under the original comment's Slack message (`false` keeps all comments flat). |
 | `ALLOWED_BOTS` | _(none)_ | Comma-separated bot logins to mirror (e.g. `pullfrog`). |
 | `REMINDER_HOURS` | `12` | Hours a review can be pending before one reminder fires. |
 | `REMINDER_SCAN_INTERVAL_MS` | `60000` | How often the reminder scanner runs. |
@@ -187,15 +187,18 @@ write** and reinstall the App; otherwise the comment POST returns `403`.
 ### Bot token scopes
 
 `channels:manage`, `channels:read`, `channels:join`, `channels:write.invites`,
-`chat:write`, `users:read.email` (add the `groups:*` equivalents if you later use
-private channels).
+`chat:write`, `chat:write.customize`, `users:read.email` (add the `groups:*`
+equivalents if you later use private channels).
 
 - `channels:join` lets the bot re-join a channel it manages but was removed from.
 - `channels:manage` lets it create, rename, archive, and **unarchive** channels —
   the last of which lets it recover a channel that was archived out from under it
   instead of getting stuck.
+- `chat:write.customize` lets a mirrored comment be **authored as the linked Slack
+  user** (their name + avatar). Without it, comments post as the bot with a
+  "by &lt;login&gt;" label instead.
 - `users:read.email` (which implies `users:read`) powers email-based identity
-  resolution and reviewer display names.
+  resolution, reviewer display names, and comment authorship (name + avatar).
 
 Register the slash command **`/link-github`** with request URL
 `${PUBLIC_URL}/slack/commands`, and set `SLACK_TEAM_ID` to your `T…` workspace ID.
@@ -256,11 +259,11 @@ on a weekend waits until the window next opens.
 
 Bot accounts (`type: "Bot"`) are filtered out of mirroring by default. List a
 bot's login in `ALLOWED_BOTS` (comma-separated) to surface it — matching ignores
-case and GitHub's `[bot]` suffix, so `pullfrog` matches `pullfrog[bot]`. Allowed
-bots' messages are **threaded under the PR root** to reduce noise, and their
-bodies are cleaned of HTML comments, `<sup>` marketing footers, and logo images
-before rendering. Never list your own App's bot login, or it would echo its own
-merge comments.
+case and GitHub's `[bot]` suffix, so `pullfrog` matches `pullfrog[bot]`. An
+allowed bot's **review summary** is **threaded under the PR root** to reduce
+noise, and its body is cleaned of HTML comments, `<sup>` marketing footers, and
+logo images before rendering. Never list your own App's bot login, or it would
+echo its own merge comments.
 
 ### Quiet archiving (optional)
 

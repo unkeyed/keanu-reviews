@@ -68,7 +68,7 @@ describe("handleReviewComment (U6)", () => {
     expect(text).toContain("`src/handlers/auth.ts:42`");
   });
 
-  it("attributes the comment to the commenter's Slack display name, no ping", async () => {
+  it("authors the comment as the commenter's linked Slack user (name + avatar)", async () => {
     await seedChannel();
     await upsertIdentity(db, {
       githubUserId: 7,
@@ -76,21 +76,25 @@ describe("handleReviewComment (U6)", () => {
       slackUserId: "U7",
       source: "self-link",
     });
-    slack.userNames.set("U7", "Flo Rider");
+    slack.userProfiles.set("U7", { name: "Flo Rider", iconUrl: "https://slack/avatar.png" });
     await handleReviewComment(deps(), payload());
-    const blocks = JSON.stringify(slack.messages.at(-1)?.blocks);
-    expect(blocks).toContain("Flo Rider"); // the Slack user, not the GitHub login
+    const msg = slack.messages.at(-1);
+    expect(msg?.username).toBe("Flo Rider"); // posted AS the Slack user
+    expect(msg?.iconUrl).toBe("https://slack/avatar.png");
+    const blocks = JSON.stringify(msg?.blocks);
+    expect(blocks).not.toContain("by flo"); // no redundant "· by …" label
     expect(blocks).not.toContain("<@"); // never a mention
   });
 
-  it("mirrors an inline reply from the PR author (their replies are conversation)", async () => {
+  it("posts as the bot with a plain login label when the author is unlinked", async () => {
     await seedChannel();
     await handleReviewComment(deps(), payload({ user: { id: 100, login: "oz" } }));
-    expect(slack.messages).toHaveLength(1);
-    expect(JSON.stringify(slack.messages.at(-1)?.blocks)).toContain("by oz");
+    const msg = slack.messages.at(-1);
+    expect(msg?.username).toBeUndefined(); // falls back to bot authorship
+    expect(JSON.stringify(msg?.blocks)).toContain("by oz");
   });
 
-  it("mirrors an allow-listed bot's comment but still skips other bots", async () => {
+  it("mirrors an allow-listed bot's comment top-level but still skips other bots", async () => {
     await seedChannel();
     const allowed = { ...deps(), allowedBots: new Set(["pullfrog"]) };
     // Pullfrog is allow-listed (matches "pullfrog[bot]" after normalization).
@@ -99,7 +103,7 @@ describe("handleReviewComment (U6)", () => {
       payload({ id: 71, user: { id: 20, login: "pullfrog[bot]", type: "Bot" } }),
     );
     expect(slack.messages).toHaveLength(1);
-    expect(slack.messages.at(-1)?.threadTs).toBe("ts-root"); // bot comment is threaded
+    expect(slack.messages.at(-1)?.threadTs).toBeUndefined(); // top-level, not threaded
     // A different bot is still filtered even with an allowlist present.
     await handleReviewComment(
       allowed,
@@ -108,15 +112,36 @@ describe("handleReviewComment (U6)", () => {
     expect(slack.messages).toHaveLength(1);
   });
 
-  it("threads a human review comment under the PR root by default", async () => {
+  it("posts a thread-starting review comment top-level (not under the PR root)", async () => {
     await seedChannel();
     await handleReviewComment(deps(), payload());
-    expect(slack.messages.at(-1)?.threadTs).toBe("ts-root");
+    expect(slack.messages.at(-1)?.threadTs).toBeUndefined();
   });
 
-  it("posts a human review comment top-level when THREAD_COMMENTS is disabled", async () => {
+  it("threads a reply under the Slack message of the comment it replies to", async () => {
     await seedChannel();
-    await handleReviewComment({ ...deps(), threadComments: false }, payload());
+    // The original comment (id 55) posts top-level and gets a Slack ts.
+    await handleReviewComment(deps(), payload({ id: 55 }));
+    const parentTs = slack.messages.at(-1)?.ts;
+    expect(parentTs).toBeTruthy();
+    // A reply to it (in_reply_to_id: 55) threads under that message.
+    await handleReviewComment(deps(), payload({ id: 56, in_reply_to_id: 55, body: "agreed" }));
+    expect(slack.messages.at(-1)?.threadTs).toBe(parentTs);
+  });
+
+  it("posts a reply top-level when THREAD_COMMENTS is disabled", async () => {
+    await seedChannel();
+    await handleReviewComment({ ...deps(), threadComments: false }, payload({ id: 55 }));
+    await handleReviewComment(
+      { ...deps(), threadComments: false },
+      payload({ id: 56, in_reply_to_id: 55 }),
+    );
+    expect(slack.messages.at(-1)?.threadTs).toBeUndefined();
+  });
+
+  it("posts a reply top-level when its parent comment was never mirrored", async () => {
+    await seedChannel();
+    await handleReviewComment(deps(), payload({ id: 56, in_reply_to_id: 999 }));
     expect(slack.messages.at(-1)?.threadTs).toBeUndefined();
   });
 

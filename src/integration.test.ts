@@ -105,7 +105,7 @@ describe("end-to-end webhook -> Slack smoke", () => {
       },
     });
     const comment = slack.messages.at(-1);
-    expect(comment?.threadTs).toBeTruthy(); // threaded under the PR root by default
+    expect(comment?.threadTs).toBeUndefined(); // thread-starting comment posts top-level
     expect(JSON.stringify(comment?.blocks)).toContain(
       "https://github.com/unkey/api/pull/1423#r55|Open", // links to the discussion
     );

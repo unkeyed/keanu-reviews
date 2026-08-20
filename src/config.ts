@@ -97,10 +97,10 @@ const ConfigSchema = z
     // Accepts a channel ID (e.g. C0123ABC) or a name (e.g. shipped / #shipped).
     // Unset disables the feature.
     SLACK_SHIPPED_CHANNEL: z.string().trim().min(1).optional(),
-    // When true (default), human PR comments and inline review-comment replies are
-    // posted as threaded replies under the PR's root message, keeping the channel
-    // clean. Set to "false" to post them as top-level channel messages instead.
-    // (Bot comments are always threaded regardless of this setting.)
+    // When true (default), a reply within a GitHub review thread is mirrored as a
+    // Slack threaded reply under the original comment's message (mirroring
+    // GitHub's threads). Thread-starting comments and PR conversation comments
+    // always post top-level in the channel. Set "false" to keep everything flat.
     THREAD_COMMENTS: z
       .enum(["true", "false"])
       .default("true")

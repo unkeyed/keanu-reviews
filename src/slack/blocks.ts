@@ -60,7 +60,9 @@ export interface ReviewCommentBlockInput {
   permalink: string;
   path: string;
   line?: number;
-  authorMention: string; // `<@U123>` when mapped, else a plain login
+  // Plain author label appended as "· by …". Omit when the message is authored
+  // as the Slack user (username override), which already shows who wrote it.
+  authorMention?: string;
 }
 
 /** Mirror of a GitHub review comment: quoted body + an "Open at line" context row. */
@@ -81,7 +83,7 @@ export function reviewCommentBlocks(input: ReviewCommentBlockInput): SlackBlock[
       elements: [
         {
           type: "mrkdwn",
-          text: `<${input.permalink}|Open>${location} · by ${input.authorMention}`,
+          text: `<${input.permalink}|Open>${location}${input.authorMention ? ` · by ${input.authorMention}` : ""}`,
         },
       ],
     },
@@ -122,9 +124,10 @@ export function reviewSummaryBlocks(input: ReviewSummaryInput): SlackBlock[] {
 export function issueCommentBlocks(input: {
   body: string;
   htmlUrl: string;
-  authorMention: string;
+  // Omit when authored as the Slack user (username override shows the author).
+  authorMention?: string;
 }): SlackBlock[] {
-  const prefix = `💬 <${input.htmlUrl}|comment> by ${input.authorMention}\n`;
+  const prefix = `💬 <${input.htmlUrl}|comment>${input.authorMention ? ` by ${input.authorMention}` : ""}\n`;
   return [
     {
       type: "section",

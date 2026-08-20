@@ -1,13 +1,20 @@
-import type { LeaveChannelOutcome, SlackClient, SlackMessage } from "../slack/client.ts";
+import type {
+  LeaveChannelOutcome,
+  SlackClient,
+  SlackMessage,
+  SlackUserProfile,
+} from "../slack/client.ts";
 
 /** In-memory Slack client for offline tests. Records every call for assertions. */
 export class FakeSlackClient implements SlackClient {
   channels: { id: string; name: string; archived: boolean; topic?: string }[] = [];
-  messages: SlackMessage[] = [];
+  // Stored posts carry the assigned `ts` so tests can assert threading targets.
+  messages: (SlackMessage & { ts: string })[] = [];
   invites: { channelId: string; userIds: string[] }[] = [];
   leftMembers: { channelId: string; userId: string }[] = [];
   emailToUser = new Map<string, string>();
   userNames = new Map<string, string>();
+  userProfiles = new Map<string, SlackUserProfile>();
   /** Test-set map of Slack user id -> the (decrypted) token leave calls expect. */
   userTokens = new Map<string, string>();
   /** Tokens the fake should treat as revoked/invalid. */
@@ -76,8 +83,8 @@ export class FakeSlackClient implements SlackClient {
     if (this.channel(msg.channel)?.archived) {
       throw { data: { error: "is_archived" } };
     }
-    this.messages.push(msg);
     const ts = `ts-${++this.tsSeq}`;
+    this.messages.push({ ...msg, ts });
     if (msg.clientMsgId) this.clientMessageIds.set(msg.clientMsgId, ts);
     return { ts };
   }
@@ -86,6 +93,12 @@ export class FakeSlackClient implements SlackClient {
   }
   async lookupUserName(userId: string): Promise<string | undefined> {
     return this.userNames.get(userId);
+  }
+  async lookupUserProfile(userId: string): Promise<SlackUserProfile | undefined> {
+    const explicit = this.userProfiles.get(userId);
+    if (explicit) return explicit;
+    const name = this.userNames.get(userId);
+    return name ? { name } : undefined;
   }
 
   channel(id: string) {

@@ -5,6 +5,7 @@ import {
   isSlackChannelAlreadyInState,
   lookupSlackUserByEmail,
   lookupSlackUserName,
+  lookupSlackUserProfile,
 } from "./webApiClient.ts";
 
 function fakeWebApi() {
@@ -246,6 +247,26 @@ describe("Slack Web API adapter", () => {
     );
   });
 
+  it("authors a message as a Slack user via username + icon_url overrides", async () => {
+    const web = fakeWebApi();
+    const slack = createWebApiSlackClient("unused", { web });
+
+    await slack.postMessage({
+      channel: "C123",
+      text: "fallback",
+      username: "James Perkins",
+      iconUrl: "https://slack/avatar.png",
+    });
+    expect(web.apiCall).toHaveBeenCalledWith(
+      "chat.postMessage",
+      expect.objectContaining({
+        channel: "C123",
+        username: "James Perkins",
+        icon_url: "https://slack/avatar.png",
+      }),
+    );
+  });
+
   it("joins the channel and retries when a post hits not_in_channel", async () => {
     const web = fakeWebApi();
     web.apiCall
@@ -404,5 +425,20 @@ describe("Slack user lookup", () => {
       throw { data: { error: "invalid_auth" } };
     });
     await expect(lookupSlackUserName({ info: boom }, "U0")).rejects.toBeTruthy();
+  });
+
+  it("resolves a profile name and avatar for authoring comments as the user", async () => {
+    const info = vi.fn(async () => ({
+      user: { profile: { display_name: "James", image_72: "https://slack/img72.png" } },
+    }));
+    await expect(lookupSlackUserProfile({ info }, "U7")).resolves.toEqual({
+      name: "James",
+      iconUrl: "https://slack/img72.png",
+    });
+
+    const notFound = vi.fn(async () => {
+      throw { data: { error: "user_not_found" } };
+    });
+    await expect(lookupSlackUserProfile({ info: notFound }, "U0")).resolves.toBeUndefined();
   });
 });

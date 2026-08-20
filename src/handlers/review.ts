@@ -13,9 +13,9 @@ import { reportMergeability } from "./mergeability.ts";
 import {
   type PrHandlerDeps,
   type PullRequestPayload,
-  commentThreadTs,
   ensurePullRequestChannel,
 } from "./pullRequest.ts";
+import { resolveCommentAuthor } from "./reviewComment.ts";
 
 export interface ReviewDeps extends PrHandlerDeps {
   /** U8 wires this to cancel a reviewer's pending reminder once they review. */
@@ -135,25 +135,23 @@ export async function handleIssueComment(
   }
 
   const c = payload.comment;
-  const slackUserId = await resolveSlackUser(
-    { db: deps.db, slack: deps.slack },
-    { githubId: c.user.id, login: c.user.login },
-  );
-  // Don't ping the commenter for their own comment — plain display name.
-  const authorMention = await reviewerDisplayLabel(deps.slack, slackUserId, c.user.login);
+  // Author the comment as the commenter's linked Slack user (name + avatar) when
+  // we can; else post as the bot with a plain "by <login>" label. PR conversation
+  // comments aren't threaded on GitHub, so they always post top-level in Slack.
+  const authorship = await resolveCommentAuthor(deps, c.user);
   await deliverSlackMessage(
     deps.db,
     deps.slack,
     { prId: row.id, kind: "issue_comment", githubEventRef: String(c.id) },
     {
       channel: row.channelId,
-      // Thread the comment under the PR root (bots always; humans per THREAD_COMMENTS).
-      threadTs: commentThreadTs(deps, isBotActor(c.user), row.rootMessageTs),
+      username: authorship.username,
+      iconUrl: authorship.iconUrl,
       text: sanitizeMrkdwn(`Comment by ${c.user.login}`),
       blocks: issueCommentBlocks({
         body: c.body,
         htmlUrl: c.html_url,
-        authorMention,
+        authorMention: authorship.authorMention,
       }),
     },
   );

@@ -172,6 +172,7 @@ pick your workspace.
 - `channels:join`
 - `channels:write.invites`
 - `chat:write`
+- `chat:write.customize` (authors mirrored comments as the linked Slack user)
 - `users:read.email`
 
 (For private PR channels later you'd also add the `groups:*` equivalents — not

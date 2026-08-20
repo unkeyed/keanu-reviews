@@ -14,6 +14,16 @@ export interface SlackMessage {
   blocks?: SlackBlock[];
   threadTs?: string; // parent ts only, never a reply's (KTD5 threading)
   clientMsgId?: string; // deterministic idempotency key for ambiguous retries
+  // Author overrides so a mirrored comment appears to come from the linked Slack
+  // user (their name + avatar) instead of the bot. Require `chat:write.customize`.
+  username?: string;
+  iconUrl?: string;
+}
+
+/** A Slack user's display name and avatar, for authoring mirrored comments. */
+export interface SlackUserProfile {
+  name?: string;
+  iconUrl?: string;
 }
 
 /**
@@ -41,4 +51,6 @@ export interface SlackClient {
   lookupUserByEmail(email: string): Promise<string | undefined>;
   /** The user's Slack display name (no ping), or undefined if unknown. */
   lookupUserName(userId: string): Promise<string | undefined>;
+  /** The user's display name + avatar, for authoring a mirrored comment as them. */
+  lookupUserProfile(userId: string): Promise<SlackUserProfile | undefined>;
 }

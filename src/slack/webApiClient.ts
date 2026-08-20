@@ -19,7 +19,12 @@ interface SlackUserLookupApi {
     user?: {
       name?: string;
       real_name?: string;
-      profile?: { display_name?: string; real_name?: string };
+      profile?: {
+        display_name?: string;
+        real_name?: string;
+        image_72?: string;
+        image_48?: string;
+      };
     };
   }>;
 }
@@ -51,6 +56,32 @@ export async function lookupSlackUserName(
 
 function slackErrorCode(error: unknown): string | undefined {
   return (error as { data?: { error?: string } })?.data?.error;
+}
+
+/**
+ * The user's display name + avatar for authoring a mirrored comment as them.
+ * Returns undefined for an unknown user so callers fall back to bot authorship.
+ */
+export async function lookupSlackUserProfile(
+  users: Pick<SlackUserLookupApi, "info">,
+  userId: string,
+): Promise<{ name?: string; iconUrl?: string } | undefined> {
+  try {
+    const result = await users.info({ user: userId });
+    const profile = result.user?.profile;
+    const name =
+      profile?.display_name?.trim() ||
+      profile?.real_name?.trim() ||
+      result.user?.real_name?.trim() ||
+      result.user?.name?.trim() ||
+      undefined;
+    const iconUrl = profile?.image_72?.trim() || profile?.image_48?.trim() || undefined;
+    if (!name && !iconUrl) return undefined;
+    return { name, iconUrl };
+  } catch (error) {
+    if (slackErrorCode(error) === "user_not_found") return undefined;
+    throw error;
+  }
 }
 
 interface SlackWebApi {
@@ -364,6 +395,10 @@ export function createWebApiSlackClient(
               blocks: msg.blocks,
               thread_ts: msg.threadTs,
               client_msg_id: msg.clientMsgId,
+              // Author the message as the linked Slack user when provided
+              // (requires the `chat:write.customize` scope; otherwise ignored).
+              username: msg.username,
+              icon_url: msg.iconUrl,
             }),
           )) as { ts?: unknown };
           return { ts: requireNonEmptyString(res.ts, "chat.postMessage timestamp") };
@@ -376,6 +411,10 @@ export function createWebApiSlackClient(
     lookupUserName: (userId) =>
       call(async () => {
         return lookupSlackUserName(web.users, userId);
+      }),
+    lookupUserProfile: (userId) =>
+      call(async () => {
+        return lookupSlackUserProfile(web.users, userId);
       }),
   };
 }

@@ -206,14 +206,24 @@ describe("handleIssueComment (U6)", () => {
     expect(slack.messages.at(-1)?.text).toContain("flo");
   });
 
-  it("threads a conversation comment under the PR root by default", async () => {
+  it("posts a conversation comment top-level, never threaded (GitHub has no threads here)", async () => {
     await handleIssueComment(deps(), issueComment(true));
-    expect(slack.messages.at(-1)?.threadTs).toBe("ts-root");
+    expect(slack.messages.at(-1)?.threadTs).toBeUndefined();
   });
 
-  it("posts a conversation comment top-level when THREAD_COMMENTS is disabled", async () => {
-    await handleIssueComment(deps({ threadComments: false }), issueComment(true));
-    expect(slack.messages.at(-1)?.threadTs).toBeUndefined();
+  it("authors a conversation comment as the linked Slack user", async () => {
+    await upsertIdentity(db, {
+      githubUserId: 7,
+      githubLogin: "flo",
+      slackUserId: "U7",
+      source: "self-link",
+    });
+    slack.userProfiles.set("U7", { name: "Flo Rider", iconUrl: "https://slack/a.png" });
+    await handleIssueComment(deps(), issueComment(true));
+    const msg = slack.messages.at(-1);
+    expect(msg?.username).toBe("Flo Rider");
+    expect(msg?.iconUrl).toBe("https://slack/a.png");
+    expect(JSON.stringify(msg?.blocks)).not.toContain("by flo"); // no redundant label
   });
 
   it("ignores a comment on a non-PR issue", async () => {
