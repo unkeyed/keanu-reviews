@@ -161,10 +161,18 @@ export async function setChannel(
   id: string,
   channelId: string,
   rootMessageTs: string | null,
+  channelNameVersion?: number,
 ): Promise<void> {
   await db
     .update(pullRequests)
-    .set({ channelId, rootMessageTs, updatedAt: new Date() })
+    .set({
+      channelId,
+      rootMessageTs,
+      // Stamp the naming scheme only when supplied (first channel creation); a
+      // later root-post reconciliation must not overwrite an existing version.
+      ...(channelNameVersion !== undefined ? { channelNameVersion } : {}),
+      updatedAt: new Date(),
+    })
     .where(eq(pullRequests.id, id));
 }
 

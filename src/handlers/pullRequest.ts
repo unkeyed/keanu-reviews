@@ -23,7 +23,7 @@ import { sanitizeInlineCode, sanitizeLinkLabel, sanitizeMrkdwn } from "../slack/
 import type { SlackBlock, SlackClient } from "../slack/client.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { slackChannelUrl } from "../slack/links.ts";
-import { channelName } from "../slack/naming.ts";
+import { CURRENT_CHANNEL_NAME_VERSION, channelName } from "../slack/naming.ts";
 import { RetryableError } from "../worker/retryable.ts";
 import type { PullRequestFetcher } from "./mergeability.ts";
 import { notifyShipped } from "./shipped.ts";
@@ -151,7 +151,14 @@ export async function handlePullRequest(
     let rootReconciled = false;
     // Persist the channel immediately so a root-post failure cannot orphan it.
     if (!row.channelId) {
-      const name = channelName(row.currentState, row.repoFullName, row.number, pr.title);
+      const name = channelName({
+        version: CURRENT_CHANNEL_NAME_VERSION,
+        state: row.currentState,
+        repoFullName: row.repoFullName,
+        number: row.number,
+        title: pr.title,
+        author: pr.user.login,
+      });
       let channelId: string;
       try {
         ({ channelId } = await slack.createChannel(name));
@@ -164,8 +171,13 @@ export async function handlePullRequest(
         channelId = recovered;
         logger.info("channel creation recovered by exact name", { prId: row.id, channelId, name });
       }
-      await setChannel(db, row.id, channelId, null);
-      current = { ...row, channelId, rootMessageTs: null };
+      await setChannel(db, row.id, channelId, null, CURRENT_CHANNEL_NAME_VERSION);
+      current = {
+        ...row,
+        channelId,
+        rootMessageTs: null,
+        channelNameVersion: CURRENT_CHANNEL_NAME_VERSION,
+      };
       channelCreated = true;
       logger.info("channel created", { prId: row.id, channelId, state: row.currentState });
 
@@ -238,12 +250,16 @@ export async function handlePullRequest(
     }
 
     const desiredState = current.currentState;
-    const desiredChannelName = channelName(
-      desiredState,
-      current.repoFullName,
-      current.number,
-      pr.title,
-    );
+    const desiredChannelName = channelName({
+      // Reuse the scheme stamped at creation: legacy rows default to v1 (no
+      // author), so their names never churn into v2, while new rows use v2.
+      version: current.channelNameVersion,
+      state: desiredState,
+      repoFullName: current.repoFullName,
+      number: current.number,
+      title: pr.title,
+      author: pr.user.login,
+    });
     const needsSlackReconciliation =
       current.appliedState !== desiredState || current.appliedChannelName !== desiredChannelName;
     const shouldPostLifecycle =

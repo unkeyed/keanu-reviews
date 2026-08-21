@@ -31,6 +31,7 @@ export function createDbReadyCheck(db: Db): ReadyCheck {
           ${pullRequests.id}, ${pullRequests.repoFullName}, ${pullRequests.number},
           ${pullRequests.githubPrId}, ${pullRequests.channelId}, ${pullRequests.currentState},
           ${pullRequests.appliedState}, ${pullRequests.appliedChannelName},
+          ${pullRequests.channelNameVersion},
           ${pullRequests.sourceUpdatedAt}, ${pullRequests.sourceArrivalKey}, ${pullRequests.headSha},
           ${pullRequests.rootMessageTs}, ${pullRequests.createdAt}, ${pullRequests.updatedAt}
         )::text from ${pullRequests} limit 0) as pull_requests,

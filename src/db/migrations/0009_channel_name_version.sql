@@ -1,0 +1,1 @@
+ALTER TABLE "pull_requests" ADD COLUMN "channel_name_version" integer DEFAULT 1 NOT NULL;

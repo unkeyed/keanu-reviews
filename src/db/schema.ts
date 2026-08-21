@@ -56,6 +56,11 @@ export const pullRequests = pgTable(
     currentState: prStateEnum("current_state").notNull(),
     appliedState: prStateEnum("applied_state"),
     appliedChannelName: text("applied_channel_name"),
+    // Channel-naming scheme stamped when the channel is first created (see
+    // slack/naming.ts). 1 = legacy `<state>-<repo>-<number>-<title>`; 2 inserts
+    // the author. Fixed for a channel's life so pre-v2 channels are never
+    // renamed into the newer scheme (backwards compat).
+    channelNameVersion: integer("channel_name_version").notNull().default(1),
     sourceUpdatedAt: timestamp("source_updated_at", { withTimezone: true }),
     // Orders webhook snapshots whose GitHub updated_at values are equal.
     // Production supplies `${job.createdAt}:${job.id}` as a stable arrival key.
