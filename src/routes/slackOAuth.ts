@@ -3,7 +3,12 @@ import type { Db } from "../db/client.ts";
 import { completeSlackTokenAuthorization } from "../db/repositories/slackUserTokens.ts";
 import { verifyOAuthState } from "../github/oauth.ts";
 import type { Logger } from "../logger.ts";
-import { SLACK_LEAVE_USER_SCOPE, type SlackOAuthClient, SlackOAuthError } from "../slack/oauth.ts";
+import {
+  SLACK_LEAVE_USER_SCOPE,
+  type SlackOAuthClient,
+  SlackOAuthError,
+  hasScope,
+} from "../slack/oauth.ts";
 import type { TokenCipher } from "../slack/tokenCipher.ts";
 
 export interface SlackOAuthRouteDeps {
@@ -19,13 +24,6 @@ export interface SlackOAuthRouteDeps {
 
 function page(message: string): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Slack quiet-archive setup</title></head><body><main><p>${message}</p></main></body></html>`;
-}
-
-function hasScope(granted: string, required: string): boolean {
-  return granted
-    .split(/[\s,]+/)
-    .map((s) => s.trim())
-    .includes(required);
 }
 
 export function createSlackOAuthRoute(deps: SlackOAuthRouteDeps): Hono {

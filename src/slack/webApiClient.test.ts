@@ -83,6 +83,54 @@ describe("Slack Web API adapter", () => {
     expect(web.conversations.join).toHaveBeenCalledWith({ channel: "C123" });
   });
 
+  it("posts as the user via their token, inviting them on not_in_channel then retrying", async () => {
+    const web = fakeWebApi();
+    const userPost = vi
+      .fn()
+      .mockRejectedValueOnce({ data: { error: "not_in_channel" } })
+      .mockResolvedValueOnce({ ts: "9.9" });
+    const userWebFactory = vi.fn(() => ({ apiCall: userPost }) as never);
+    const slack = createWebApiSlackClient("unused", { web, userWebFactory });
+
+    await expect(
+      slack.postMessage({
+        channel: "C123",
+        text: "hi",
+        authorUserToken: "xoxp-flo",
+        authorUserId: "U7",
+      }),
+    ).resolves.toEqual({ ts: "9.9" });
+
+    expect(userWebFactory).toHaveBeenCalledWith("xoxp-flo");
+    expect(web.conversations.invite).toHaveBeenCalledWith({ channel: "C123", users: "U7" });
+    expect(userPost).toHaveBeenCalledTimes(2); // failed on not_in_channel, retried after invite
+    expect(web.apiCall).not.toHaveBeenCalled(); // never posted as the bot
+  });
+
+  it("propagates a dead user token so the caller can drop it and fall back", async () => {
+    const web = fakeWebApi();
+    const userWebFactory = vi.fn(
+      () =>
+        ({
+          apiCall: vi.fn(async () => {
+            throw { data: { error: "token_revoked" } };
+          }),
+        }) as never,
+    );
+    const slack = createWebApiSlackClient("unused", { web, userWebFactory });
+
+    await expect(
+      slack.postMessage({
+        channel: "C123",
+        text: "hi",
+        authorUserToken: "xoxp-dead",
+        authorUserId: "U7",
+      }),
+    ).rejects.toMatchObject({ slackError: "token_revoked" });
+    expect(web.conversations.invite).not.toHaveBeenCalled();
+    expect(web.apiCall).not.toHaveBeenCalled();
+  });
+
   it("configures the production client to keep network retries inside durable leases", () => {
     const web = fakeWebApi();
     const webFactory = vi.fn(() => web);

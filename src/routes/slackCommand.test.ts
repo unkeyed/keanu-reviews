@@ -228,7 +228,7 @@ describe("slash command /link-slack (quiet archive)", () => {
     expect(match?.[1]).toBeTruthy();
     const url = new URL(match?.[1] ?? "");
     expect(url.searchParams.get("client_id")).toBe("1234.5678");
-    expect(url.searchParams.get("user_scope")).toBe("channels:write");
+    expect(url.searchParams.get("user_scope")).toBe("channels:write,chat:write");
     // State must verify and carry the requesting Slack user.
     const verified = verifyOAuthState({
       state: url.searchParams.get("state") ?? "",

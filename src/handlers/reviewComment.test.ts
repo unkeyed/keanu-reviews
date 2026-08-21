@@ -86,12 +86,86 @@ describe("handleReviewComment (U6)", () => {
     expect(blocks).not.toContain("<@"); // never a mention
   });
 
+  it("posts the comment AS the linked user via their token, auto-inviting them", async () => {
+    await seedChannel();
+    await upsertIdentity(db, {
+      githubUserId: 7,
+      githubLogin: "flo",
+      slackUserId: "U7",
+      source: "self-link",
+    });
+    slack.userProfiles.set("U7", { name: "Flo Rider", iconUrl: "https://slack/avatar.png" });
+    const authorPoster = {
+      getUserToken: async (id: string) => (id === "U7" ? "xoxp-flo" : undefined),
+      onInvalidToken: async () => {},
+    };
+    await handleReviewComment({ ...deps(), authorPoster }, payload());
+    const msg = slack.messages.at(-1);
+    expect(msg?.authorUserToken).toBe("xoxp-flo"); // authored with the user's own token
+    expect(msg?.authorUserId).toBe("U7");
+    expect(msg?.username).toBeUndefined(); // no bot name/avatar spoof
+    const blocks = JSON.stringify(msg?.blocks);
+    expect(blocks).not.toContain("by flo"); // no redundant label
+    expect(blocks).not.toContain("<@"); // never a mention
+    // A non-member commenter is invited so chat.postMessage as them can land.
+    expect(slack.invites).toContainEqual({ channelId: "C1", userIds: ["U7"] });
+  });
+
+  it("drops a dead user token and falls back to bot impersonation (no double post)", async () => {
+    await seedChannel();
+    await upsertIdentity(db, {
+      githubUserId: 7,
+      githubLogin: "flo",
+      slackUserId: "U7",
+      source: "self-link",
+    });
+    slack.userProfiles.set("U7", { name: "Flo Rider", iconUrl: "https://slack/avatar.png" });
+    slack.invalidTokens.add("xoxp-dead");
+    const dropped: string[] = [];
+    const authorPoster = {
+      getUserToken: async () => "xoxp-dead",
+      onInvalidToken: async (id: string) => {
+        dropped.push(id);
+      },
+    };
+    await handleReviewComment({ ...deps(), authorPoster }, payload());
+    expect(dropped).toEqual(["U7"]); // revoked token dropped
+    const msg = slack.messages.at(-1);
+    expect(msg?.authorUserToken).toBeUndefined(); // fell back off the user token
+    expect(msg?.username).toBe("Flo Rider"); // bot impersonation instead
+    expect(slack.messages).toHaveLength(1); // exactly one post, not two
+  });
+
   it("posts as the bot with a plain login label when the author is unlinked", async () => {
     await seedChannel();
     await handleReviewComment(deps(), payload({ user: { id: 100, login: "oz" } }));
     const msg = slack.messages.at(-1);
     expect(msg?.username).toBeUndefined(); // falls back to bot authorship
     expect(JSON.stringify(msg?.blocks)).toContain("by oz");
+  });
+
+  it("invites the Slack user linked to an @-mentioned GitHub login", async () => {
+    await seedChannel();
+    await upsertIdentity(db, {
+      githubUserId: 42,
+      githubLogin: "dave-hawkins",
+      slackUserId: "Udave",
+      source: "self-link",
+    });
+    await handleReviewComment(
+      deps(),
+      payload({ body: "Hey @dave-hawkins I need some guidance here" }),
+    );
+    expect(slack.invites).toContainEqual({ channelId: "C1", userIds: ["Udave"] });
+  });
+
+  it("does not invite for an unlinked mention or a team mention", async () => {
+    await seedChannel();
+    await handleReviewComment(
+      deps(),
+      payload({ body: "cc @not-linked and @unkey/api for review" }),
+    );
+    expect(slack.invites).toHaveLength(0);
   });
 
   it("mirrors an allow-listed bot's comment top-level but still skips other bots", async () => {

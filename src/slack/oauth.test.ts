@@ -19,7 +19,7 @@ describe("createSlackAuthorizeUrl", () => {
       "https://bot.example.com/oauth/slack/callback",
     );
     expect(url.searchParams.get("state")).toBe("signed-state");
-    expect(url.searchParams.get("user_scope")).toBe("channels:write");
+    expect(url.searchParams.get("user_scope")).toBe("channels:write,chat:write");
     expect(url.searchParams.get("scope")).toBe("");
   });
 });

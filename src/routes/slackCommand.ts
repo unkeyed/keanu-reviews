@@ -68,8 +68,9 @@ export function createSlackCommandRoute(deps: SlackCommandDeps): Hono {
     const slackUserId = params.get("user_id");
     if (!slackUserId) return c.json({ error: "missing_user" }, 400);
 
-    // `/link-slack` grants the user token that lets the bot make this user leave
-    // PR channels quietly before archive (no Slackbot "archived the channel" ping).
+    // `/link-slack` grants the user token that lets us (a) post your mirrored
+    // comments/reviews as you, and (b) make you leave PR channels quietly before
+    // archive (no Slackbot "archived the channel" ping).
     if ((params.get("command") ?? "").trim() === "/link-slack") {
       if (!deps.slackOauthClientId || !deps.slackOauthCallbackUrl) {
         return c.json({
@@ -91,7 +92,7 @@ export function createSlackCommandRoute(deps: SlackCommandDeps): Hono {
       });
       return c.json({
         response_type: "ephemeral",
-        text: `Enable quiet archiving of PR channels: <${slackAuthorizeUrl}|Authorize with Slack>`,
+        text: `Post your PR comments as yourself and enable quiet archiving: <${slackAuthorizeUrl}|Authorize with Slack>`,
       });
     }
 

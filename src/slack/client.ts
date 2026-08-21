@@ -18,12 +18,40 @@ export interface SlackMessage {
   // user (their name + avatar) instead of the bot. Require `chat:write.customize`.
   username?: string;
   iconUrl?: string;
+  // Post genuinely AS the Slack user via their own OAuth token (not the bot).
+  // Ephemeral: set per-post, never persisted. When present, the post is made with
+  // this `xoxp` token; `authorUserId` identifies the user for the lazy channel
+  // invite (posting as a user requires channel membership) and for dropping the
+  // token if Slack reports it dead. Falls back to `username`/`iconUrl` otherwise.
+  authorUserToken?: string;
+  authorUserId?: string;
 }
 
 /** A Slack user's display name and avatar, for authoring mirrored comments. */
 export interface SlackUserProfile {
   name?: string;
   iconUrl?: string;
+}
+
+/** Slack error codes that mean a stored user token can never succeed again. */
+export const DEAD_TOKEN_ERRORS: ReadonlySet<string> = new Set([
+  "token_revoked",
+  "invalid_auth",
+  "account_inactive",
+  "not_authed",
+  "token_expired",
+]);
+
+/**
+ * True when an error from a *user-token* Slack call means the token is dead and
+ * should be dropped (the caller then re-posts as the bot). Reads the normalized
+ * `slackError` set by the web client, falling back to the raw Slack payload.
+ */
+export function isDeadUserTokenError(error: unknown): boolean {
+  const code =
+    (error as { slackError?: string })?.slackError ??
+    (error as { data?: { error?: string } })?.data?.error;
+  return typeof code === "string" && DEAD_TOKEN_ERRORS.has(code);
 }
 
 /**

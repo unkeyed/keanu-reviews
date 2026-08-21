@@ -2,7 +2,7 @@ import { serve } from "@hono/node-server";
 import { type Config, ConfigError, SECRET_KEYS, loadConfig } from "./config.ts";
 import { createDb } from "./db/client.ts";
 import { createDbReadyCheck } from "./db/readiness.ts";
-import { deleteSlackUserToken, getSlackUserToken } from "./db/repositories/slackUserTokens.ts";
+import { deleteSlackUserToken, getSlackUserTokenRow } from "./db/repositories/slackUserTokens.ts";
 import { createInstallationAuth } from "./github/auth.ts";
 import { createPrCommenter } from "./github/comments.ts";
 import { createGithubOAuthClient } from "./github/oauth.ts";
@@ -21,7 +21,7 @@ import { startReminderLoop } from "./scheduler/loop.ts";
 import { createReminderScheduler } from "./scheduler/reminders.ts";
 import { createApp } from "./server.ts";
 import { quietlyRemoveMembers } from "./slack/memberCleanup.ts";
-import { createSlackOAuthClient } from "./slack/oauth.ts";
+import { SLACK_POST_USER_SCOPE, createSlackOAuthClient, hasScope } from "./slack/oauth.ts";
 import { createTokenCipher } from "./slack/tokenCipher.ts";
 import { createWebApiSlackClient } from "./slack/webApiClient.ts";
 import { createWorker, startWorkerLoop } from "./worker/loop.ts";
@@ -59,6 +59,12 @@ function boot(): void {
   const githubOauthCallbackUrl = `${config.PUBLIC_URL}/oauth/github/callback`;
   const slackOauthCallbackUrl = `${config.PUBLIC_URL}/oauth/slack/callback`;
   let quietArchive: ((channelId: string) => Promise<void>) | undefined;
+  let authorPoster:
+    | {
+        getUserToken: (slackUserId: string) => Promise<string | undefined>;
+        onInvalidToken: (slackUserId: string) => Promise<void>;
+      }
+    | undefined;
   let slackOauthRoute: ReturnType<typeof createSlackOAuthRoute> | undefined;
   if (
     config.SLACK_OAUTH_CLIENT_ID &&
@@ -78,22 +84,33 @@ function boot(): void {
       callbackUrl: slackOauthCallbackUrl,
       cipher,
     });
+    const dropToken = (slackUserId: string) =>
+      deleteSlackUserToken(db, config.SLACK_TEAM_ID, slackUserId);
     quietArchive = async (channelId) => {
       await quietlyRemoveMembers(
         {
           slack,
           logger,
           getUserToken: async (slackUserId) => {
-            const encrypted = await getSlackUserToken(db, config.SLACK_TEAM_ID, slackUserId);
-            return encrypted ? cipher.decrypt(encrypted) : undefined;
+            const row = await getSlackUserTokenRow(db, config.SLACK_TEAM_ID, slackUserId);
+            return row ? cipher.decrypt(row.encryptedToken) : undefined;
           },
-          onInvalidToken: (slackUserId) =>
-            deleteSlackUserToken(db, config.SLACK_TEAM_ID, slackUserId),
+          onInvalidToken: dropToken,
         },
         channelId,
       );
     };
-    logger.info("quiet archiving enabled (Slack user OAuth configured)");
+    // Post mirrored comments/reviews as the user themselves — only for tokens
+    // that actually granted chat:write (older leave-only tokens fall back to bot).
+    authorPoster = {
+      getUserToken: async (slackUserId) => {
+        const row = await getSlackUserTokenRow(db, config.SLACK_TEAM_ID, slackUserId);
+        if (!row || !hasScope(row.scopes, SLACK_POST_USER_SCOPE)) return undefined;
+        return cipher.decrypt(row.encryptedToken);
+      },
+      onInvalidToken: dropToken,
+    };
+    logger.info("quiet archiving + post-as-user enabled (Slack user OAuth configured)");
   }
 
   // Scheduler + router + worker
@@ -126,6 +143,7 @@ function boot(): void {
     onReviewSubmitted: scheduler.onReviewSubmitted,
     onReviewRequestRemoved: scheduler.onReviewRequestRemoved,
     quietArchive,
+    authorPoster,
     allowedBots: config.ALLOWED_BOTS,
     threadComments: config.THREAD_COMMENTS,
   });

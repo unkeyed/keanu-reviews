@@ -77,6 +77,16 @@ export interface PrHandlerDeps {
    * block the archive. Omitted when Slack user-OAuth isn't configured.
    */
   quietArchive?: (channelId: string) => Promise<void>;
+  /**
+   * Optional post-as-user capability. When wired (Slack user-OAuth configured),
+   * mirrored comments/reviews are authored with the linked user's own token
+   * instead of the bot. `getUserToken` returns a decrypted token ONLY when the
+   * user granted `chat:write`; `onInvalidToken` drops a token Slack reports dead.
+   */
+  authorPoster?: {
+    getUserToken: (slackUserId: string) => Promise<string | undefined>;
+    onInvalidToken: (slackUserId: string) => Promise<void>;
+  };
 }
 
 export interface PullRequestHandlingOptions {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../db/client.ts";
-import { getSlackUserToken } from "../db/repositories/slackUserTokens.ts";
+import { getSlackUserTokenRow } from "../db/repositories/slackUserTokens.ts";
 import { oauthStateNonces, slackUserTokens } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createOAuthState } from "../github/oauth.ts";
@@ -123,7 +123,7 @@ describe("Slack OAuth callback", () => {
     expect((await callback(state())).status).toBe(200);
     const replay = await callback(state(), "another-code");
     expect(replay.status).toBe(409);
-    expect(await getSlackUserToken(db, TEAM_ID, "U7")).toBeTruthy();
+    expect(await getSlackUserTokenRow(db, TEAM_ID, "U7")).toBeTruthy();
     expect(await db.select().from(slackUserTokens)).toHaveLength(1);
   });
 });

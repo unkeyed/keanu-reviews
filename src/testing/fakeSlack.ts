@@ -80,6 +80,22 @@ export class FakeSlackClient implements SlackClient {
       const existing = this.clientMessageIds.get(msg.clientMsgId);
       if (existing) return { ts: existing };
     }
+    // Posting AS the user via their token: a revoked token fails (so callers drop
+    // it and fall back to the bot), and a non-member is auto-invited first
+    // (chat.postMessage would otherwise return not_in_channel).
+    if (msg.authorUserToken) {
+      if (this.invalidTokens.has(msg.authorUserToken)) {
+        throw { data: { error: "token_revoked" } };
+      }
+      if (msg.authorUserId) {
+        const members = this.memberships.get(msg.channel) ?? new Set<string>();
+        if (!members.has(msg.authorUserId)) {
+          this.invites.push({ channelId: msg.channel, userIds: [msg.authorUserId] });
+          members.add(msg.authorUserId);
+          this.memberships.set(msg.channel, members);
+        }
+      }
+    }
     if (this.channel(msg.channel)?.archived) {
       throw { data: { error: "is_archived" } };
     }

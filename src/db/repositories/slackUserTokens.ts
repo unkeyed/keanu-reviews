@@ -102,14 +102,18 @@ export async function completeSlackTokenAuthorization(
   });
 }
 
-/** The encrypted token for a Slack user in this workspace, if one is stored. */
-export async function getSlackUserToken(
+/**
+ * The encrypted token + granted scopes for a Slack user in this workspace, if one
+ * is stored. Callers decrypt the token and inspect `scopes` to decide which
+ * user-token operations (leave, post-as-user) it's actually authorized for.
+ */
+export async function getSlackUserTokenRow(
   db: Db,
   slackTeamId: string,
   slackUserId: string,
-): Promise<string | undefined> {
+): Promise<{ encryptedToken: string; scopes: string } | undefined> {
   const [row] = await db
-    .select({ encryptedToken: slackUserTokens.encryptedToken })
+    .select({ encryptedToken: slackUserTokens.encryptedToken, scopes: slackUserTokens.scopes })
     .from(slackUserTokens)
     .where(
       and(
@@ -118,7 +122,7 @@ export async function getSlackUserToken(
       ),
     )
     .limit(1);
-  return row?.encryptedToken;
+  return row;
 }
 
 /**

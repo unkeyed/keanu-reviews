@@ -3,7 +3,7 @@ import type { Db } from "../client.ts";
 import { createTestDb } from "../testDb.ts";
 import {
   deleteSlackUserToken,
-  getSlackUserToken,
+  getSlackUserTokenRow,
   upsertSlackUserToken,
 } from "./slackUserTokens.ts";
 
@@ -26,10 +26,13 @@ describe("Slack user tokens", () => {
       encryptedToken: "cipher-1",
       scopes: "channels:write",
     });
-    expect(await getSlackUserToken(db, "T1", "U1")).toBe("cipher-1");
-    expect(await getSlackUserToken(db, "T1", "U2")).toBeUndefined();
+    expect(await getSlackUserTokenRow(db, "T1", "U1")).toEqual({
+      encryptedToken: "cipher-1",
+      scopes: "channels:write",
+    });
+    expect(await getSlackUserTokenRow(db, "T1", "U2")).toBeUndefined();
     // A different workspace must not read another team's token.
-    expect(await getSlackUserToken(db, "TOTHER", "U1")).toBeUndefined();
+    expect(await getSlackUserTokenRow(db, "TOTHER", "U1")).toBeUndefined();
   });
 
   it("overwrites the prior token when the user re-authorizes", async () => {
@@ -45,7 +48,10 @@ describe("Slack user tokens", () => {
       encryptedToken: "cipher-new",
       scopes: "channels:write,chat:write",
     });
-    expect(await getSlackUserToken(db, "T1", "U1")).toBe("cipher-new");
+    expect(await getSlackUserTokenRow(db, "T1", "U1")).toEqual({
+      encryptedToken: "cipher-new",
+      scopes: "channels:write,chat:write", // broadened scope on re-authorization
+    });
   });
 
   it("deletes a revoked token", async () => {
@@ -56,6 +62,6 @@ describe("Slack user tokens", () => {
       scopes: "channels:write",
     });
     await deleteSlackUserToken(db, "T1", "U1");
-    expect(await getSlackUserToken(db, "T1", "U1")).toBeUndefined();
+    expect(await getSlackUserTokenRow(db, "T1", "U1")).toBeUndefined();
   });
 });

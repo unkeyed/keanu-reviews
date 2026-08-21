@@ -94,7 +94,8 @@ export interface ReviewSummaryInput {
   state: string; // approved | changes_requested | commented
   body: string;
   htmlUrl: string;
-  authorMention: string;
+  // Plain-text reviewer label; omitted when the message is authored AS the user.
+  authorMention?: string;
 }
 
 const STATE_LABEL: Record<string, string> = {
@@ -108,7 +109,10 @@ export function reviewSummaryBlocks(input: ReviewSummaryInput): SlackBlock[] {
   const blocks: SlackBlock[] = [
     {
       type: "section",
-      text: { type: "mrkdwn", text: `<${input.htmlUrl}|${label}> by ${input.authorMention}` },
+      text: {
+        type: "mrkdwn",
+        text: `<${input.htmlUrl}|${label}>${input.authorMention ? ` by ${input.authorMention}` : ""}`,
+      },
     },
   ];
   const cleaned = cleanGithubMarkdown(input.body);

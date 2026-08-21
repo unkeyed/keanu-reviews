@@ -10,6 +10,18 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 
 /** User scope needed to leave a public channel via `conversations.leave`. */
 export const SLACK_LEAVE_USER_SCOPE = "channels:write";
+/** User scope needed to post a mirrored comment/review as the user themselves. */
+export const SLACK_POST_USER_SCOPE = "chat:write";
+/** All user scopes `/link-slack` requests: quiet-archive leave + authoring posts. */
+export const SLACK_USER_SCOPES = `${SLACK_LEAVE_USER_SCOPE},${SLACK_POST_USER_SCOPE}`;
+
+/** True when a Slack-granted scope string (space/comma separated) contains `required`. */
+export function hasScope(granted: string, required: string): boolean {
+  return granted
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .includes(required);
+}
 
 export function createSlackAuthorizeUrl(input: {
   clientId: string;
@@ -22,7 +34,7 @@ export function createSlackAuthorizeUrl(input: {
   url.searchParams.set("redirect_uri", input.callbackUrl);
   url.searchParams.set("state", input.state);
   // Request only user scopes — the bot token is provisioned separately at install.
-  url.searchParams.set("user_scope", input.userScopes ?? SLACK_LEAVE_USER_SCOPE);
+  url.searchParams.set("user_scope", input.userScopes ?? SLACK_USER_SCOPES);
   url.searchParams.set("scope", "");
   return url.toString();
 }

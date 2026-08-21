@@ -1,5 +1,10 @@
 import { ErrorCode, WebClient, type WebClientOptions } from "@slack/web-api";
-import type { LeaveChannelOutcome, SlackClient, SlackMessage } from "./client.ts";
+import {
+  DEAD_TOKEN_ERRORS,
+  type LeaveChannelOutcome,
+  type SlackClient,
+  type SlackMessage,
+} from "./client.ts";
 import { Pacer, type SleepFn, withRetry } from "./rateLimiter.ts";
 
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -105,15 +110,6 @@ interface SlackWebApi {
   users: SlackUserLookupApi;
   apiCall(method: string, options?: Record<string, unknown>): Promise<unknown>;
 }
-
-/** Slack error codes that mean a stored user token can never succeed again. */
-const DEAD_TOKEN_ERRORS = new Set([
-  "token_revoked",
-  "invalid_auth",
-  "account_inactive",
-  "not_authed",
-  "token_expired",
-]);
 
 export interface WebApiSlackClientOptions {
   /** Injected by offline adapter tests; production creates the official WebClient. */
@@ -244,6 +240,62 @@ export function createWebApiSlackClient(
         }
         throw error;
       }
+    }
+  };
+
+  // Post through the bot, optionally spoofing the author's name/avatar. The
+  // `username`/`icon_url` overrides need `chat:write.customize`; if that scope is
+  // missing, fall back to a plain bot post rather than poisoning the job.
+  const postAsBot = async (msg: SlackMessage): Promise<unknown> => {
+    const customize = Boolean(msg.username || msg.iconUrl);
+    const post = (withAuthor: boolean) =>
+      withWritableChannel(msg.channel, () =>
+        web.apiCall("chat.postMessage", {
+          channel: msg.channel,
+          text: msg.text,
+          blocks: msg.blocks,
+          thread_ts: msg.threadTs,
+          client_msg_id: msg.clientMsgId,
+          username: withAuthor ? msg.username : undefined,
+          icon_url: withAuthor ? msg.iconUrl : undefined,
+        }),
+      );
+    try {
+      return ((await post(customize)) as { ts?: unknown }).ts;
+    } catch (error) {
+      if (customize && slackErrorCode(error) === "missing_scope") {
+        return ((await post(false)) as { ts?: unknown }).ts;
+      }
+      throw error;
+    }
+  };
+
+  // Post genuinely AS the user via their own token. Posting as a user requires
+  // channel membership, so on `not_in_channel` the bot invites them once and
+  // retries. A dead token (or any other error) propagates; the caller drops the
+  // token and re-posts as the bot.
+  const postAsUser = async (msg: SlackMessage): Promise<unknown> => {
+    const userWeb = userWebFactory(msg.authorUserToken as string);
+    const post = () =>
+      userWeb.apiCall("chat.postMessage", {
+        channel: msg.channel,
+        text: msg.text,
+        blocks: msg.blocks,
+        thread_ts: msg.threadTs,
+        client_msg_id: msg.clientMsgId,
+      });
+    try {
+      return ((await post()) as { ts?: unknown }).ts;
+    } catch (error) {
+      if (msg.authorUserId && slackErrorCode(error) === "not_in_channel") {
+        try {
+          await web.conversations.invite({ channel: msg.channel, users: msg.authorUserId });
+        } catch (inviteError) {
+          if (slackErrorCode(inviteError) !== "already_in_channel") throw inviteError;
+        }
+        return ((await post()) as { ts?: unknown }).ts;
+      }
+      throw error;
     }
   };
 
@@ -388,34 +440,10 @@ export function createWebApiSlackClient(
     postMessage: (msg: SlackMessage) =>
       postPacer.run(msg.channel, () =>
         call(async () => {
-          const customize = Boolean(msg.username || msg.iconUrl);
-          // Author the message as the linked Slack user when provided. This needs
-          // the `chat:write.customize` scope; if it isn't granted Slack rejects the
-          // post with `missing_scope`, so fall back to a plain bot post rather than
-          // letting comment mirroring break (poisoning the job).
-          const post = (withAuthor: boolean) =>
-            withWritableChannel(msg.channel, () =>
-              web.apiCall("chat.postMessage", {
-                channel: msg.channel,
-                text: msg.text,
-                blocks: msg.blocks,
-                thread_ts: msg.threadTs,
-                client_msg_id: msg.clientMsgId,
-                username: withAuthor ? msg.username : undefined,
-                icon_url: withAuthor ? msg.iconUrl : undefined,
-              }),
-            );
-          let res: { ts?: unknown };
-          try {
-            res = (await post(customize)) as { ts?: unknown };
-          } catch (error) {
-            if (customize && slackErrorCode(error) === "missing_scope") {
-              res = (await post(false)) as { ts?: unknown };
-            } else {
-              throw error;
-            }
-          }
-          return { ts: requireNonEmptyString(res.ts, "chat.postMessage timestamp") };
+          // Author as the real user via their token when provided, else post as
+          // the bot (optionally spoofing name/avatar). See postAsUser/postAsBot.
+          const ts = msg.authorUserToken ? await postAsUser(msg) : await postAsBot(msg);
+          return { ts: requireNonEmptyString(ts, "chat.postMessage timestamp") };
         }),
       ),
     lookupUserByEmail: (email) =>

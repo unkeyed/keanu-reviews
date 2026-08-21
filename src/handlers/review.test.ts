@@ -100,6 +100,27 @@ describe("handleReview (U6, R5)", () => {
     expect(blocks).not.toContain("<@");
   });
 
+  it("authors the review summary AS the reviewer via their token (no name label)", async () => {
+    await upsertIdentity(db, {
+      githubUserId: 7,
+      githubLogin: "flo",
+      slackUserId: "U7",
+      source: "self-link",
+    });
+    slack.userNames.set("U7", "James Perkins");
+    const authorPoster = {
+      getUserToken: async (id: string) => (id === "U7" ? "xoxp-flo" : undefined),
+      onInvalidToken: async () => {},
+    };
+    await handleReview(deps({ authorPoster }), review("approved"));
+    const msg = slack.messages.at(-1);
+    expect(msg?.authorUserToken).toBe("xoxp-flo"); // posted as the reviewer
+    const blocks = JSON.stringify(msg?.blocks);
+    expect(blocks).toContain("approved");
+    expect(blocks).not.toContain("by James Perkins"); // authored as them, so no label
+    expect(blocks).not.toContain("<@"); // still never a mention
+  });
+
   it("ignores a review submitted by a bot", async () => {
     const botReview = review("approved");
     botReview.review.user.type = "Bot";

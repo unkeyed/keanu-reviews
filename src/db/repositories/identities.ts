@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import type { Db } from "../client.ts";
 import { type IdentityRow, identities } from "../schema.ts";
 
@@ -35,6 +35,25 @@ export async function findByGithubId(
     .select()
     .from(identities)
     .where(eq(identities.githubUserId, githubUserId))
+    .limit(1);
+  return row;
+}
+
+/**
+ * Resolve a bare GitHub @-mention login to a linked identity. GitHub logins are
+ * case-insensitive, so we match case-folded; if a login was ever reused across
+ * ids we prefer the most recently linked row. The identity map is people-sized
+ * (one row per linked user), so the case-folded scan is cheap and needs no index.
+ */
+export async function findByGithubLogin(
+  db: Db,
+  githubLogin: string,
+): Promise<IdentityRow | undefined> {
+  const [row] = await db
+    .select()
+    .from(identities)
+    .where(eq(sql`lower(${identities.githubLogin})`, githubLogin.toLowerCase()))
+    .orderBy(desc(identities.updatedAt))
     .limit(1);
   return row;
 }
