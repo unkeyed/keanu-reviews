@@ -23,11 +23,29 @@ export async function resolveMessageAuthor(
   user: { id: number; login: string },
 ): Promise<MessageAuthor> {
   const slackUserId = await resolveSlackUser(deps, { githubId: user.id, login: user.login });
-  if (!slackUserId) return {};
+  if (!slackUserId) {
+    // No identity-map row for this GitHub id → we can't post as them (bot post).
+    deps.logger.debug("message author not linked; posting as bot", {
+      login: user.login,
+      githubId: user.id,
+      authorPosterWired: Boolean(deps.authorPoster),
+    });
+    return {};
+  }
   const profile = await deps.slack.lookupUserProfile(slackUserId);
   const userToken = deps.authorPoster
     ? await deps.authorPoster.getUserToken(slackUserId)
     : undefined;
+  // hasUserToken=false here means the token lookup missed (no chat:write scope,
+  // team mismatch, or no token row for this Slack user) → falls back to bot.
+  deps.logger.debug("resolved message author", {
+    login: user.login,
+    githubId: user.id,
+    slackUserId,
+    hasProfileName: Boolean(profile?.name),
+    authorPosterWired: Boolean(deps.authorPoster),
+    hasUserToken: Boolean(userToken),
+  });
   return { slackUserId, name: profile?.name, iconUrl: profile?.iconUrl, userToken };
 }
 
