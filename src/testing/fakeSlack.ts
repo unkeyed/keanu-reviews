@@ -2,6 +2,7 @@ import type {
   LeaveChannelOutcome,
   SlackClient,
   SlackMessage,
+  SlackMessageUpdate,
   SlackUserProfile,
 } from "../slack/client.ts";
 
@@ -11,6 +12,10 @@ export class FakeSlackClient implements SlackClient {
   // Stored posts carry the assigned `ts` so tests can assert threading targets.
   messages: (SlackMessage & { ts: string })[] = [];
   invites: { channelId: string; userIds: string[] }[] = [];
+  // Every chat.update call, for asserting edit-sync behavior.
+  updates: SlackMessageUpdate[] = [];
+  // Every chat.delete call, for asserting delete-sync behavior.
+  deletes: { channel: string; ts: string; authorUserToken?: string }[] = [];
   leftMembers: { channelId: string; userId: string }[] = [];
   emailToUser = new Map<string, string>();
   userNames = new Map<string, string>();
@@ -103,6 +108,25 @@ export class FakeSlackClient implements SlackClient {
     this.messages.push({ ...msg, ts });
     if (msg.clientMsgId) this.clientMessageIds.set(msg.clientMsgId, ts);
     return { ts };
+  }
+  async updateMessage(update: SlackMessageUpdate): Promise<void> {
+    if (update.authorUserToken && this.invalidTokens.has(update.authorUserToken)) {
+      throw { data: { error: "token_revoked" } };
+    }
+    const msg = this.messages.find((m) => m.ts === update.ts && m.channel === update.channel);
+    if (!msg) throw { data: { error: "message_not_found" } };
+    this.updates.push(update);
+    msg.text = update.text;
+    msg.blocks = update.blocks;
+  }
+  async deleteMessage(channel: string, ts: string, authorUserToken?: string): Promise<void> {
+    if (authorUserToken && this.invalidTokens.has(authorUserToken)) {
+      throw { data: { error: "token_revoked" } };
+    }
+    const idx = this.messages.findIndex((m) => m.ts === ts && m.channel === channel);
+    if (idx === -1) throw { data: { error: "message_not_found" } };
+    this.deletes.push({ channel, ts, authorUserToken });
+    this.messages.splice(idx, 1);
   }
   async lookupUserByEmail(email: string): Promise<string | undefined> {
     return this.emailToUser.get(email);

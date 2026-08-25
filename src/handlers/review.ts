@@ -1,3 +1,4 @@
+import { findMessageEffect } from "../db/repositories/messages.ts";
 import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
 import { isBotActor, shouldSkipActor } from "../github/actors.ts";
 import { reviewerDisplayLabel } from "../identity/resolve.ts";
@@ -7,8 +8,14 @@ import {
   reviewSummaryBlocks,
   sanitizeMrkdwn,
 } from "../slack/blocks.ts";
+import type { SlackMessage } from "../slack/client.ts";
 import { RetryableError } from "../worker/retryable.ts";
-import { deliverAuthoredMessage, resolveMessageAuthor } from "./authorship.ts";
+import {
+  deleteMirroredComment,
+  deliverAuthoredMessage,
+  resolveMessageAuthor,
+  updateAuthoredMessage,
+} from "./authorship.ts";
 import { inviteMentionedUsers } from "./mentions.ts";
 import { reportMergeability } from "./mergeability.ts";
 import {
@@ -124,12 +131,27 @@ export async function handleIssueComment(
   deps: ReviewDeps,
   payload: IssueCommentPayload,
 ): Promise<void> {
-  if (payload.action !== "created") return;
+  // `created` mirrors, `edited` syncs the body, `deleted` removes the mirror;
+  // other actions are ignored.
+  if (!["created", "edited", "deleted"].includes(payload.action)) return;
   if (!payload.issue.pull_request) return; // not a PR — ignore
   // Skip bot comments (Vercel/Mintlify deploy previews, our own merge comment, …)
   // unless allow-listed. `type: "Bot"` covers our App's bot, so this also guards
   // against echoing our own merge comment (never allow-list our App's login).
   if (shouldSkipActor(payload.comment.user, deps.allowedBots)) return;
+
+  // A deletion removes the mirror without ever creating a channel.
+  if (payload.action === "deleted") {
+    await deleteMirroredComment(deps, {
+      repoFullName: payload.repository.full_name,
+      number: payload.issue.number,
+      kind: "issue_comment",
+      commentId: payload.comment.id,
+      user: payload.comment.user,
+    });
+    return;
+  }
+
   const row = await findByRepoNumber(deps.db, payload.repository.full_name, payload.issue.number);
   if (!row?.channelId) {
     throw new RetryableError(
@@ -143,23 +165,29 @@ export async function handleIssueComment(
   // spoofing their name/avatar, else the bot with a plain "by <login>" label. PR
   // conversation comments aren't threaded on GitHub, so they post top-level.
   const author = await resolveMessageAuthor(deps, c.user);
-  await deliverAuthoredMessage(
-    deps,
-    { prId: row.id, kind: "issue_comment", githubEventRef: String(c.id) },
-    author,
-    (mode) => ({
-      channel: channelId,
-      username: mode === "bot" ? author.name : undefined,
-      iconUrl: mode === "bot" ? author.iconUrl : undefined,
-      text: sanitizeMrkdwn(`Comment by ${c.user.login}`),
-      blocks: issueCommentBlocks({
-        body: c.body,
-        htmlUrl: c.html_url,
-        authorMention: author.name ? undefined : sanitizeMrkdwn(c.user.login),
-      }),
+  const effect = { prId: row.id, kind: "issue_comment", githubEventRef: String(c.id) };
+  const render = (mode: "user" | "bot"): SlackMessage => ({
+    channel: channelId,
+    username: mode === "bot" ? author.name : undefined,
+    iconUrl: mode === "bot" ? author.iconUrl : undefined,
+    text: sanitizeMrkdwn(`Comment by ${c.user.login}`),
+    blocks: issueCommentBlocks({
+      body: c.body,
+      htmlUrl: c.html_url,
+      authorMention: author.name ? undefined : sanitizeMrkdwn(c.user.login),
     }),
-  );
+  });
 
-  // Pull anyone @-mentioned in the comment into the channel (best-effort).
+  // An edit updates the mirrored message in place; otherwise post it.
+  const existing =
+    payload.action === "edited" ? await findMessageEffect(deps.db, effect) : undefined;
+  if (existing?.status === "sent" && existing.slackTs) {
+    await updateAuthoredMessage(deps, existing.slackTs, channelId, author, render);
+  } else {
+    await deliverAuthoredMessage(deps, effect, author, render);
+  }
+
+  // Pull anyone @-mentioned in the comment into the channel (best-effort). Runs
+  // on edits too, so a newly added mention still pulls that person in.
   await inviteMentionedUsers(deps, channelId, c.body);
 }

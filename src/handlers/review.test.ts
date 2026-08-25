@@ -252,6 +252,40 @@ describe("handleIssueComment (U6)", () => {
     expect(slack.messages).toHaveLength(0);
   });
 
+  it("removes the mirrored message when a conversation comment is deleted", async () => {
+    await handleIssueComment(deps(), issueComment(true));
+    const original = slack.messages.at(-1);
+    expect(original).toBeDefined();
+
+    const deleted = issueComment(true);
+    deleted.action = "deleted";
+    await handleIssueComment(deps(), deleted);
+
+    expect(slack.deletes).toEqual([
+      { channel: "C1", ts: original?.ts, authorUserToken: undefined },
+    ]);
+    expect(slack.messages.find((m) => m.ts === original?.ts)).toBeUndefined();
+  });
+
+  it("syncs an edit onto the existing Slack message in place", async () => {
+    const created = issueComment(true);
+    created.comment.body = "first draft";
+    await handleIssueComment(deps(), created);
+    const original = slack.messages.at(-1);
+    const count = slack.messages.length;
+
+    const edited = issueComment(true);
+    edited.action = "edited";
+    edited.comment.body = "second draft";
+    await handleIssueComment(deps(), edited);
+
+    expect(slack.messages).toHaveLength(count); // no new message
+    expect(slack.updates).toHaveLength(1);
+    const updated = slack.messages.find((m) => m.ts === original?.ts);
+    expect(JSON.stringify(updated?.blocks)).toContain("second draft");
+    expect(JSON.stringify(updated?.blocks)).not.toContain("first draft");
+  });
+
   it("ignores comments from bots (Vercel/Mintlify, and our own bot)", async () => {
     const bot = issueComment(true);
     bot.comment.user.type = "Bot";

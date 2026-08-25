@@ -27,6 +27,21 @@ export interface SlackMessage {
   authorUserId?: string;
 }
 
+/**
+ * A `chat.update` to replace a previously mirrored message's content in place
+ * (used to sync a GitHub comment edit). Authorship is fixed at post time and
+ * can't be changed, so this only carries new text/blocks. `authorUserToken` must
+ * be set when the original was posted with that user's token — Slack only lets a
+ * message be edited with the same token that authored it.
+ */
+export interface SlackMessageUpdate {
+  channel: string;
+  ts: string;
+  text: string;
+  blocks?: SlackBlock[];
+  authorUserToken?: string;
+}
+
 /** A Slack user's display name and avatar, for authoring mirrored comments. */
 export interface SlackUserProfile {
   name?: string;
@@ -76,6 +91,14 @@ export interface SlackClient {
   /** Make a specific user leave `channelId` using their own token (silent). */
   leaveChannelAsUser(channelId: string, userToken: string): Promise<LeaveChannelOutcome>;
   postMessage(msg: SlackMessage): Promise<{ ts: string }>;
+  /** Replace a mirrored message's content in place (syncs a GitHub comment edit). */
+  updateMessage(update: SlackMessageUpdate): Promise<void>;
+  /**
+   * Delete a mirrored message (syncs a GitHub comment deletion). `authorUserToken`
+   * must be set when the original was posted with that user's token — Slack only
+   * lets a message be deleted with the same token that authored it.
+   */
+  deleteMessage(channel: string, ts: string, authorUserToken?: string): Promise<void>;
   lookupUserByEmail(email: string): Promise<string | undefined>;
   /** The user's Slack display name (no ping), or undefined if unknown. */
   lookupUserName(userId: string): Promise<string | undefined>;

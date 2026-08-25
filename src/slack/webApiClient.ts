@@ -4,6 +4,7 @@ import {
   type LeaveChannelOutcome,
   type SlackClient,
   type SlackMessage,
+  type SlackMessageUpdate,
 } from "./client.ts";
 import { Pacer, type SleepFn, withRetry } from "./rateLimiter.ts";
 
@@ -444,6 +445,38 @@ export function createWebApiSlackClient(
           // the bot (optionally spoofing name/avatar). See postAsUser/postAsBot.
           const ts = msg.authorUserToken ? await postAsUser(msg) : await postAsBot(msg);
           return { ts: requireNonEmptyString(ts, "chat.postMessage timestamp") };
+        }),
+      ),
+    updateMessage: (update: SlackMessageUpdate) =>
+      postPacer.run(update.channel, () =>
+        call(async () => {
+          const args = {
+            channel: update.channel,
+            ts: update.ts,
+            text: update.text,
+            blocks: update.blocks,
+          };
+          // A message posted with a user token can only be edited with that same
+          // token; a bot-posted one is edited with the bot token (and may need the
+          // channel made writable first).
+          if (update.authorUserToken) {
+            await userWebFactory(update.authorUserToken).apiCall("chat.update", args);
+          } else {
+            await withWritableChannel(update.channel, () => web.apiCall("chat.update", args));
+          }
+        }),
+      ),
+    deleteMessage: (channel: string, ts: string, authorUserToken?: string) =>
+      postPacer.run(channel, () =>
+        call(async () => {
+          const args = { channel, ts };
+          // A user-posted message can only be deleted with that user's token; a
+          // bot-posted one with the bot token (channel made writable first).
+          if (authorUserToken) {
+            await userWebFactory(authorUserToken).apiCall("chat.delete", args);
+          } else {
+            await withWritableChannel(channel, () => web.apiCall("chat.delete", args));
+          }
         }),
       ),
     lookupUserByEmail: (email) =>

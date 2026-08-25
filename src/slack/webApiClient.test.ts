@@ -131,6 +131,60 @@ describe("Slack Web API adapter", () => {
     expect(web.apiCall).not.toHaveBeenCalled();
   });
 
+  it("edits a bot-authored message with the bot token via chat.update", async () => {
+    const web = fakeWebApi();
+    const slack = createWebApiSlackClient("unused", { web });
+
+    await slack.updateMessage({ channel: "C123", ts: "1.2", text: "new", blocks: [] });
+
+    expect(web.apiCall).toHaveBeenCalledWith("chat.update", {
+      channel: "C123",
+      ts: "1.2",
+      text: "new",
+      blocks: [],
+    });
+  });
+
+  it("edits a user-authored message with that user's token, not the bot", async () => {
+    const web = fakeWebApi();
+    const userUpdate = vi.fn(async () => ({ ok: true }));
+    const userWebFactory = vi.fn(() => ({ apiCall: userUpdate }) as never);
+    const slack = createWebApiSlackClient("unused", { web, userWebFactory });
+
+    await slack.updateMessage({
+      channel: "C123",
+      ts: "1.2",
+      text: "new",
+      authorUserToken: "xoxp-flo",
+    });
+
+    expect(userWebFactory).toHaveBeenCalledWith("xoxp-flo");
+    expect(userUpdate).toHaveBeenCalledWith("chat.update", expect.objectContaining({ ts: "1.2" }));
+    expect(web.apiCall).not.toHaveBeenCalled(); // never touched the bot token
+  });
+
+  it("deletes a bot-authored message with the bot token via chat.delete", async () => {
+    const web = fakeWebApi();
+    const slack = createWebApiSlackClient("unused", { web });
+
+    await slack.deleteMessage("C123", "1.2");
+
+    expect(web.apiCall).toHaveBeenCalledWith("chat.delete", { channel: "C123", ts: "1.2" });
+  });
+
+  it("deletes a user-authored message with that user's token, not the bot", async () => {
+    const web = fakeWebApi();
+    const userDelete = vi.fn(async () => ({ ok: true }));
+    const userWebFactory = vi.fn(() => ({ apiCall: userDelete }) as never);
+    const slack = createWebApiSlackClient("unused", { web, userWebFactory });
+
+    await slack.deleteMessage("C123", "1.2", "xoxp-flo");
+
+    expect(userWebFactory).toHaveBeenCalledWith("xoxp-flo");
+    expect(userDelete).toHaveBeenCalledWith("chat.delete", { channel: "C123", ts: "1.2" });
+    expect(web.apiCall).not.toHaveBeenCalled();
+  });
+
   it("configures the production client to keep network retries inside durable leases", () => {
     const web = fakeWebApi();
     const webFactory = vi.fn(() => web);

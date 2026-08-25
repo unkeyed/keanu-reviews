@@ -1,4 +1,5 @@
-import type { MessageEffectInput } from "../db/repositories/messages.ts";
+import { type MessageEffectInput, findMessageEffect } from "../db/repositories/messages.ts";
+import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
 import { resolveSlackUser } from "../identity/resolve.ts";
 import { type SlackMessage, isDeadUserTokenError } from "../slack/client.ts";
 import { type DeliveredSlackMessage, deliverSlackMessage } from "../slack/deliver.ts";
@@ -78,4 +79,83 @@ export async function deliverAuthoredMessage(
     }
   }
   return deliverSlackMessage(deps.db, deps.slack, effect, render("bot"));
+}
+
+/**
+ * Sync a GitHub comment edit onto its already-mirrored Slack message via
+ * chat.update. Re-resolves authorship the same way the original post did, so a
+ * user-authored message is edited with the user's token and a bot-authored one
+ * with the bot token (Slack requires the editing token to match the author).
+ *
+ * Best-effort: an edit that can't be applied — authorship changed since the
+ * original post, the message was deleted, or a transient Slack failure — must
+ * not poison the job; the original mirrored message simply stands.
+ */
+export async function updateAuthoredMessage(
+  deps: PrHandlerDeps,
+  slackTs: string,
+  channel: string,
+  author: MessageAuthor,
+  render: (mode: "user" | "bot") => SlackMessage,
+): Promise<void> {
+  const asUser = Boolean(author.userToken && author.slackUserId && deps.authorPoster);
+  const content = render(asUser ? "user" : "bot");
+  try {
+    await deps.slack.updateMessage({
+      channel,
+      ts: slackTs,
+      text: content.text,
+      blocks: content.blocks,
+      authorUserToken: asUser ? author.userToken : undefined,
+    });
+  } catch (error) {
+    deps.logger.warn("failed to sync comment edit to Slack", {
+      channel,
+      ts: slackTs,
+      err: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
+ * Sync a GitHub comment deletion by removing its mirrored Slack message. Resolves
+ * the PR without creating a channel (a deletion must never spin one up) and only
+ * acts when the message was actually mirrored. Deletes with the same token that
+ * authored the message. Best-effort: a failure (already gone, authorship changed,
+ * transient) is logged, not thrown.
+ */
+export async function deleteMirroredComment(
+  deps: PrHandlerDeps,
+  opts: {
+    repoFullName: string;
+    number: number;
+    kind: string;
+    commentId: number;
+    user: { id: number; login: string };
+  },
+): Promise<void> {
+  const row = await findByRepoNumber(deps.db, opts.repoFullName, opts.number);
+  if (!row?.channelId) return; // PR never tracked / no channel → nothing mirrored
+  const existing = await findMessageEffect(deps.db, {
+    prId: row.id,
+    kind: opts.kind,
+    githubEventRef: String(opts.commentId),
+  });
+  if (existing?.status !== "sent" || !existing.slackTs) return; // never mirrored (or still in flight)
+
+  const author = await resolveMessageAuthor(deps, opts.user);
+  const asUser = Boolean(author.userToken && author.slackUserId && deps.authorPoster);
+  try {
+    await deps.slack.deleteMessage(
+      row.channelId,
+      existing.slackTs,
+      asUser ? author.userToken : undefined,
+    );
+  } catch (error) {
+    deps.logger.warn("failed to sync comment deletion to Slack", {
+      channel: row.channelId,
+      ts: existing.slackTs,
+      err: error instanceof Error ? error.message : String(error),
+    });
+  }
 }

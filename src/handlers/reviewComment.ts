@@ -1,8 +1,14 @@
 import { findMessageEffect } from "../db/repositories/messages.ts";
 import { shouldSkipActor } from "../github/actors.ts";
 import { reviewCommentBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
+import type { SlackMessage } from "../slack/client.ts";
 import { RetryableError } from "../worker/retryable.ts";
-import { deliverAuthoredMessage, resolveMessageAuthor } from "./authorship.ts";
+import {
+  deleteMirroredComment,
+  deliverAuthoredMessage,
+  resolveMessageAuthor,
+  updateAuthoredMessage,
+} from "./authorship.ts";
 import { inviteMentionedUsers } from "./mentions.ts";
 import {
   type PrHandlerDeps,
@@ -43,8 +49,23 @@ export async function handleReviewComment(
   deps: PrHandlerDeps,
   payload: ReviewCommentPayload,
 ): Promise<void> {
-  if (payload.action !== "created") return;
+  // `created` mirrors, `edited` syncs the body, `deleted` removes the mirror (R4);
+  // other actions (resolved, …) are ignored.
+  if (!["created", "edited", "deleted"].includes(payload.action)) return;
   if (shouldSkipActor(payload.comment.user, deps.allowedBots)) return; // skip non-allowed bots
+
+  // A deletion removes the mirror without ever creating a channel.
+  if (payload.action === "deleted") {
+    await deleteMirroredComment(deps, {
+      repoFullName: payload.repository.full_name,
+      number: payload.pull_request.number,
+      kind: REVIEW_COMMENT_KIND,
+      commentId: payload.comment.id,
+      user: payload.comment.user,
+    });
+    return;
+  }
+
   // The PR author's inline replies ARE mirrored — replying to review feedback is
   // the core channel conversation.
   const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
@@ -73,29 +94,36 @@ export async function handleReviewComment(
     threadTs = parent?.slackTs ?? undefined; // parent not mirrored yet -> top-level
   }
 
-  await deliverAuthoredMessage(
-    deps,
-    { prId: row.id, kind: REVIEW_COMMENT_KIND, githubEventRef: String(c.id) },
-    author,
-    (mode) => ({
-      channel: channelId,
-      threadTs,
-      // "bot" mode spoofs the linked user's name/avatar (today's behavior); "user"
-      // mode posts natively as them, so no spoof is needed.
-      username: mode === "bot" ? author.name : undefined,
-      iconUrl: mode === "bot" ? author.iconUrl : undefined,
-      text: sanitizeMrkdwn(`New review comment on ${c.path}${c.line ? `:${c.line}` : ""}`),
-      blocks: reviewCommentBlocks({
-        body: c.body,
-        permalink,
-        path: c.path,
-        line: c.line ?? undefined,
-        // Only label with the raw login when we have no Slack identity at all.
-        authorMention: author.name ? undefined : sanitizeMrkdwn(c.user.login),
-      }),
+  const effect = { prId: row.id, kind: REVIEW_COMMENT_KIND, githubEventRef: String(c.id) };
+  const render = (mode: "user" | "bot"): SlackMessage => ({
+    channel: channelId,
+    threadTs,
+    // "bot" mode spoofs the linked user's name/avatar (today's behavior); "user"
+    // mode posts natively as them, so no spoof is needed.
+    username: mode === "bot" ? author.name : undefined,
+    iconUrl: mode === "bot" ? author.iconUrl : undefined,
+    text: sanitizeMrkdwn(`New review comment on ${c.path}${c.line ? `:${c.line}` : ""}`),
+    blocks: reviewCommentBlocks({
+      body: c.body,
+      permalink,
+      path: c.path,
+      line: c.line ?? undefined,
+      // Only label with the raw login when we have no Slack identity at all.
+      authorMention: author.name ? undefined : sanitizeMrkdwn(c.user.login),
     }),
-  );
+  });
 
-  // Pull anyone @-mentioned in the comment into the channel (best-effort).
+  // An edit updates the already-mirrored message in place; otherwise post it (a
+  // first-seen comment, or an edit that arrived before we ever mirrored it).
+  const existing =
+    payload.action === "edited" ? await findMessageEffect(deps.db, effect) : undefined;
+  if (existing?.status === "sent" && existing.slackTs) {
+    await updateAuthoredMessage(deps, existing.slackTs, channelId, author, render);
+  } else {
+    await deliverAuthoredMessage(deps, effect, author, render);
+  }
+
+  // Pull anyone @-mentioned in the comment into the channel (best-effort). Runs
+  // on edits too, so a newly added mention still pulls that person in.
   await inviteMentionedUsers(deps, channelId, c.body);
 }

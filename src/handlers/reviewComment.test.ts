@@ -168,6 +168,96 @@ describe("handleReviewComment (U6)", () => {
     expect(slack.invites).toHaveLength(0);
   });
 
+  it("syncs a comment edit onto the existing Slack message (chat.update, no new post)", async () => {
+    await seedChannel();
+    await handleReviewComment(deps(), payload({ body: "original body" }));
+    const original = slack.messages.at(-1);
+    expect(JSON.stringify(original?.blocks)).toContain("original body");
+    const count = slack.messages.length;
+
+    await handleReviewComment(deps(), { ...payload({ body: "edited body" }), action: "edited" });
+
+    expect(slack.messages).toHaveLength(count); // updated in place, not re-posted
+    expect(slack.updates).toHaveLength(1);
+    const updated = slack.messages.find((m) => m.ts === original?.ts);
+    expect(JSON.stringify(updated?.blocks)).toContain("edited body");
+    expect(JSON.stringify(updated?.blocks)).not.toContain("original body");
+  });
+
+  it("posts an edit as a new message when the comment was never mirrored", async () => {
+    await seedChannel();
+    await handleReviewComment(deps(), { ...payload({ body: "late body" }), action: "edited" });
+    expect(slack.messages).toHaveLength(1);
+    expect(slack.updates).toHaveLength(0);
+    expect(JSON.stringify(slack.messages.at(-1)?.blocks)).toContain("late body");
+  });
+
+  it("edits a user-authored comment with that user's token", async () => {
+    await seedChannel();
+    await upsertIdentity(db, {
+      githubUserId: 7,
+      githubLogin: "flo",
+      slackUserId: "U7",
+      source: "self-link",
+    });
+    slack.userProfiles.set("U7", { name: "Flo Rider" });
+    const authorPoster = {
+      getUserToken: async () => "xoxp-flo",
+      onInvalidToken: async () => {},
+    };
+    await handleReviewComment({ ...deps(), authorPoster }, payload({ body: "v1" }));
+    await handleReviewComment(
+      { ...deps(), authorPoster },
+      { ...payload({ body: "v2" }), action: "edited" },
+    );
+    expect(slack.updates).toHaveLength(1);
+    expect(slack.updates[0]?.authorUserToken).toBe("xoxp-flo"); // edited as the user
+  });
+
+  it("removes the mirrored Slack message when the comment is deleted", async () => {
+    await seedChannel();
+    await handleReviewComment(deps(), payload());
+    const original = slack.messages.at(-1);
+    expect(original).toBeDefined();
+
+    await handleReviewComment(deps(), { ...payload(), action: "deleted" });
+
+    expect(slack.deletes).toEqual([
+      { channel: "C1", ts: original?.ts, authorUserToken: undefined },
+    ]);
+    expect(slack.messages.find((m) => m.ts === original?.ts)).toBeUndefined(); // gone
+  });
+
+  it("does nothing when deleting a comment that was never mirrored", async () => {
+    await seedChannel();
+    await handleReviewComment(deps(), { ...payload(), action: "deleted" });
+    expect(slack.deletes).toHaveLength(0);
+    expect(slack.messages).toHaveLength(0);
+  });
+
+  it("does not create a channel when a comment is deleted for an untracked PR", async () => {
+    // No seedChannel: the PR was never tracked.
+    await handleReviewComment(deps(), { ...payload(), action: "deleted" });
+    expect(slack.channels).toHaveLength(0);
+    expect(slack.deletes).toHaveLength(0);
+  });
+
+  it("deletes a user-authored comment with that user's token", async () => {
+    await seedChannel();
+    await upsertIdentity(db, {
+      githubUserId: 7,
+      githubLogin: "flo",
+      slackUserId: "U7",
+      source: "self-link",
+    });
+    slack.userProfiles.set("U7", { name: "Flo Rider" });
+    const authorPoster = { getUserToken: async () => "xoxp-flo", onInvalidToken: async () => {} };
+    await handleReviewComment({ ...deps(), authorPoster }, payload());
+    await handleReviewComment({ ...deps(), authorPoster }, { ...payload(), action: "deleted" });
+    expect(slack.deletes).toHaveLength(1);
+    expect(slack.deletes[0]?.authorUserToken).toBe("xoxp-flo");
+  });
+
   it("mirrors an allow-listed bot's comment top-level but still skips other bots", async () => {
     await seedChannel();
     const allowed = { ...deps(), allowedBots: new Set(["pullfrog"]) };
