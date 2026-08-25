@@ -259,6 +259,10 @@ export function createWebApiSlackClient(
           client_msg_id: msg.clientMsgId,
           username: withAuthor ? msg.username : undefined,
           icon_url: withAuthor ? msg.iconUrl : undefined,
+          // Never unfurl the GitHub links we mirror — the block already links out,
+          // and a preview card is noise (and would be re-added by the GitHub app).
+          unfurl_links: false,
+          unfurl_media: false,
         }),
       );
     try {
@@ -284,6 +288,10 @@ export function createWebApiSlackClient(
         blocks: msg.blocks,
         thread_ts: msg.threadTs,
         client_msg_id: msg.clientMsgId,
+        // User-token posts default unfurl_links to true — the reason the GitHub
+        // link preview started appearing. Suppress it to match the bot posts.
+        unfurl_links: false,
+        unfurl_media: false,
       });
     try {
       return ((await post()) as { ts?: unknown }).ts;

@@ -131,6 +131,25 @@ describe("Slack Web API adapter", () => {
     expect(web.apiCall).not.toHaveBeenCalled();
   });
 
+  it("suppresses link unfurling on both bot and user posts", async () => {
+    const web = fakeWebApi();
+    const userPost = vi.fn(async () => ({ ts: "9.9" }));
+    const userWebFactory = vi.fn(() => ({ apiCall: userPost }) as never);
+    const slack = createWebApiSlackClient("unused", { web, userWebFactory });
+
+    await slack.postMessage({ channel: "C123", text: "bot" });
+    expect(web.apiCall).toHaveBeenCalledWith(
+      "chat.postMessage",
+      expect.objectContaining({ unfurl_links: false, unfurl_media: false }),
+    );
+
+    await slack.postMessage({ channel: "C123", text: "user", authorUserToken: "xoxp-flo" });
+    expect(userPost).toHaveBeenCalledWith(
+      "chat.postMessage",
+      expect.objectContaining({ unfurl_links: false, unfurl_media: false }),
+    );
+  });
+
   it("edits a bot-authored message with the bot token via chat.update", async () => {
     const web = fakeWebApi();
     const slack = createWebApiSlackClient("unused", { web });
@@ -341,6 +360,8 @@ describe("Slack Web API adapter", () => {
       blocks,
       thread_ts: "170000.1",
       client_msg_id: "54cf8f7e-071f-4bbc-a1fe-8c5b68d8b152",
+      unfurl_links: false,
+      unfurl_media: false,
     });
 
     web.apiCall.mockResolvedValueOnce({});
