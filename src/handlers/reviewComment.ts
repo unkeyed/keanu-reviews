@@ -1,6 +1,11 @@
 import { findMessageEffect } from "../db/repositories/messages.ts";
-import { shouldSkipActor } from "../github/actors.ts";
-import { reviewCommentBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
+import { isBotActor, shouldSkipActor } from "../github/actors.ts";
+import {
+  extractEmbeddedImages,
+  imageBlocks,
+  reviewCommentBlocks,
+  sanitizeMrkdwn,
+} from "../slack/blocks.ts";
 import type { SlackMessage } from "../slack/client.ts";
 import { RetryableError } from "../worker/retryable.ts";
 import {
@@ -94,6 +99,8 @@ export async function handleReviewComment(
     threadTs = parent?.slackTs ?? undefined; // parent not mirrored yet -> top-level
   }
 
+  // Embed images from human comments only — bots' deploy-preview/logo images are noise.
+  const images = isBotActor(c.user) ? [] : extractEmbeddedImages(c.body);
   const effect = { prId: row.id, kind: REVIEW_COMMENT_KIND, githubEventRef: String(c.id) };
   const render = (mode: "user" | "bot"): SlackMessage => ({
     channel: channelId,
@@ -103,14 +110,17 @@ export async function handleReviewComment(
     username: mode === "bot" ? author.name : undefined,
     iconUrl: mode === "bot" ? author.iconUrl : undefined,
     text: sanitizeMrkdwn(`New review comment on ${c.path}${c.line ? `:${c.line}` : ""}`),
-    blocks: reviewCommentBlocks({
-      body: c.body,
-      permalink,
-      path: c.path,
-      line: c.line ?? undefined,
-      // Only label with the raw login when we have no Slack identity at all.
-      authorMention: author.name ? undefined : sanitizeMrkdwn(c.user.login),
-    }),
+    blocks: [
+      ...reviewCommentBlocks({
+        body: c.body,
+        permalink,
+        path: c.path,
+        line: c.line ?? undefined,
+        // Only label with the raw login when we have no Slack identity at all.
+        authorMention: author.name ? undefined : sanitizeMrkdwn(c.user.login),
+      }),
+      ...imageBlocks(images),
+    ],
   });
 
   // An edit updates the already-mirrored message in place; otherwise post it (a
@@ -124,6 +134,7 @@ export async function handleReviewComment(
   }
 
   // Pull anyone @-mentioned in the comment into the channel (best-effort). Runs
-  // on edits too, so a newly added mention still pulls that person in.
-  await inviteMentionedUsers(deps, channelId, c.body);
+  // on edits too, so a newly added mention still pulls that person in. The PR
+  // author is skipped — they're already a member of their own channel.
+  await inviteMentionedUsers(deps, channelId, c.body, payload.pull_request.user.login);
 }

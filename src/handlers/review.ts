@@ -4,6 +4,8 @@ import { isBotActor, shouldSkipActor } from "../github/actors.ts";
 import { reviewerDisplayLabel } from "../identity/resolve.ts";
 import {
   cleanGithubMarkdown,
+  extractEmbeddedImages,
+  imageBlocks,
   issueCommentBlocks,
   reviewSummaryBlocks,
   sanitizeMrkdwn,
@@ -86,6 +88,8 @@ export async function handleReview(
     // Never ping the reviewer for their own review activity (approve, request
     // changes, comment) — show their Slack display name as plain text instead.
     const authorLabel = await reviewerDisplayLabel(deps.slack, author.slackUserId, r.user.login);
+    // Embed images from human reviews only.
+    const images = isBotActor(r.user) ? [] : extractEmbeddedImages(r.body ?? "");
     await deliverAuthoredMessage(
       deps,
       { prId: row.id, kind: "review", githubEventRef: String(r.id) },
@@ -95,20 +99,24 @@ export async function handleReview(
         // Thread bot reviews under the PR root to keep the channel readable.
         threadTs: isBotActor(r.user) ? (row.rootMessageTs ?? undefined) : undefined,
         text: sanitizeMrkdwn(`Review ${r.state} by ${r.user.login}`),
-        blocks: reviewSummaryBlocks({
-          state: r.state,
-          body: r.body ?? "",
-          htmlUrl: r.html_url,
-          // Reviews never spoof name/avatar: "user" mode posts natively as them
-          // (no label); otherwise show the plain-text display-name label.
-          authorMention: mode === "user" ? undefined : authorLabel,
-        }),
+        blocks: [
+          ...reviewSummaryBlocks({
+            state: r.state,
+            body: r.body ?? "",
+            htmlUrl: r.html_url,
+            // Reviews never spoof name/avatar: "user" mode posts natively as them
+            // (no label); otherwise show the plain-text display-name label.
+            authorMention: mode === "user" ? undefined : authorLabel,
+          }),
+          ...imageBlocks(images),
+        ],
       }),
     );
   }
 
   // Pull anyone @-mentioned in the review body into the channel (best-effort).
-  await inviteMentionedUsers(deps, channelId, r.body ?? "");
+  // The PR author is skipped — already a member of their own channel.
+  await inviteMentionedUsers(deps, channelId, r.body ?? "", payload.pull_request.user.login);
 
   // A submitted review can flip mergeability (e.g. required approval satisfied).
   await reportMergeability(deps, row, `review:${r.id}`);
@@ -117,7 +125,8 @@ export async function handleReview(
 export interface IssueCommentPayload {
   action: string;
   repository: { full_name: string };
-  issue: { number: number; pull_request?: unknown };
+  // `issue.user` is the PR opener (issues and PRs share the same payload shape).
+  issue: { number: number; pull_request?: unknown; user?: { login: string } };
   comment: {
     id: number;
     body: string;
@@ -165,17 +174,22 @@ export async function handleIssueComment(
   // spoofing their name/avatar, else the bot with a plain "by <login>" label. PR
   // conversation comments aren't threaded on GitHub, so they post top-level.
   const author = await resolveMessageAuthor(deps, c.user);
+  // Embed images from human comments only.
+  const images = isBotActor(c.user) ? [] : extractEmbeddedImages(c.body);
   const effect = { prId: row.id, kind: "issue_comment", githubEventRef: String(c.id) };
   const render = (mode: "user" | "bot"): SlackMessage => ({
     channel: channelId,
     username: mode === "bot" ? author.name : undefined,
     iconUrl: mode === "bot" ? author.iconUrl : undefined,
     text: sanitizeMrkdwn(`Comment by ${c.user.login}`),
-    blocks: issueCommentBlocks({
-      body: c.body,
-      htmlUrl: c.html_url,
-      authorMention: author.name ? undefined : sanitizeMrkdwn(c.user.login),
-    }),
+    blocks: [
+      ...issueCommentBlocks({
+        body: c.body,
+        htmlUrl: c.html_url,
+        authorMention: author.name ? undefined : sanitizeMrkdwn(c.user.login),
+      }),
+      ...imageBlocks(images),
+    ],
   });
 
   // An edit updates the mirrored message in place; otherwise post it.
@@ -188,6 +202,7 @@ export async function handleIssueComment(
   }
 
   // Pull anyone @-mentioned in the comment into the channel (best-effort). Runs
-  // on edits too, so a newly added mention still pulls that person in.
-  await inviteMentionedUsers(deps, channelId, c.body);
+  // on edits too, so a newly added mention still pulls that person in. The PR
+  // author is skipped — already a member of their own channel.
+  await inviteMentionedUsers(deps, channelId, c.body, payload.issue.user?.login);
 }

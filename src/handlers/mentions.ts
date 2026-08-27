@@ -24,13 +24,18 @@ export function extractGithubMentions(body: string): string[] {
  * bots) are silently ignored. Never throws — a lookup or invite failure must not
  * block comment mirroring. inviteUsers is idempotent, so repeated mentions of an
  * existing member are a no-op.
+ *
+ * `excludeLogin` (the PR author) is skipped — they're invited to their own
+ * channel by default, so there's no need to re-invite them for a mention.
  */
 export async function inviteMentionedUsers(
   deps: PrHandlerDeps,
   channelId: string,
   body: string,
+  excludeLogin?: string,
 ): Promise<void> {
-  const logins = extractGithubMentions(body);
+  const skip = excludeLogin?.toLowerCase();
+  const logins = extractGithubMentions(body).filter((login) => login !== skip);
   if (logins.length === 0) return;
   try {
     const ids = new Set<string>();

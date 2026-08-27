@@ -159,6 +159,37 @@ describe("handleReviewComment (U6)", () => {
     expect(slack.invites).toContainEqual({ channelId: "C1", userIds: ["Udave"] });
   });
 
+  it("does not re-invite the PR author when they are @-mentioned", async () => {
+    await seedChannel();
+    // The PR author (payload default) is `oz`, linked to a Slack user.
+    await upsertIdentity(db, {
+      githubUserId: 100,
+      githubLogin: "oz",
+      slackUserId: "Uoz",
+      source: "self-link",
+    });
+    await handleReviewComment(deps(), payload({ body: "thanks @oz!" }));
+    expect(slack.invites).toHaveLength(0); // author already a channel member
+  });
+
+  it("invites other mentioned users but skips the PR author", async () => {
+    await seedChannel();
+    await upsertIdentity(db, {
+      githubUserId: 100,
+      githubLogin: "oz",
+      slackUserId: "Uoz",
+      source: "self-link",
+    });
+    await upsertIdentity(db, {
+      githubUserId: 42,
+      githubLogin: "dave-hawkins",
+      slackUserId: "Udave",
+      source: "self-link",
+    });
+    await handleReviewComment(deps(), payload({ body: "@oz @dave-hawkins please look" }));
+    expect(slack.invites).toEqual([{ channelId: "C1", userIds: ["Udave"] }]);
+  });
+
   it("does not invite for an unlinked mention or a team mention", async () => {
     await seedChannel();
     await handleReviewComment(
@@ -256,6 +287,38 @@ describe("handleReviewComment (U6)", () => {
     await handleReviewComment({ ...deps(), authorPoster }, { ...payload(), action: "deleted" });
     expect(slack.deletes).toHaveLength(1);
     expect(slack.deletes[0]?.authorUserToken).toBe("xoxp-flo");
+  });
+
+  it("embeds an image from a human comment as an image block", async () => {
+    await seedChannel();
+    await handleReviewComment(
+      deps(),
+      payload({ body: "here it is ![shot](https://img.example.com/x.png)" }),
+    );
+    const blocks = slack.messages.at(-1)?.blocks ?? [];
+    expect(blocks).toContainEqual({
+      type: "image",
+      image_url: "https://img.example.com/x.png",
+      alt_text: "shot",
+    });
+    // The raw markdown is not left in the quoted text.
+    expect(JSON.stringify(blocks)).not.toContain("![shot]");
+  });
+
+  it("does not embed images from an allow-listed bot's comment", async () => {
+    await seedChannel();
+    const allowed = { ...deps(), allowedBots: new Set(["pullfrog"]) };
+    await handleReviewComment(
+      allowed,
+      payload({
+        id: 88,
+        user: { id: 20, login: "pullfrog[bot]", type: "Bot" },
+        body: "preview ![p](https://img.example.com/y.png)",
+      }),
+    );
+    expect(slack.messages).toHaveLength(1); // mirrored (allow-listed)
+    const blocks = slack.messages.at(-1)?.blocks ?? [];
+    expect(blocks.some((b) => (b as { type?: string }).type === "image")).toBe(false);
   });
 
   it("mirrors an allow-listed bot's comment top-level but still skips other bots", async () => {

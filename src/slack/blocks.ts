@@ -32,6 +32,9 @@ export function cleanGithubMarkdown(body: string): string {
       .replace(/<!--[\s\S]*?-->/g, "")
       // The whole `<sup>…</sup>` marketing/footer block (logos, "Fix all" links).
       .replace(/<sup>[\s\S]*?<\/sup>/gi, "")
+      // Markdown images: rendered separately as image blocks (extractEmbeddedImages),
+      // so drop the raw `![alt](url)` from the text instead of showing it verbatim.
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
       // Media/void elements have no text to keep.
       .replace(/<(?:picture|source|img)\b[^>]*>/gi, "")
       .replace(/<\/(?:picture|source)>/gi, "")
@@ -46,6 +49,67 @@ export function cleanGithubMarkdown(body: string): string {
       .replace(/\n{3,}/g, "\n\n")
       .trim()
   );
+}
+
+const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|svg)(?:[?#]|$)/i;
+
+export interface EmbeddedImage {
+  url: string;
+  alt: string;
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const { protocol } = new URL(value);
+    return protocol === "https:" || protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Extract embedded images from a GitHub comment/review body: markdown
+ * `![alt](url)`, HTML `<img src>`, and bare image-file URLs (pasted screenshots
+ * GitHub auto-embeds). Only well-formed http(s) URLs are kept — a malformed URL
+ * in an image block makes Slack reject the whole message — deduped by URL and
+ * capped so a comment can't flood the channel. Callers gate this on non-bot
+ * authors so we don't surface bots' deploy-preview/logo images.
+ */
+export function extractEmbeddedImages(body: string, max = 5): EmbeddedImage[] {
+  const out: EmbeddedImage[] = [];
+  const seen = new Set<string>();
+  const add = (rawUrl: string, alt: string) => {
+    const url = rawUrl.trim();
+    if (!isHttpUrl(url) || seen.has(url)) return;
+    seen.add(url);
+    out.push({ url, alt: alt.trim() || "image" });
+  };
+  // Markdown images: ![alt](url "optional title") — parsed first so the URL is
+  // clean and any alt text is captured before the bare-URL sweep sees it.
+  for (const m of body.matchAll(/!\[([^\]]*)\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)/g)) {
+    add(m[2] ?? "", m[1] ?? "");
+  }
+  // HTML <img src="…" alt="…">.
+  for (const m of body.matchAll(/<img\b[^>]*?\bsrc=["']([^"']+)["'][^>]*>/gi)) {
+    const alt = /\balt=["']([^"']*)["']/i.exec(m[0]);
+    add(m[1] ?? "", alt?.[1] ?? "");
+  }
+  // Bare image-file URLs. `seen` already holds any markdown/img URLs, so this
+  // only adds standalone ones; trailing punctuation is trimmed before matching.
+  for (const m of body.matchAll(/https?:\/\/\S+/gi)) {
+    const url = (m[0] ?? "").replace(/[)\].,;:!'"]+$/, "");
+    if (IMAGE_EXT_RE.test(url)) add(url, "");
+  }
+  return out.slice(0, max);
+}
+
+/** Slack image blocks for embedded images (alt_text is required and length-capped). */
+export function imageBlocks(images: EmbeddedImage[]): SlackBlock[] {
+  return images.map((img) => ({
+    type: "image",
+    image_url: img.url,
+    alt_text: img.alt.slice(0, 2000),
+  }));
 }
 
 export const SLACK_SECTION_TEXT_LIMIT = 3_000;
