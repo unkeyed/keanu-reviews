@@ -1,5 +1,6 @@
 import { findMessageEffect } from "../db/repositories/messages.ts";
 import { isBotActor, shouldSkipActor } from "../github/actors.ts";
+import { resolveEmbeddedImages } from "../github/attachments.ts";
 import {
   extractEmbeddedImages,
   imageBlocks,
@@ -100,7 +101,10 @@ export async function handleReviewComment(
   }
 
   // Embed images from human comments only — bots' deploy-preview/logo images are noise.
-  const images = isBotActor(c.user) ? [] : extractEmbeddedImages(c.body);
+  // Resolve GitHub attachment URLs to a form Slack can actually render.
+  const images = isBotActor(c.user)
+    ? []
+    : await resolveEmbeddedImages(extractEmbeddedImages(c.body));
   const effect = { prId: row.id, kind: REVIEW_COMMENT_KIND, githubEventRef: String(c.id) };
   const render = (mode: "user" | "bot"): SlackMessage => ({
     channel: channelId,

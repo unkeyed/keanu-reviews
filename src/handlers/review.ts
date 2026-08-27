@@ -1,6 +1,7 @@
 import { findMessageEffect } from "../db/repositories/messages.ts";
 import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
 import { isBotActor, shouldSkipActor } from "../github/actors.ts";
+import { resolveEmbeddedImages } from "../github/attachments.ts";
 import { reviewerDisplayLabel } from "../identity/resolve.ts";
 import {
   cleanGithubMarkdown,
@@ -88,8 +89,10 @@ export async function handleReview(
     // Never ping the reviewer for their own review activity (approve, request
     // changes, comment) — show their Slack display name as plain text instead.
     const authorLabel = await reviewerDisplayLabel(deps.slack, author.slackUserId, r.user.login);
-    // Embed images from human reviews only.
-    const images = isBotActor(r.user) ? [] : extractEmbeddedImages(r.body ?? "");
+    // Embed images from human reviews only (resolved to a Slack-renderable URL).
+    const images = isBotActor(r.user)
+      ? []
+      : await resolveEmbeddedImages(extractEmbeddedImages(r.body ?? ""));
     await deliverAuthoredMessage(
       deps,
       { prId: row.id, kind: "review", githubEventRef: String(r.id) },
@@ -174,8 +177,10 @@ export async function handleIssueComment(
   // spoofing their name/avatar, else the bot with a plain "by <login>" label. PR
   // conversation comments aren't threaded on GitHub, so they post top-level.
   const author = await resolveMessageAuthor(deps, c.user);
-  // Embed images from human comments only.
-  const images = isBotActor(c.user) ? [] : extractEmbeddedImages(c.body);
+  // Embed images from human comments only (resolved to a Slack-renderable URL).
+  const images = isBotActor(c.user)
+    ? []
+    : await resolveEmbeddedImages(extractEmbeddedImages(c.body));
   const effect = { prId: row.id, kind: "issue_comment", githubEventRef: String(c.id) };
   const render = (mode: "user" | "bot"): SlackMessage => ({
     channel: channelId,
