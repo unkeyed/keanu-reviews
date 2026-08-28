@@ -133,7 +133,19 @@ export async function handlePullRequest(
 
   try {
     const existing = await findByGithubPrId(db, pr.id);
-    const state: PrState = target ?? existing?.currentState ?? (pr.draft ? "draft" : "pr");
+    // State follows the latest PR facts, not event order (KTD4). A lifecycle
+    // action dictates the state; otherwise (synchronize/edited/…) derive the
+    // open-PR state from the current `draft` fact so a lost or out-of-order
+    // `ready_for_review` still self-heals on the next event — without this, a
+    // channel stays stuck at `draft-` forever. A closed/merged PR is never
+    // revived by a stray non-lifecycle event.
+    const state: PrState = target
+      ? target
+      : existing && isTerminal(existing.currentState)
+        ? existing.currentState
+        : pr.draft
+          ? "draft"
+          : "pr";
 
     const source = await applyPullRequestSource(db, {
       repoFullName,

@@ -197,6 +197,39 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     expect(row?.currentState).toBe("draft");
   });
 
+  it("heals a stuck draft channel when ready_for_review was missed (state follows facts)", async () => {
+    await handlePullRequest(deps(), payload("opened", { draft: true }));
+    expect(slack.channel("C1")?.name).toBe("draft-oz-unkey-api-1423-add-auth");
+    // ready_for_review never applied; a later synchronize carries draft: false.
+    await handlePullRequest(
+      deps(),
+      payload("synchronize", { draft: false, updated_at: "2026-08-11T12:01:00Z" }),
+    );
+    expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
+  });
+
+  it("keeps a draft channel draft on a synchronize that is still a draft", async () => {
+    await handlePullRequest(deps(), payload("opened", { draft: true }));
+    await handlePullRequest(
+      deps(),
+      payload("synchronize", { draft: true, updated_at: "2026-08-11T12:01:00Z" }),
+    );
+    expect(slack.channel("C1")?.name).toBe("draft-oz-unkey-api-1423-add-auth");
+  });
+
+  it("does not revive a merged PR from a stray synchronize", async () => {
+    await handlePullRequest(deps(), payload("opened"));
+    await handlePullRequest(deps(), payload("closed", { merged: true }));
+    expect(slack.channel("C1")?.name).toBe("merged-oz-unkey-api-1423-add-auth");
+    // A late, non-lifecycle event must not flip it back to an open state.
+    await handlePullRequest(
+      deps(),
+      payload("synchronize", { draft: false, updated_at: "2026-08-11T13:00:00Z" }),
+    );
+    expect(slack.channel("C1")?.name).toBe("merged-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.archived).toBe(true);
+  });
+
   it("ready_for_review renames draft -> pr; converted_to_draft renames back", async () => {
     await handlePullRequest(deps(), payload("opened", { draft: true }));
     await handlePullRequest(deps(), payload("ready_for_review", { draft: false }));
