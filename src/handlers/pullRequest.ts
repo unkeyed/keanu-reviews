@@ -241,6 +241,10 @@ export async function handlePullRequest(
       login: pr.user.login,
     });
     if (authorSlackId && !stayingArchived) {
+      // Show the author's name as plain text, never an `<@id>` mention — the
+      // channel invite already notifies them, and pinging them in their own
+      // channel is noise.
+      const authorLabel = await reviewerDisplayLabel(slack, authorSlackId, pr.user.login);
       await deliverSlackMessage(
         db,
         slack,
@@ -251,7 +255,7 @@ export async function handlePullRequest(
           blocks: [
             {
               type: "section",
-              text: { type: "mrkdwn", text: `👤 Opened by <@${authorSlackId}>` },
+              text: { type: "mrkdwn", text: `👤 Opened by ${authorLabel}` },
             },
           ],
         },

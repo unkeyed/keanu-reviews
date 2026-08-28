@@ -65,6 +65,20 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     expect(slack.invites).toHaveLength(1);
   });
 
+  it("shows the PR author's plain name in 'Opened by', never a ping", async () => {
+    await upsertIdentity(db, {
+      githubUserId: 100,
+      githubLogin: "oz",
+      slackUserId: "U100",
+      source: "self-link",
+    });
+    slack.userNames.set("U100", "Oz Perkins");
+    await handlePullRequest(deps(), payload("opened"));
+    const blocks = JSON.stringify(slack.messages);
+    expect(blocks).toContain("👤 Opened by Oz Perkins");
+    expect(blocks).not.toContain("<@U100>"); // never tag the author
+  });
+
   it("does not invite an unlinked author (degrades quietly)", async () => {
     await handlePullRequest(deps(), payload("opened"));
     expect(slack.invites).toHaveLength(0);
@@ -253,7 +267,9 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     ).resolves.toBeUndefined();
     expect(slack.channel("C1")?.archived).toBe(false);
     const blocks = JSON.stringify(slack.messages);
-    expect(blocks).toContain("<@U100>"); // author invite posted to the live channel
+    expect(blocks).toContain("👤 Opened by"); // author-invite note posted to the live channel
+    expect(blocks).not.toContain("<@U100>"); // plain name, never a ping
+    expect(slack.invites).toContainEqual({ channelId: "C1", userIds: ["U100"] });
   });
 
   it("re-delivered opened event does not create a second channel", async () => {
