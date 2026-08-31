@@ -77,6 +77,47 @@ export function createPullRequestFetcher(
   };
 }
 
+/** Count of a PR's current distinct approvals, from the reviews list. */
+export type ReviewApprovalFetcher = (
+  repoFullName: string,
+  number: number,
+) => Promise<number | undefined>;
+
+/**
+ * Count current approvals via `GET /repos/{owner}/{repo}/pulls/{number}/reviews`
+ * (read-only). Reviews are returned chronologically, so the last decision per
+ * reviewer wins; COMMENTED/PENDING reviews don't change a reviewer's decision.
+ * Used to suppress review reminders once a PR already has enough approvals.
+ */
+export function createReviewApprovalFetcher(
+  auth: InstallationAuth,
+  installationId: string,
+  options: GithubRequestOptions = {},
+): ReviewApprovalFetcher {
+  return async (repoFullName: string, number: number) => {
+    const repoPath = repoFullName.split("/").map(encodeURIComponent).join("/");
+    const latestByUser = new Map<number, string>();
+    for (let page = 1; ; page++) {
+      const path = `/repos/${repoPath}/pulls/${number}/reviews?per_page=100&page=${page}`;
+      const body = await githubGetJson<unknown>(auth, installationId, path, options);
+      if (body === undefined) return undefined;
+      if (!Array.isArray(body)) throw invalidResponse(path);
+      for (const review of body) {
+        if (typeof review !== "object" || review === null) continue;
+        const userId = (review as { user?: { id?: unknown } }).user?.id;
+        const state = (review as { state?: unknown }).state;
+        if (!Number.isInteger(userId) || typeof state !== "string") continue;
+        if (state === "COMMENTED" || state === "PENDING") continue; // not a decision
+        latestByUser.set(userId as number, state);
+      }
+      if (body.length < 100) break; // last page
+    }
+    let approvals = 0;
+    for (const state of latestByUser.values()) if (state === "APPROVED") approvals += 1;
+    return approvals;
+  };
+}
+
 /** Production fallback PR resolver (U7): the PR a commit heads, via the Checks-safe read API. */
 export function createPrForShaFetcher(
   auth: InstallationAuth,

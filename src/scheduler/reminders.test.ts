@@ -38,9 +38,7 @@ beforeEach(async () => {
 });
 afterEach(() => close());
 
-const scheduler = (
-  options: { maxAttempts?: number; retryBaseMs?: number; batchSize?: number } = {},
-) =>
+const scheduler = (options: Partial<Parameters<typeof createReminderScheduler>[0]> = {}) =>
   createReminderScheduler({
     db,
     slack,
@@ -49,6 +47,9 @@ const scheduler = (
     now: () => clock,
     ...options,
   });
+
+const ready = { mergeable: true, mergeableState: "clean", draft: false };
+const blocked = { mergeable: false, mergeableState: "blocked", draft: false };
 
 const advanceHours = (h: number) => {
   clock += h * 60 * 60_000;
@@ -125,6 +126,62 @@ describe("reminder scheduler (U8, R9)", () => {
     await updateState(db, PR, "merged");
     advanceHours(HOURS);
     expect(await s.processDue()).toBe(0);
+  });
+
+  it("suppresses the reminder when the PR is ready to merge", async () => {
+    const s = scheduler({ fetchPullRequest: async () => ready });
+    await s.onReviewRequested(PR, 7);
+    advanceHours(HOURS);
+    expect(await s.processDue()).toBe(0);
+    expect(slack.messages).toHaveLength(0);
+    const [row] = await db.select().from(reminders).where(eq(reminders.prId, PR));
+    expect(row?.status).toBe("cancelled");
+  });
+
+  it("suppresses the reminder when the PR already has two approvals", async () => {
+    const s = scheduler({ fetchApprovalCount: async () => 2 });
+    await s.onReviewRequested(PR, 7);
+    advanceHours(HOURS);
+    expect(await s.processDue()).toBe(0);
+    expect(slack.messages).toHaveLength(0);
+  });
+
+  it("still reminds when the PR is blocked and under the approval threshold", async () => {
+    const s = scheduler({
+      fetchPullRequest: async () => blocked,
+      fetchApprovalCount: async () => 1,
+    });
+    await s.onReviewRequested(PR, 7);
+    advanceHours(HOURS);
+    expect(await s.processDue()).toBe(1);
+    expect(slack.messages).toHaveLength(1);
+  });
+
+  it("delivers anyway when the readiness lookup fails (fail-open)", async () => {
+    const s = scheduler({
+      fetchPullRequest: async () => {
+        throw new Error("github down");
+      },
+    });
+    await s.onReviewRequested(PR, 7);
+    advanceHours(HOURS);
+    expect(await s.processDue()).toBe(1);
+    expect(slack.messages).toHaveLength(1);
+  });
+
+  it("does a single readiness lookup per PR across its reviewers", async () => {
+    let calls = 0;
+    const s = scheduler({
+      fetchPullRequest: async () => {
+        calls += 1;
+        return ready;
+      },
+    });
+    await s.onReviewRequested(PR, 7);
+    await s.onReviewRequested(PR, 8);
+    advanceHours(HOURS);
+    expect(await s.processDue()).toBe(0);
+    expect(calls).toBe(1); // shared across both reviewers' reminders
   });
 
   it("cancels on review_request_removed", async () => {

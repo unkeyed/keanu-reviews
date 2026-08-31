@@ -11,6 +11,7 @@ import {
   createGithubEmailFetcher,
   createPrForShaFetcher,
   createPullRequestFetcher,
+  createReviewApprovalFetcher,
 } from "./github/users.ts";
 import { createLogger, registerSecretValues } from "./logger.ts";
 import { createGithubOAuthRoute } from "./routes/githubOAuth.ts";
@@ -114,6 +115,8 @@ function boot(): void {
   }
 
   // Scheduler + router + worker
+  const fetchPullRequest = createPullRequestFetcher(auth, installationId);
+  const fetchApprovalCount = createReviewApprovalFetcher(auth, installationId);
   const scheduler = createReminderScheduler({
     db,
     slack,
@@ -124,6 +127,9 @@ function boot(): void {
       endHour: config.REMINDER_WINDOW_END_HOUR,
       timeZone: config.REMINDER_WINDOW_TZ,
     },
+    // Don't remind reviewers once the PR is ready to merge or already approved.
+    fetchPullRequest,
+    fetchApprovalCount,
   });
   const router = createRouter({
     db,
@@ -131,7 +137,7 @@ function boot(): void {
     logger,
     fetchGithubEmail: createGithubEmailFetcher(auth, installationId),
     fetchPrForSha: createPrForShaFetcher(auth, installationId),
-    fetchPullRequest: createPullRequestFetcher(auth, installationId),
+    fetchPullRequest,
     shippedChannel: config.SLACK_SHIPPED_CHANNEL,
     // Opt-in GitHub write: post the Slack channel URL on merge. Off by default.
     commentOnMerge: config.GITHUB_COMMENT_ON_MERGE,

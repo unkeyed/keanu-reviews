@@ -5,6 +5,7 @@ import {
   createGithubEmailFetcher,
   createGithubUserFetcher,
   createPrForShaFetcher,
+  createReviewApprovalFetcher,
 } from "./users.ts";
 
 const createAuth = (tokens: string[] = ["token-1"]): InstallationAuth => ({
@@ -97,5 +98,31 @@ describe("GitHub API fetchers", () => {
     const fetchPrs = createPrForShaFetcher(auth, "42", { fetch: fetchFn });
 
     await expect(fetchPrs("unkeyed/example", "abc123")).resolves.toEqual([7, 9]);
+  });
+
+  it("counts current approvals: latest decision per reviewer, ignoring comments", async () => {
+    const auth = createAuth();
+    const reviews = [
+      { user: { id: 1 }, state: "COMMENTED" }, // ignored
+      { user: { id: 1 }, state: "APPROVED" }, // 1 → approved
+      { user: { id: 2 }, state: "CHANGES_REQUESTED" },
+      { user: { id: 2 }, state: "APPROVED" }, // 2 → latest approved
+      { user: { id: 3 }, state: "APPROVED" },
+      { user: { id: 3 }, state: "COMMENTED" }, // ignored → 3 stays approved
+      { user: { id: 4 }, state: "APPROVED" },
+      { user: { id: 4 }, state: "DISMISSED" }, // 4 → dismissed, not counted
+    ];
+    const fetchFn = vi.fn(async () => jsonResponse(200, reviews));
+    const fetchApprovals = createReviewApprovalFetcher(auth, "42", { fetch: fetchFn });
+
+    await expect(fetchApprovals("unkey/api", 7)).resolves.toBe(3); // reviewers 1, 2, 3
+  });
+
+  it("returns undefined counting approvals for a missing PR (404)", async () => {
+    const auth = createAuth();
+    const fetchFn = vi.fn(async () => jsonResponse(404, { message: "Not Found" }));
+    const fetchApprovals = createReviewApprovalFetcher(auth, "42", { fetch: fetchFn });
+
+    await expect(fetchApprovals("unkey/api", 7)).resolves.toBeUndefined();
   });
 });

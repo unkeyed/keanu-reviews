@@ -11,11 +11,19 @@ import {
   rescheduleOrFailReminder,
   scheduleReminder,
 } from "../db/repositories/reminders.ts";
+import type { PullRequestRow } from "../db/schema.ts";
 import { isTerminal } from "../domain/prState.ts";
+import type { ReviewApprovalFetcher } from "../github/users.ts";
+import type { PullRequestFetcher } from "../handlers/mergeability.ts";
 import type { Logger } from "../logger.ts";
 import type { SlackClient } from "../slack/client.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { type ReminderWindow, isWithinWindow } from "./window.ts";
+
+/** `mergeable_state` values that mean the PR is ready to merge. */
+const READY_TO_MERGE_STATES = new Set(["clean", "has_hooks"]);
+/** Reminders stop once a PR has at least this many approvals. */
+export const REMINDER_SUPPRESS_APPROVALS = 2;
 
 export interface ReminderDeps {
   db: Db;
@@ -29,6 +37,34 @@ export interface ReminderDeps {
   now?: () => number;
   /** Only deliver reminders during this daily window; omit to deliver anytime. */
   deliveryWindow?: ReminderWindow;
+  /** Suppress reminders once the PR is ready to merge (mergeable_state clean). */
+  fetchPullRequest?: PullRequestFetcher;
+  /** Suppress reminders once the PR already has enough approvals. */
+  fetchApprovalCount?: ReviewApprovalFetcher;
+}
+
+/**
+ * Whether a PR no longer needs review reminders: it's ready to merge, or it
+ * already has enough approvals. Best-effort — if a lookup fails we deliver the
+ * reminder anyway rather than silently drop a needed nudge.
+ */
+async function remindersNoLongerNeeded(deps: ReminderDeps, pr: PullRequestRow): Promise<boolean> {
+  try {
+    if (deps.fetchPullRequest) {
+      const merge = await deps.fetchPullRequest(pr.repoFullName, pr.number);
+      if (merge && READY_TO_MERGE_STATES.has(merge.mergeableState)) return true;
+    }
+    if (deps.fetchApprovalCount) {
+      const approvals = await deps.fetchApprovalCount(pr.repoFullName, pr.number);
+      if (typeof approvals === "number" && approvals >= REMINDER_SUPPRESS_APPROVALS) return true;
+    }
+  } catch (err) {
+    deps.logger.warn("reminder readiness check failed; delivering anyway", {
+      prId: pr.id,
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return false;
 }
 
 /**
@@ -87,6 +123,8 @@ export function createReminderScheduler(deps: ReminderDeps) {
     if (deps.deliveryWindow && !isWithinWindow(scanTime, deps.deliveryWindow)) return 0;
     const due = await listDue(deps.db, scanTime, leaseMs, batchSize);
     let posted = 0;
+    // One readiness lookup per PR per scan, shared across its reviewers.
+    const readiness = new Map<string, boolean>();
     for (const r of due) {
       const claimed = await claimReminder(deps.db, r.id, scanTime, leaseMs);
       if (!claimed) continue; // lost the race to another scanner
@@ -96,6 +134,21 @@ export function createReminderScheduler(deps: ReminderDeps) {
         if (!pr?.channelId) throw new Error(`Reminder PR channel is unavailable for ${r.prId}`);
         if (isTerminal(pr.currentState)) {
           await cancelReminderClaim(deps.db, claimed);
+          continue;
+        }
+
+        // Don't nag reviewers once the PR is ready to merge or already approved.
+        let ready = readiness.get(r.prId);
+        if (ready === undefined) {
+          ready = await remindersNoLongerNeeded(deps, pr);
+          readiness.set(r.prId, ready);
+        }
+        if (ready) {
+          await cancelReminderClaim(deps.db, claimed);
+          deps.logger.info("reminder suppressed: PR ready to merge or already approved", {
+            prId: r.prId,
+            reviewerGithubId: r.reviewerGithubId,
+          });
           continue;
         }
 
