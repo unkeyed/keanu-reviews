@@ -41,6 +41,9 @@ export interface PullRequestPayload {
     head: { sha: string; ref?: string };
     base?: { ref: string };
     updated_at: string;
+    // Current individual reviewers on the PR; present on lifecycle payloads such
+    // as `ready_for_review`, used to invite reviewers deferred while it was draft.
+    requested_reviewers?: { id: number; login: string }[];
   };
   repository: { full_name: string };
 }

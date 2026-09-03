@@ -77,8 +77,60 @@ export async function handleReviewRequest(
     return;
   }
 
-  const effectRef = `${reviewer.id}:${eventRef}`;
+  // Defer inviting reviewers on a draft PR. Requesting review before marking a PR
+  // ready is common (assign reviewers, keep drafting); pulling them into the
+  // channel then is premature. handleReadyForReview invites whoever is still
+  // requested once the PR is marked ready.
+  if (payload.pull_request.draft) {
+    logger.info("review requested on a draft PR; deferring invite until ready", {
+      prId: row.id,
+      reviewer: reviewer.login,
+    });
+    return;
+  }
 
+  await inviteReviewer(deps, row.id, channelId, reviewer, `${reviewer.id}:${eventRef}`, {
+    sourceUpdatedAt: sourceDate(payload.pull_request.updated_at),
+    sourceVersion,
+  });
+}
+
+/**
+ * Invite the reviewers still requested when a draft PR is marked ready for
+ * review (U5). Reviewers assigned while it was a draft were deferred, so pull
+ * them in now. Idempotent per reviewer via the message-effect key.
+ */
+export async function handleReadyForReview(
+  deps: ReviewRequestDeps,
+  payload: PullRequestPayload,
+  eventRef = payload.pull_request.updated_at,
+  sourceVersion = eventRef,
+): Promise<void> {
+  const reviewers = payload.pull_request.requested_reviewers ?? [];
+  if (reviewers.length === 0) return;
+  const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
+  if (!row.channelId) throw new RetryableError(`PR channel is not ready for ${row.id}`);
+  const channelId = row.channelId;
+
+  const sourceUpdatedAt = sourceDate(payload.pull_request.updated_at);
+  for (const reviewer of reviewers) {
+    await inviteReviewer(deps, row.id, channelId, reviewer, `${reviewer.id}:${eventRef}`, {
+      sourceUpdatedAt,
+      sourceVersion,
+    });
+  }
+}
+
+/** Resolve a requested reviewer to Slack, post the invite note, and schedule the reminder. */
+async function inviteReviewer(
+  deps: ReviewRequestDeps,
+  prId: string,
+  channelId: string,
+  reviewer: { id: number; login: string },
+  effectRef: string,
+  source: { sourceUpdatedAt?: Date; sourceVersion: string },
+): Promise<void> {
+  const { db, slack, logger } = deps;
   const slackUserId = await resolveSlackUser(deps, {
     githubId: reviewer.id,
     login: reviewer.login,
@@ -91,7 +143,7 @@ export async function handleReviewRequest(
     await deliverSlackMessage(
       db,
       slack,
-      { prId: row.id, kind: "invite", githubEventRef: effectRef },
+      { prId, kind: "invite", githubEventRef: effectRef },
       {
         channel: channelId,
         text: sanitizeMrkdwn(`Review requested from ${reviewer.login}`),
@@ -109,7 +161,7 @@ export async function handleReviewRequest(
     await deliverSlackMessage(
       db,
       slack,
-      { prId: row.id, kind: "invite", githubEventRef: effectRef },
+      { prId, kind: "invite", githubEventRef: effectRef },
       {
         channel: channelId,
         text: sanitizeMrkdwn(`Review requested from ${reviewer.login}`),
@@ -126,10 +178,5 @@ export async function handleReviewRequest(
     );
   }
 
-  await deps.onReviewRequested?.(
-    row.id,
-    reviewer.id,
-    sourceDate(payload.pull_request.updated_at),
-    sourceVersion,
-  );
+  await deps.onReviewRequested?.(prId, reviewer.id, source.sourceUpdatedAt, source.sourceVersion);
 }

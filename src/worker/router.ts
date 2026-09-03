@@ -4,7 +4,7 @@ import { handleCheckRun } from "../handlers/checks.ts";
 import { type PrHandlerDeps, handlePullRequest } from "../handlers/pullRequest.ts";
 import { handleIssueComment, handleReview } from "../handlers/review.ts";
 import { handleReviewComment } from "../handlers/reviewComment.ts";
-import { handleReviewRequest } from "../handlers/reviewRequest.ts";
+import { handleReadyForReview, handleReviewRequest } from "../handlers/reviewRequest.ts";
 import type { GithubEmailFetcher } from "../identity/resolve.ts";
 
 export interface RouterDeps extends PrHandlerDeps {
@@ -47,6 +47,9 @@ export function createRouter(deps: RouterDeps): Router {
         // review_requested / review_request_removed arrive as pull_request actions.
         if (job.action === "review_requested" || job.action === "review_request_removed") {
           await handleReviewRequest(deps, payload, job.deliveryId, sourceArrivalKey);
+        } else if (job.action === "ready_for_review") {
+          // Invite reviewers who were assigned while the PR was still a draft.
+          await handleReadyForReview(deps, payload, job.deliveryId, sourceArrivalKey);
         }
         return;
       case "pull_request_review_comment":

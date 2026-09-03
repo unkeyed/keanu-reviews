@@ -6,7 +6,11 @@ import { pullRequests } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createLogger } from "../logger.ts";
 import { FakeSlackClient } from "../testing/fakeSlack.ts";
-import { type ReviewRequestPayload, handleReviewRequest } from "./reviewRequest.ts";
+import {
+  type ReviewRequestPayload,
+  handleReadyForReview,
+  handleReviewRequest,
+} from "./reviewRequest.ts";
 
 let db: Db;
 let slack: FakeSlackClient;
@@ -159,6 +163,63 @@ describe("handleReviewRequest (U5)", () => {
       new Date("2026-08-11T12:00:00Z"),
       "2026-08-11T12:00:00Z",
     );
+  });
+
+  it("defers the invite and reminder when review is requested on a draft PR", async () => {
+    await upsertIdentity(db, {
+      githubUserId: 7,
+      githubLogin: "flo",
+      slackUserId: "U7",
+      source: "self-link",
+    });
+    const onReviewRequested = vi.fn(async () => {});
+    await handleReviewRequest(
+      deps({ onReviewRequested }),
+      payload({ pull_request: { ...payload().pull_request, draft: true } }),
+    );
+    expect(slack.invites).toHaveLength(0); // not pulled in yet
+    expect(slack.messages).toHaveLength(0); // no "Review requested" note
+    expect(onReviewRequested).not.toHaveBeenCalled(); // no reminder scheduled
+  });
+
+  it("invites reviewers assigned while draft once the PR is marked ready", async () => {
+    await upsertIdentity(db, {
+      githubUserId: 7,
+      githubLogin: "flo",
+      slackUserId: "U7",
+      source: "self-link",
+    });
+    const onReviewRequested = vi.fn(async () => {});
+    await handleReadyForReview(
+      deps({ onReviewRequested }),
+      {
+        action: "ready_for_review",
+        repository: { full_name: "unkey/api" },
+        pull_request: {
+          ...payload().pull_request,
+          draft: false,
+          requested_reviewers: [{ id: 7, login: "flo" }],
+        },
+      },
+      "delivery-ready-1",
+    );
+    expect(slack.invites).toEqual([{ channelId: "C1", userIds: ["U7"] }]);
+    expect(onReviewRequested).toHaveBeenCalledWith(
+      "unkey/api#1",
+      7,
+      new Date("2026-08-11T12:00:00Z"),
+      "delivery-ready-1",
+    );
+  });
+
+  it("does nothing on ready_for_review when no reviewers are requested", async () => {
+    await handleReadyForReview(deps(), {
+      action: "ready_for_review",
+      repository: { full_name: "unkey/api" },
+      pull_request: { ...payload().pull_request, requested_reviewers: [] },
+    });
+    expect(slack.invites).toHaveLength(0);
+    expect(slack.messages).toHaveLength(0);
   });
 
   it("converges the invite again for a later review request", async () => {
