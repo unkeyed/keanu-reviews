@@ -427,6 +427,7 @@ Every Slack/GitHub API error is logged with actionable detail. Common ones:
 | `SLACK_SHIPPED_CHANNEL` | unset (disabled) | `#shipped` announcement channel (id or name) |
 | `GITHUB_COMMENT_ON_MERGE` | `false` | opt-in GitHub write (needs write permission) |
 | `REMINDER_HOURS` | `12` | hours before a pending-review reminder becomes due |
+| `REMINDER_SUPPRESS_APPROVALS` | `1` | approvals that stop reminders for that PR (reviewers and the channel) |
 | `REMINDER_SCAN_INTERVAL_MS` | `60000` | how often the reminder loop scans |
 | `REMINDER_WINDOW_START_HOUR` | `5` | reminders only deliver at/after this hour (inclusive) |
 | `REMINDER_WINDOW_END_HOUR` | `14` | reminders stop delivering at this hour (exclusive) |

@@ -46,7 +46,9 @@ default.
   state is intentionally not announced (a noisy update-your-branch nudge).
 - **Review reminders.** If a requested review is still pending after a
   configurable delay (default 12h), the reviewer gets one reminder — delivered
-  only during a configurable daily window, **on weekdays only**.
+  only during a configurable daily window, **on weekdays only**. Reminders stop
+  once the PR has `REMINDER_SUPPRESS_APPROVALS` approvals (default 1): no ping
+  to the remaining reviewers, and no reminder in the PR channel.
 - **`#shipped` announcement.** Optionally announces each merge into a channel of
   your choice.
 - **Allow-listed bots.** Bot accounts are filtered out by default (deploy-preview
@@ -145,6 +147,7 @@ managed host, from its secret store) and are **never written to logs**. See
 | `THREAD_COMMENTS` | `true` | Thread a review-comment reply under the original comment's Slack message (`false` keeps all comments flat). |
 | `ALLOWED_BOTS` | _(none)_ | Comma-separated bot logins to mirror (e.g. `pullfrog`). |
 | `REMINDER_HOURS` | `12` | Hours a review can be pending before one reminder fires. |
+| `REMINDER_SUPPRESS_APPROVALS` | `1` | Approvals that stop reminders for that PR (reviewers and the channel). |
 | `REMINDER_SCAN_INTERVAL_MS` | `60000` | How often the reminder scanner runs. |
 | `REMINDER_WINDOW_START_HOUR` | `5` | Delivery window start hour (inclusive). |
 | `REMINDER_WINDOW_END_HOUR` | `14` | Delivery window end hour (exclusive). |
@@ -251,6 +254,12 @@ identity data. Imports are idempotent.
 
 When a review is requested, a reminder is scheduled `REMINDER_HOURS` out and
 cancelled if the reviewer responds, the request is withdrawn, or the PR closes.
+Every still-pending reminder for that PR is also cancelled once it is ready to
+merge or has at least `REMINDER_SUPPRESS_APPROVALS` approvals (default 1). At
+that point the bot posts nothing: remaining reviewers are not pinged, and the
+PR channel does not get a reminder. A PR with fewer approvals keeps the usual
+reminder.
+
 Reminders are delivered only **on weekdays** during the daily window
 `[REMINDER_WINDOW_START_HOUR, REMINDER_WINDOW_END_HOUR)` evaluated in
 `REMINDER_WINDOW_TZ` (DST-aware). A reminder that comes due outside the window or

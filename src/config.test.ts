@@ -24,7 +24,17 @@ describe("loadConfig", () => {
     expect(cfg.PUBLIC_URL).toBe("https://bot.example.com");
     expect(cfg.PORT).toBe(3000); // default
     expect(cfg.REMINDER_HOURS).toBe(12); // plan default
+    expect(cfg.REMINDER_SUPPRESS_APPROVALS).toBe(1);
     expect(cfg.THREAD_COMMENTS).toBe(true); // threading on by default
+  });
+
+  it("parses REMINDER_SUPPRESS_APPROVALS and rejects a non-positive value", () => {
+    expect(
+      loadConfig({ ...validEnv(), REMINDER_SUPPRESS_APPROVALS: "3" }).REMINDER_SUPPRESS_APPROVALS,
+    ).toBe(3);
+    expect(() => loadConfig({ ...validEnv(), REMINDER_SUPPRESS_APPROVALS: "0" })).toThrowError(
+      /REMINDER_SUPPRESS_APPROVALS/,
+    );
   });
 
   it("parses THREAD_COMMENTS as a boolean and lets it be disabled", () => {

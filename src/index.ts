@@ -127,7 +127,9 @@ function boot(): void {
       endHour: config.REMINDER_WINDOW_END_HOUR,
       timeZone: config.REMINDER_WINDOW_TZ,
     },
-    // Don't remind reviewers once the PR is ready to merge or already approved.
+    // Don't remind the channel or remaining reviewers once the PR is ready to
+    // merge or has REMINDER_SUPPRESS_APPROVALS approvals (default 1).
+    suppressApprovals: config.REMINDER_SUPPRESS_APPROVALS,
     fetchPullRequest,
     fetchApprovalCount,
   });
