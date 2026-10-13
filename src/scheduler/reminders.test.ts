@@ -138,16 +138,53 @@ describe("reminder scheduler (U8, R9)", () => {
     expect(row?.status).toBe("cancelled");
   });
 
-  it("suppresses the reminder when the PR already has two approvals", async () => {
-    const s = scheduler({ fetchApprovalCount: async () => 2 });
+  it("still reminds every requested reviewer when the PR has zero approvals", async () => {
+    const s = scheduler({
+      fetchPullRequest: async () => blocked,
+      fetchApprovalCount: async () => 0,
+    });
     await s.onReviewRequested(PR, 7);
+    await s.onReviewRequested(PR, 8);
+    advanceHours(HOURS);
+    expect(await s.processDue()).toBe(2);
+    expect(slack.messages).toHaveLength(2);
+    expect(slack.messages.map((message) => message.channel)).toEqual(["C1", "C1"]);
+  });
+
+  it("sends no reminder to remaining reviewers or the channel once the PR has one approval", async () => {
+    const s = scheduler({
+      fetchPullRequest: async () => blocked,
+      fetchApprovalCount: async () => 1,
+    });
+    await s.onReviewRequested(PR, 7);
+    await s.onReviewRequested(PR, 8);
     advanceHours(HOURS);
     expect(await s.processDue()).toBe(0);
     expect(slack.messages).toHaveLength(0);
+    const rows = await db.select().from(reminders).where(eq(reminders.prId, PR));
+    expect(rows.map((row) => row.status).sort()).toEqual(["cancelled", "cancelled"]);
   });
 
-  it("still reminds when the PR is blocked and under the approval threshold", async () => {
+  it.each([2, 3])(
+    "sends no reminder to remaining reviewers or the channel when the PR has %i approvals",
+    async (approvals) => {
+      const s = scheduler({
+        fetchPullRequest: async () => blocked,
+        fetchApprovalCount: async () => approvals,
+      });
+      await s.onReviewRequested(PR, 7);
+      await s.onReviewRequested(PR, 8);
+      advanceHours(HOURS);
+      expect(await s.processDue()).toBe(0);
+      expect(slack.messages).toHaveLength(0);
+      const rows = await db.select().from(reminders).where(eq(reminders.prId, PR));
+      expect(rows.map((row) => row.status).sort()).toEqual(["cancelled", "cancelled"]);
+    },
+  );
+
+  it("honors a higher configured approval threshold", async () => {
     const s = scheduler({
+      suppressApprovals: 2,
       fetchPullRequest: async () => blocked,
       fetchApprovalCount: async () => 1,
     });

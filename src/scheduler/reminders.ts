@@ -22,8 +22,11 @@ import { type ReminderWindow, isWithinWindow } from "./window.ts";
 
 /** `mergeable_state` values that mean the PR is ready to merge. */
 const READY_TO_MERGE_STATES = new Set(["clean", "has_hooks"]);
-/** Reminders stop once a PR has at least this many approvals. */
-export const REMINDER_SUPPRESS_APPROVALS = 2;
+/**
+ * Approval count that stops reminders when `suppressApprovals` is omitted.
+ * Production sets that from `REMINDER_SUPPRESS_APPROVALS` (default 1).
+ */
+const DEFAULT_SUPPRESS_APPROVALS = 1;
 
 export interface ReminderDeps {
   db: Db;
@@ -39,6 +42,11 @@ export interface ReminderDeps {
   deliveryWindow?: ReminderWindow;
   /** Suppress reminders once the PR is ready to merge (mergeable_state clean). */
   fetchPullRequest?: PullRequestFetcher;
+  /**
+   * Suppress every pending reminder for a PR once it has at least this many
+   * approvals. Defaults to 1 (`REMINDER_SUPPRESS_APPROVALS`).
+   */
+  suppressApprovals?: number;
   /** Suppress reminders once the PR already has enough approvals. */
   fetchApprovalCount?: ReviewApprovalFetcher;
 }
@@ -48,7 +56,11 @@ export interface ReminderDeps {
  * already has enough approvals. Best-effort — if a lookup fails we deliver the
  * reminder anyway rather than silently drop a needed nudge.
  */
-async function remindersNoLongerNeeded(deps: ReminderDeps, pr: PullRequestRow): Promise<boolean> {
+async function remindersNoLongerNeeded(
+  deps: ReminderDeps,
+  pr: PullRequestRow,
+  suppressApprovals: number,
+): Promise<boolean> {
   try {
     if (deps.fetchPullRequest) {
       const merge = await deps.fetchPullRequest(pr.repoFullName, pr.number);
@@ -56,7 +68,7 @@ async function remindersNoLongerNeeded(deps: ReminderDeps, pr: PullRequestRow): 
     }
     if (deps.fetchApprovalCount) {
       const approvals = await deps.fetchApprovalCount(pr.repoFullName, pr.number);
-      if (typeof approvals === "number" && approvals >= REMINDER_SUPPRESS_APPROVALS) return true;
+      if (typeof approvals === "number" && approvals >= suppressApprovals) return true;
     }
   } catch (err) {
     deps.logger.warn("reminder readiness check failed; delivering anyway", {
@@ -75,6 +87,7 @@ async function remindersNoLongerNeeded(deps: ReminderDeps, pr: PullRequestRow): 
  */
 export function createReminderScheduler(deps: ReminderDeps) {
   const now = deps.now ?? Date.now;
+  const suppressApprovals = deps.suppressApprovals ?? DEFAULT_SUPPRESS_APPROVALS;
   const windowMs = deps.reminderHours * 60 * 60_000;
   const leaseMs = deps.reminderLeaseMs ?? 5 * 60_000;
   const maxAttempts = deps.maxAttempts ?? 5;
@@ -137,10 +150,11 @@ export function createReminderScheduler(deps: ReminderDeps) {
           continue;
         }
 
-        // Don't nag reviewers once the PR is ready to merge or already approved.
+        // Don't nag the channel or any remaining reviewer once the PR is ready
+        // to merge or already has enough approvals.
         let ready = readiness.get(r.prId);
         if (ready === undefined) {
-          ready = await remindersNoLongerNeeded(deps, pr);
+          ready = await remindersNoLongerNeeded(deps, pr, suppressApprovals);
           readiness.set(r.prId, ready);
         }
         if (ready) {

@@ -125,6 +125,10 @@ const ConfigSchema = z
 
     // Reminder scheduler (U8) — tunable, with plan defaults.
     REMINDER_HOURS: z.coerce.number().positive().default(12),
+    // Stop review reminders once a PR has this many approvals. One is enough:
+    // a reviewer who hasn't weighed in likely skipped a PR that was already
+    // approved. Fewer approvals keep the normal reminder.
+    REMINDER_SUPPRESS_APPROVALS: z.coerce.number().int().positive().default(1),
     REMINDER_SCAN_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
     // Reminders are only delivered during this daily window (in REMINDER_WINDOW_TZ).
     // Default 05:00–14:00 Eastern. Start is inclusive, end exclusive; a window that
