@@ -2,28 +2,20 @@ import { serve } from "@hono/node-server";
 import { type Config, ConfigError, SECRET_KEYS, loadConfig } from "./config.ts";
 import { createDb } from "./db/client.ts";
 import { createDbReadyCheck } from "./db/readiness.ts";
-import { deleteSlackUserToken, getSlackUserTokenRow } from "./db/repositories/slackUserTokens.ts";
 import { createInstallationAuth } from "./github/auth.ts";
-import { createPrCommenter } from "./github/comments.ts";
 import { createGithubOAuthClient } from "./github/oauth.ts";
 import { octokitMintFn } from "./github/octokitAuth.ts";
-import {
-  createGithubEmailFetcher,
-  createPrForShaFetcher,
-  createPullRequestFetcher,
-  createReviewApprovalFetcher,
-} from "./github/users.ts";
+import { createPullRequestSnapshotFetcher } from "./github/pullRequestSnapshot.ts";
+import { createServiceHandlers } from "./handlers/deps.ts";
 import { createLogger, registerSecretValues } from "./logger.ts";
 import { createGithubOAuthRoute } from "./routes/githubOAuth.ts";
 import { createGithubWebhookRoute } from "./routes/githubWebhook.ts";
 import { createSlackCommandRoute } from "./routes/slackCommand.ts";
-import { createSlackOAuthRoute } from "./routes/slackOAuth.ts";
+import { DAILY_RECONCILE_HOUR_UTC, startDailyLoop } from "./scheduler/dailyLoop.ts";
 import { startReminderLoop } from "./scheduler/loop.ts";
+import { createClosedPullRequestReconciliation } from "./scheduler/reconcileClosedPullRequests.ts";
 import { createReminderScheduler } from "./scheduler/reminders.ts";
 import { createApp } from "./server.ts";
-import { quietlyRemoveMembers } from "./slack/memberCleanup.ts";
-import { SLACK_POST_USER_SCOPE, createSlackOAuthClient, hasScope } from "./slack/oauth.ts";
-import { createTokenCipher } from "./slack/tokenCipher.ts";
 import { createWebApiSlackClient } from "./slack/webApiClient.ts";
 import { createWorker, startWorkerLoop } from "./worker/loop.ts";
 import { createRouter } from "./worker/router.ts";
@@ -52,71 +44,9 @@ function boot(): void {
     octokitMintFn(config.GITHUB_APP_ID, config.GITHUB_APP_PRIVATE_KEY),
   );
   const installationId = config.GITHUB_INSTALLATION_ID;
-
-  // Quiet archiving (opt-in): when Slack user-OAuth is configured, collect
-  // per-user tokens so PR channels can be emptied of members before archive,
-  // suppressing Slack's "archived the channel" notification. Config enforces
-  // that the three settings are present together, so testing one is sufficient.
-  const githubOauthCallbackUrl = `${config.PUBLIC_URL}/oauth/github/callback`;
-  const slackOauthCallbackUrl = `${config.PUBLIC_URL}/oauth/slack/callback`;
-  let quietArchive: ((channelId: string) => Promise<void>) | undefined;
-  let authorPoster:
-    | {
-        getUserToken: (slackUserId: string) => Promise<string | undefined>;
-        onInvalidToken: (slackUserId: string) => Promise<void>;
-      }
-    | undefined;
-  let slackOauthRoute: ReturnType<typeof createSlackOAuthRoute> | undefined;
-  if (
-    config.SLACK_OAUTH_CLIENT_ID &&
-    config.SLACK_OAUTH_CLIENT_SECRET &&
-    config.SLACK_USER_TOKEN_ENC_KEY
-  ) {
-    const cipher = createTokenCipher(config.SLACK_USER_TOKEN_ENC_KEY);
-    slackOauthRoute = createSlackOAuthRoute({
-      db,
-      logger,
-      oauthClient: createSlackOAuthClient({
-        clientId: config.SLACK_OAUTH_CLIENT_ID,
-        clientSecret: config.SLACK_OAUTH_CLIENT_SECRET,
-      }),
-      oauthStateSecret: config.OAUTH_STATE_SECRET,
-      slackTeamId: config.SLACK_TEAM_ID,
-      callbackUrl: slackOauthCallbackUrl,
-      cipher,
-    });
-    const dropToken = (slackUserId: string) =>
-      deleteSlackUserToken(db, config.SLACK_TEAM_ID, slackUserId);
-    quietArchive = async (channelId) => {
-      await quietlyRemoveMembers(
-        {
-          slack,
-          logger,
-          getUserToken: async (slackUserId) => {
-            const row = await getSlackUserTokenRow(db, config.SLACK_TEAM_ID, slackUserId);
-            return row ? cipher.decrypt(row.encryptedToken) : undefined;
-          },
-          onInvalidToken: dropToken,
-        },
-        channelId,
-      );
-    };
-    // Post mirrored comments/reviews as the user themselves — only for tokens
-    // that actually granted chat:write (older leave-only tokens fall back to bot).
-    authorPoster = {
-      getUserToken: async (slackUserId) => {
-        const row = await getSlackUserTokenRow(db, config.SLACK_TEAM_ID, slackUserId);
-        if (!row || !hasScope(row.scopes, SLACK_POST_USER_SCOPE)) return undefined;
-        return cipher.decrypt(row.encryptedToken);
-      },
-      onInvalidToken: dropToken,
-    };
-    logger.info("quiet archiving + post-as-user enabled (Slack user OAuth configured)");
-  }
+  const services = createServiceHandlers({ config, db, slack, logger, auth });
 
   // Scheduler + router + worker
-  const fetchPullRequest = createPullRequestFetcher(auth, installationId);
-  const fetchApprovalCount = createReviewApprovalFetcher(auth, installationId);
   const scheduler = createReminderScheduler({
     db,
     slack,
@@ -130,34 +60,19 @@ function boot(): void {
     // Don't remind the channel or remaining reviewers once the PR is ready to
     // merge or has REMINDER_SUPPRESS_APPROVALS approvals (default 1).
     suppressApprovals: config.REMINDER_SUPPRESS_APPROVALS,
-    fetchPullRequest,
-    fetchApprovalCount,
+    fetchPullRequest: services.fetchPullRequest,
+    fetchApprovalCount: services.fetchApprovalCount,
   });
   const router = createRouter({
-    db,
-    slack,
-    logger,
-    fetchGithubEmail: createGithubEmailFetcher(auth, installationId),
-    fetchPrForSha: createPrForShaFetcher(auth, installationId),
-    fetchPullRequest,
-    shippedChannel: config.SLACK_SHIPPED_CHANNEL,
-    // Opt-in GitHub write: post the Slack channel URL on merge. Off by default.
-    commentOnMerge: config.GITHUB_COMMENT_ON_MERGE,
-    postPrComment: config.GITHUB_COMMENT_ON_MERGE
-      ? createPrCommenter(auth, installationId)
-      : undefined,
-    slackTeamId: config.SLACK_TEAM_ID,
+    ...services.handler,
     onReviewRequested: scheduler.onReviewRequested,
     onReviewSubmitted: scheduler.onReviewSubmitted,
     onReviewRequestRemoved: scheduler.onReviewRequestRemoved,
-    quietArchive,
-    authorPoster,
-    allowedBots: config.ALLOWED_BOTS,
-    threadComments: config.THREAD_COMMENTS,
   });
   const worker = createWorker({ db, logger, router });
 
   // Routes
+  const githubOauthCallbackUrl = `${config.PUBLIC_URL}/oauth/github/callback`;
   const githubWebhook = createGithubWebhookRoute({
     db,
     logger,
@@ -184,7 +99,9 @@ function boot(): void {
     githubOauthClientId: config.GITHUB_OAUTH_CLIENT_ID,
     githubOauthCallbackUrl,
     slackOauthClientId: config.SLACK_OAUTH_CLIENT_ID,
-    slackOauthCallbackUrl: slackOauthRoute ? slackOauthCallbackUrl : undefined,
+    slackOauthCallbackUrl: services.slackOauthRoute
+      ? `${config.PUBLIC_URL}/oauth/slack/callback`
+      : undefined,
   });
 
   const app = createApp({
@@ -194,13 +111,25 @@ function boot(): void {
       githubWebhook,
       githubOauth,
       slackCommand,
-      ...(slackOauthRoute ? [slackOauthRoute] : []),
+      ...(services.slackOauthRoute ? [services.slackOauthRoute] : []),
     ],
   });
 
-  // Background loops (single active writer, KTD10)
+  // Background loops (single active writer, KTD10).
+  // Missed merge/close webhooks are caught by a daily in-process timer. There
+  // is no cron library or platform scheduler; the reminder loop is a short
+  // interval scan, so reconciliation keeps its own once-a-day timer.
+  const reconcileClosedPullRequests = createClosedPullRequestReconciliation({
+    handler: services.handler,
+    fetchSnapshot: createPullRequestSnapshotFetcher(auth, installationId, { logger }),
+    logger,
+  });
   startWorkerLoop(worker, 1000, logger);
   startReminderLoop(scheduler.processDue, config.REMINDER_SCAN_INTERVAL_MS, logger);
+  startDailyLoop(() => reconcileClosedPullRequests(), DAILY_RECONCILE_HOUR_UTC, logger);
+  logger.info("closed pull request reconciliation scheduled", {
+    hourUtc: DAILY_RECONCILE_HOUR_UTC,
+  });
 
   serve({ fetch: app.fetch, port: config.PORT }, (info) => {
     logger.info("service listening", { port: info.port, env: config.NODE_ENV });

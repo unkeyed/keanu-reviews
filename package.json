@@ -22,7 +22,8 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "admin:import-identities": "node --experimental-strip-types src/admin/importIdentities.ts",
-    "jobs:replay": "node --experimental-strip-types src/admin/replayJob.ts"
+    "jobs:replay": "node --experimental-strip-types src/admin/replayJob.ts",
+    "jobs:reconcile-closed-prs": "node --experimental-strip-types src/admin/reconcileClosedPullRequests.ts"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.0",

@@ -20,7 +20,11 @@ import {
 } from "../identity/resolve.ts";
 import type { Logger } from "../logger.ts";
 import { sanitizeInlineCode, sanitizeLinkLabel, sanitizeMrkdwn } from "../slack/blocks.ts";
-import type { SlackBlock, SlackClient } from "../slack/client.ts";
+import {
+  type SlackBlock,
+  type SlackClient,
+  isSlackChannelAlreadyInState,
+} from "../slack/client.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { slackChannelUrl } from "../slack/links.ts";
 import { CURRENT_CHANNEL_NAME_VERSION, channelName } from "../slack/naming.ts";
@@ -98,6 +102,11 @@ export interface PullRequestHandlingOptions {
   lifecycleLeaseMs?: number;
 }
 
+/** Whether the snapshot was stored. False when a newer snapshot was already applied. */
+export interface PullRequestHandlingResult {
+  sourceAccepted: boolean;
+}
+
 export class PullRequestLifecycleBusyError extends Error {
   constructor(githubPrId: number) {
     super(`GitHub PR ${githubPrId} is already being reconciled`);
@@ -114,7 +123,7 @@ export async function handlePullRequest(
   deps: PrHandlerDeps,
   payload: PullRequestPayload,
   options: PullRequestHandlingOptions = {},
-): Promise<void> {
+): Promise<PullRequestHandlingResult> {
   const { db, slack, logger } = deps;
   const repoFullName = payload.repository.full_name;
   const pr = payload.pull_request;
@@ -167,7 +176,7 @@ export async function handlePullRequest(
         storedUpdatedAt: source.row.sourceUpdatedAt?.toISOString(),
         storedArrivalKey: source.row.sourceArrivalKey,
       });
-      return;
+      return { sourceAccepted: false };
     }
     const row = source.row;
 
@@ -322,7 +331,15 @@ export async function handlePullRequest(
         // and precedes the optional merge announcements so a later failure can
         // never leave the channel un-archived. Reminders were cancelled above.
         if (deps.quietArchive) await deps.quietArchive(channelId);
-        await slack.archiveChannel(channelId);
+        try {
+          await slack.archiveChannel(channelId);
+        } catch (error) {
+          // Production Slack client already treats this as success. Swallow it
+          // here too so a client that surfaces Slack's already_archived code
+          // does not fail an archive that has in fact completed.
+          if (!isSlackChannelAlreadyInState(error, "already_archived")) throw error;
+          logger.info("channel already archived", { prId: current.id, channelId });
+        }
 
         // Merge announcements are best-effort — a failure here must never throw,
         // or it would block archiving and endlessly retry the reconciliation.
@@ -395,6 +412,7 @@ export async function handlePullRequest(
     if (shouldPostLifecycle && !needsSlackReconciliation && !stayingArchived) {
       await postLifecycleNote(db, slack, current, payload, desiredState, channelId);
     }
+    return { sourceAccepted: true };
   } finally {
     if (!(await releasePullRequestLifecycle(db, lifecycleClaim))) {
       logger.error("PR lifecycle lease was lost before release", { githubPrId: pr.id });

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray, isNull, lt, lte, or } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt, lte, ne, or } from "drizzle-orm";
 import type { PrState } from "../../domain/prState.ts";
 import type { Db } from "../client.ts";
 import { type PullRequestRow, pullRequestLifecycleClaims, pullRequests } from "../schema.ts";
@@ -267,6 +267,28 @@ export async function findByGithubPrId(
 export async function findById(db: Db, id: string): Promise<PullRequestRow | undefined> {
   const [row] = await db.select().from(pullRequests).where(eq(pullRequests.id, id)).limit(1);
   return row;
+}
+
+/**
+ * PRs the app still treats as open: database state is draft or pr, and the Slack
+ * channel has not been archived (applied state is missing or non-terminal).
+ * A row the database already marks closed or merged is omitted — reconciliation
+ * does not touch it again.
+ */
+export async function listOpenPullRequestsForReconciliation(db: Db): Promise<PullRequestRow[]> {
+  return db
+    .select()
+    .from(pullRequests)
+    .where(
+      and(
+        inArray(pullRequests.currentState, ["draft", "pr"]),
+        or(
+          isNull(pullRequests.appliedState),
+          and(ne(pullRequests.appliedState, "closed"), ne(pullRequests.appliedState, "merged")),
+        ),
+      ),
+    )
+    .orderBy(asc(pullRequests.repoFullName), asc(pullRequests.number));
 }
 
 /** CI mapping (U7): resolve a repository-scoped head SHA to every tracked PR. */

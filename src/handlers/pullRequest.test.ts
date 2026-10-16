@@ -279,7 +279,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
 
     await expect(
       handlePullRequest(deps(), payload("edited", { updated_at: "2026-08-11T13:00:00Z" })),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ sourceAccepted: true });
     expect(slack.channel("C1")?.archived).toBe(true); // stays archived
     expect(slack.messages.length).toBe(before); // nothing posted to the archived channel
   });
@@ -297,7 +297,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
 
     await expect(
       handlePullRequest(deps(), payload("reopened", { updated_at: "2026-08-11T13:00:00Z" })),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ sourceAccepted: true });
     expect(slack.channel("C1")?.archived).toBe(false);
     const blocks = JSON.stringify(slack.messages);
     expect(blocks).toContain("👤 Opened by"); // author-invite note posted to the live channel
@@ -646,5 +646,27 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     );
     expect(slack.channel("C-LEGACY")?.name).toBe("closed-unkey-api-1423-add-better-auth");
     expect((await findByRepoNumber(db, "unkey/api", 1423))?.channelNameVersion).toBe(1);
+  });
+
+  it("treats Slack already_archived as a successful archive", async () => {
+    await handlePullRequest(deps(), payload("opened"));
+    slack.archiveChannel = async (channelId) => {
+      const channel = slack.channel(channelId);
+      if (channel) channel.archived = true;
+      throw { data: { error: "already_archived" } };
+    };
+
+    await expect(
+      handlePullRequest(
+        deps(),
+        payload("closed", { merged: true, updated_at: "2026-08-11T12:01:00Z" }),
+      ),
+    ).resolves.toEqual({ sourceAccepted: true });
+
+    expect(slack.channel("C1")?.archived).toBe(true);
+    expect(slack.channel("C1")?.name).toBe("merged-oz-unkey-api-1423-add-auth");
+    const row = await findByRepoNumber(db, "unkey/api", 1423);
+    expect(row?.currentState).toBe("merged");
+    expect(row?.appliedState).toBe("merged");
   });
 });
