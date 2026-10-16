@@ -104,8 +104,14 @@ function finished() {
 }
 
 describe("closed pull request reconciliation", () => {
-  it("archives a merged pull request through the webhook handler", async () => {
-    const deps = handler({ shippedChannel: "C0SHIPPED" });
+  it("archives a merged pull request without the #shipped note or merge comment", async () => {
+    const postPrComment = vi.fn(async () => {});
+    const deps = handler({
+      shippedChannel: "C0SHIPPED",
+      commentOnMerge: true,
+      postPrComment,
+      slackTeamId: "T1",
+    });
     await openPr(1, 101, deps);
     await scheduleReminder(db, {
       prId: prId("unkey/api", 1),
@@ -128,15 +134,19 @@ describe("closed pull request reconciliation", () => {
       archived: 1,
       skipped: 0,
       failed: 0,
+      skippedShipped: 1,
+      skippedMergeComments: 1,
       rateLimited: false,
     });
 
     expect(slack.channel("C1")?.archived).toBe(true);
     expect(slack.channel("C1")?.name.startsWith("merged-")).toBe(true);
-    expect(slack.messages.some((message) => message.channel === "C0SHIPPED")).toBe(true);
+    expect(slack.messages.some((message) => message.channel === "C0SHIPPED")).toBe(false);
+    expect(postPrComment).not.toHaveBeenCalled();
     const row = await findByRepoNumber(db, "unkey/api", 1);
     expect(row?.currentState).toBe("merged");
     expect(row?.appliedState).toBe("merged");
+    expect(row?.mergeCommentPostedAt).toBeNull();
     const [reminder] = await db
       .select()
       .from(reminders)
@@ -145,11 +155,38 @@ describe("closed pull request reconciliation", () => {
     expect(events).toContainEqual(
       expect.objectContaining({
         level: "info",
-        msg: "pull request reconciliation archived channel",
-        fields: expect.objectContaining({ number: 1, outcome: "merged", channelId: "C1" }),
+        msg: "skipped #shipped note",
+        fields: expect.objectContaining({ number: 1 }),
       }),
     );
-    expect(finished()).toMatchObject({ checked: 1, merged: 1, archived: 1, failed: 0 });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        level: "info",
+        msg: "skipped merge comment",
+        fields: expect.objectContaining({ number: 1 }),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        level: "info",
+        msg: "pull request reconciliation archived channel",
+        fields: expect.objectContaining({
+          number: 1,
+          outcome: "merged",
+          channelId: "C1",
+          skippedShipped: true,
+          skippedMergeComment: true,
+        }),
+      }),
+    );
+    expect(finished()).toMatchObject({
+      checked: 1,
+      merged: 1,
+      archived: 1,
+      failed: 0,
+      skippedShipped: 1,
+      skippedMergeComments: 1,
+    });
 
     const messages = slack.messages.length;
     await expect(run()).resolves.toMatchObject({
@@ -182,6 +219,8 @@ describe("closed pull request reconciliation", () => {
       archived: 1,
       skipped: 0,
       failed: 0,
+      skippedShipped: 0,
+      skippedMergeComments: 0,
     });
     expect(slack.channel("C1")?.archived).toBe(true);
     expect(slack.channel("C1")?.name.startsWith("closed-")).toBe(true);

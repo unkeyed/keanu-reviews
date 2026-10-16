@@ -30,6 +30,10 @@ export interface ReconciliationSummary {
   skipped: number;
   /** One PR failed; the run continued with the rest. */
   failed: number;
+  /** Merges whose #shipped note was not posted because the close was caught late. */
+  skippedShipped: number;
+  /** Merges whose GitHub merge comment was not posted because the close was caught late. */
+  skippedMergeComments: number;
   /** Stopped before the remaining open PRs because the GitHub rate limit ran out. */
   rateLimited: boolean;
   /** Another run was already in progress in this process. */
@@ -50,6 +54,8 @@ const ZERO: ReconciliationSummary = {
   archived: 0,
   skipped: 0,
   failed: 0,
+  skippedShipped: 0,
+  skippedMergeComments: 0,
   rateLimited: false,
   overlapped: false,
 };
@@ -241,6 +247,7 @@ async function applySnapshot(
   // snapshot is left alone (sourceAccepted false).
   const handled = await handlePullRequest(deps.handler, closedPayload(fresh, snapshot), {
     sourceArrivalKey: `~reconcile:${new Date().toISOString()}`,
+    announceMerge: false,
   });
   if (!handled.sourceAccepted) {
     result.skipped += 1;
@@ -261,10 +268,14 @@ async function applySnapshot(
   if (outcome === "merged") result.merged += 1;
   else result.closed += 1;
   result.archived += 1;
+  if (handled.skippedShipped) result.skippedShipped += 1;
+  if (handled.skippedMergeComment) result.skippedMergeComments += 1;
   logger.info("pull request reconciliation archived channel", {
     ...fields,
     outcome,
     channelId: after.channelId,
     appliedState: after.appliedState,
+    skippedShipped: handled.skippedShipped,
+    skippedMergeComment: handled.skippedMergeComment,
   });
 }
