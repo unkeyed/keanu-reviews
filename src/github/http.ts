@@ -27,29 +27,40 @@ export interface GithubRequestOptions {
   timeoutMs?: number;
 }
 
+export interface GithubRequestOptionsWithBody extends GithubRequestOptions {
+  method?: "GET" | "POST";
+  /** JSON body for POST. Omit for GET. */
+  jsonBody?: unknown;
+}
+
 /**
- * Perform an authenticated GitHub JSON GET with bounded latency and consistent
- * error semantics. A 404 is the only HTTP response represented as absence.
+ * Authenticated GitHub request with one 401 retry. Returns the final response,
+ * including non-2xx statuses, so callers can read rate-limit headers themselves.
+ * Network failures and timeouts throw {@link GithubApiError}.
  */
-export async function githubGetJson<T>(
+export async function githubRequest(
   auth: InstallationAuth,
   installationId: string,
   path: string,
-  options: GithubRequestOptions = {},
-): Promise<T | undefined> {
+  options: GithubRequestOptionsWithBody = {},
+): Promise<Response> {
   const url = `${GITHUB_API_BASE}${path}`;
   const fetchFn = options.fetch ?? globalThis.fetch;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const method = options.method ?? "GET";
 
   const request = async (token: string): Promise<Response> => {
     const signal = AbortSignal.timeout(timeoutMs);
     try {
       return await fetchFn(url, {
+        method,
         headers: {
           authorization: `Bearer ${token}`,
           accept: "application/vnd.github+json",
           "user-agent": "keanu-reviews",
+          ...(options.jsonBody !== undefined ? { "content-type": "application/json" } : {}),
         },
+        body: options.jsonBody !== undefined ? JSON.stringify(options.jsonBody) : undefined,
         signal,
       });
     } catch (cause) {
@@ -71,6 +82,21 @@ export async function githubGetJson<T>(
     token = await auth.getToken(installationId);
     response = await request(token);
   }
+  return response;
+}
+
+/**
+ * Perform an authenticated GitHub JSON GET with bounded latency and consistent
+ * error semantics. A 404 is the only HTTP response represented as absence.
+ */
+export async function githubGetJson<T>(
+  auth: InstallationAuth,
+  installationId: string,
+  path: string,
+  options: GithubRequestOptions = {},
+): Promise<T | undefined> {
+  const url = `${GITHUB_API_BASE}${path}`;
+  const response = await githubRequest(auth, installationId, path, options);
 
   if (response.status === 404) return undefined;
   if (!response.ok) {
@@ -107,42 +133,11 @@ export async function githubPostJson(
   options: GithubRequestOptions = {},
 ): Promise<void> {
   const url = `${GITHUB_API_BASE}${path}`;
-  const fetchFn = options.fetch ?? globalThis.fetch;
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-
-  const request = async (token: string): Promise<Response> => {
-    const signal = AbortSignal.timeout(timeoutMs);
-    try {
-      return await fetchFn(url, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${token}`,
-          accept: "application/vnd.github+json",
-          "content-type": "application/json",
-          "user-agent": "keanu-reviews",
-        },
-        body: JSON.stringify(body),
-        signal,
-      });
-    } catch (cause) {
-      if (signal.aborted) {
-        throw new GithubApiError(`GitHub request timed out after ${timeoutMs}ms`, {
-          kind: "timeout",
-          url,
-          cause,
-        });
-      }
-      throw new GithubApiError("GitHub request failed", { kind: "network", url, cause });
-    }
-  };
-
-  let token = await auth.getToken(installationId);
-  let response = await request(token);
-  if (response.status === 401) {
-    auth.invalidate(installationId);
-    token = await auth.getToken(installationId);
-    response = await request(token);
-  }
+  const response = await githubRequest(auth, installationId, path, {
+    ...options,
+    method: "POST",
+    jsonBody: body,
+  });
 
   if (!response.ok) {
     const hint =

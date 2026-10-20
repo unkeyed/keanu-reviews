@@ -159,6 +159,62 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     expect(call?.[2]).toContain("slack.com/app_redirect?channel=C1&team=T1");
   });
 
+  it("posts both the #shipped note and the merge comment on the webhook close path", async () => {
+    const postPrComment = vi.fn(async () => {});
+    const d = {
+      ...deps(),
+      shippedChannel: "C0SHIPPED",
+      commentOnMerge: true,
+      postPrComment,
+      slackTeamId: "T1",
+    };
+    await handlePullRequest(d, payload("opened"));
+    await handlePullRequest(d, payload("closed", { merged: true }));
+
+    expect(slack.messages.some((message) => message.channel === "C0SHIPPED")).toBe(true);
+    expect(postPrComment).toHaveBeenCalledTimes(1);
+    expect(slack.channel("C1")?.archived).toBe(true);
+  });
+
+  it("skips the #shipped note and the merge comment when announceMerge is false", async () => {
+    const postPrComment = vi.fn(async () => {});
+    const d = {
+      ...deps(),
+      shippedChannel: "C0SHIPPED",
+      commentOnMerge: true,
+      postPrComment,
+      slackTeamId: "T1",
+    };
+    await handlePullRequest(d, payload("opened"));
+    await scheduleReminder(db, {
+      prId: prId("unkey/api", 1423),
+      reviewerGithubId: 7,
+      dueAt: new Date("2026-08-13T00:00:00Z"),
+    });
+
+    await expect(
+      handlePullRequest(d, payload("closed", { merged: true }), { announceMerge: false }),
+    ).resolves.toMatchObject({
+      sourceAccepted: true,
+      skippedShipped: true,
+      skippedMergeComment: true,
+    });
+
+    expect(slack.messages.some((message) => message.channel === "C0SHIPPED")).toBe(false);
+    expect(postPrComment).not.toHaveBeenCalled();
+    expect(slack.channel("C1")?.name).toBe("merged-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.archived).toBe(true);
+    const row = await findByRepoNumber(db, "unkey/api", 1423);
+    expect(row?.currentState).toBe("merged");
+    expect(row?.appliedState).toBe("merged");
+    expect(row?.mergeCommentPostedAt).toBeNull();
+    const [reminder] = await db
+      .select()
+      .from(reminders)
+      .where(eq(reminders.id, `${prId("unkey/api", 1423)}::7`));
+    expect(reminder?.status).toBe("cancelled");
+  });
+
   it("does not comment on the PR when the opt-in is off", async () => {
     const postPrComment = vi.fn(async () => {});
     const d = { ...deps(), commentOnMerge: false, postPrComment, slackTeamId: "T1" };
@@ -279,7 +335,11 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
 
     await expect(
       handlePullRequest(deps(), payload("edited", { updated_at: "2026-08-11T13:00:00Z" })),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({
+      sourceAccepted: true,
+      skippedShipped: false,
+      skippedMergeComment: false,
+    });
     expect(slack.channel("C1")?.archived).toBe(true); // stays archived
     expect(slack.messages.length).toBe(before); // nothing posted to the archived channel
   });
@@ -297,7 +357,11 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
 
     await expect(
       handlePullRequest(deps(), payload("reopened", { updated_at: "2026-08-11T13:00:00Z" })),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({
+      sourceAccepted: true,
+      skippedShipped: false,
+      skippedMergeComment: false,
+    });
     expect(slack.channel("C1")?.archived).toBe(false);
     const blocks = JSON.stringify(slack.messages);
     expect(blocks).toContain("👤 Opened by"); // author-invite note posted to the live channel
@@ -646,5 +710,31 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     );
     expect(slack.channel("C-LEGACY")?.name).toBe("closed-unkey-api-1423-add-better-auth");
     expect((await findByRepoNumber(db, "unkey/api", 1423))?.channelNameVersion).toBe(1);
+  });
+
+  it("treats Slack already_archived as a successful archive", async () => {
+    await handlePullRequest(deps(), payload("opened"));
+    slack.archiveChannel = async (channelId) => {
+      const channel = slack.channel(channelId);
+      if (channel) channel.archived = true;
+      throw { data: { error: "already_archived" } };
+    };
+
+    await expect(
+      handlePullRequest(
+        deps(),
+        payload("closed", { merged: true, updated_at: "2026-08-11T12:01:00Z" }),
+      ),
+    ).resolves.toMatchObject({
+      sourceAccepted: true,
+      skippedShipped: false,
+      skippedMergeComment: false,
+    });
+
+    expect(slack.channel("C1")?.archived).toBe(true);
+    expect(slack.channel("C1")?.name).toBe("merged-oz-unkey-api-1423-add-auth");
+    const row = await findByRepoNumber(db, "unkey/api", 1423);
+    expect(row?.currentState).toBe("merged");
+    expect(row?.appliedState).toBe("merged");
   });
 });

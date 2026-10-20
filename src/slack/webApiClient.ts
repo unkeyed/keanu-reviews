@@ -5,6 +5,7 @@ import {
   type SlackClient,
   type SlackMessage,
   type SlackMessageUpdate,
+  isSlackChannelAlreadyInState,
 } from "./client.ts";
 import { Pacer, type SleepFn, withRetry } from "./rateLimiter.ts";
 
@@ -12,12 +13,7 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_RATE_LIMIT_RETRIES = 1;
 const MAX_RATE_LIMIT_DELAY_MS = 5_000;
 
-export function isSlackChannelAlreadyInState(
-  error: unknown,
-  expectedCode: "already_archived" | "not_archived",
-): boolean {
-  return (error as { data?: { error?: string } })?.data?.error === expectedCode;
-}
+export { isSlackChannelAlreadyInState } from "./client.ts";
 
 interface SlackUserLookupApi {
   lookupByEmail(input: { email: string }): Promise<{ user?: { id?: string } }>;

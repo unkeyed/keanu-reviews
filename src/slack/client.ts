@@ -70,6 +70,19 @@ export function isDeadUserTokenError(error: unknown): boolean {
 }
 
 /**
+ * Slack's idempotent "already in this state" responses. `already_archived` on
+ * archive (and `not_archived` on unarchive) means the channel is already where
+ * the caller wanted it, so callers treat it as success.
+ */
+export function isSlackChannelAlreadyInState(
+  error: unknown,
+  expectedCode: "already_archived" | "not_archived",
+): boolean {
+  const candidate = error as { data?: { error?: string }; slackError?: string };
+  return candidate?.data?.error === expectedCode || candidate?.slackError === expectedCode;
+}
+
+/**
  * Result of asking a user (via their own token) to leave a channel:
  * - `left`: the user left the channel now.
  * - `already_out`: the user was not a member (a no-op success).
