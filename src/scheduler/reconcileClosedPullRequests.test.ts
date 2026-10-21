@@ -230,6 +230,59 @@ describe("closed pull request reconciliation", () => {
     expect(row?.appliedState).toBe("closed");
   });
 
+  const merge = (number: number, githubId: number): PullRequestPayload => ({
+    ...opened(number, githubId),
+    action: "closed",
+    pull_request: {
+      ...opened(number, githubId).pull_request,
+      merged: true,
+      updated_at: new Date().toISOString(), // recent → inside the re-archive window
+    },
+  });
+  const noSnapshots = vi.fn<PullRequestSnapshotFetcher>(async () => ({ snapshot: undefined }));
+
+  it("re-archives a terminal channel that drifted open after a late write", async () => {
+    const deps = handler();
+    await openPr(1, 101, deps);
+    await handlePullRequest(deps, merge(1, 101));
+    expect(slack.channel("C1")?.archived).toBe(true);
+    // A late CI/comment/review write would unarchive the channel to deliver.
+    await slack.unarchiveChannel("C1");
+    expect(slack.channel("C1")?.archived).toBe(false);
+
+    const run = createClosedPullRequestReconciliation({
+      handler: deps,
+      fetchSnapshot: noSnapshots,
+      logger: deps.logger,
+    });
+    const result = await run();
+
+    expect(result.reArchived).toBe(1);
+    expect(slack.channel("C1")?.archived).toBe(true); // closed back up
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        msg: "re-archived PR channel that drifted open after a late write",
+        fields: expect.objectContaining({ number: 1, channelId: "C1" }),
+      }),
+    );
+  });
+
+  it("leaves an already-archived terminal channel alone", async () => {
+    const deps = handler();
+    await openPr(1, 101, deps);
+    await handlePullRequest(deps, merge(1, 101)); // archives C1 and leaves it archived
+
+    const run = createClosedPullRequestReconciliation({
+      handler: deps,
+      fetchSnapshot: noSnapshots,
+      logger: deps.logger,
+    });
+    const result = await run();
+
+    expect(result.reArchived).toBe(0);
+    expect(slack.channel("C1")?.archived).toBe(true);
+  });
+
   it("leaves a pull request GitHub still reports as open", async () => {
     const deps = handler();
     await openPr(3, 103, deps);

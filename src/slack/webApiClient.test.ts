@@ -19,6 +19,7 @@ function fakeWebApi() {
       setTopic: vi.fn(async () => ({})),
       archive: vi.fn(async () => ({})),
       unarchive: vi.fn(async () => ({})),
+      info: vi.fn(async () => ({ channel: { is_archived: false } })),
       invite: vi.fn(async () => ({})),
       members: vi.fn(
         async (): Promise<{
@@ -202,6 +203,19 @@ describe("Slack Web API adapter", () => {
     expect(userWebFactory).toHaveBeenCalledWith("xoxp-flo");
     expect(userDelete).toHaveBeenCalledWith("chat.delete", { channel: "C123", ts: "1.2" });
     expect(web.apiCall).not.toHaveBeenCalled();
+  });
+
+  it("reads a channel's archived state via conversations.info", async () => {
+    const web = fakeWebApi();
+    web.conversations.info
+      .mockResolvedValueOnce({ channel: { is_archived: true } })
+      .mockResolvedValueOnce({ channel: { is_archived: false } })
+      .mockRejectedValueOnce({ data: { error: "channel_not_found" } });
+    const slack = createWebApiSlackClient("unused", { web });
+
+    await expect(slack.isChannelArchived("C1")).resolves.toBe(true);
+    await expect(slack.isChannelArchived("C1")).resolves.toBe(false);
+    await expect(slack.isChannelArchived("C_GONE")).resolves.toBeUndefined();
   });
 
   it("configures the production client to keep network retries inside durable leases", () => {

@@ -4,6 +4,7 @@ import {
   findByRepoNumber,
   setChannel,
   setMergeableState,
+  updateState,
   upsertPullRequest,
 } from "../db/repositories/pullRequests.ts";
 import type { PullRequestRow } from "../db/schema.ts";
@@ -61,6 +62,17 @@ describe("reportMergeability", () => {
     expect(JSON.stringify(slack.messages.at(-1)?.blocks)).toContain(expected);
     expect(slack.messages.at(-1)?.threadTs).toBeUndefined(); // direct channel post
   });
+
+  it.each(["merged", "closed"] as const)(
+    "skips a %s PR without fetching GitHub or posting (would unarchive the channel)",
+    async (terminal) => {
+      await updateState(db, "unkey/api#1", terminal);
+      const d = deps(state("clean"));
+      await reportMergeability(d, await row(), "evt-late-ci");
+      expect(d.fetchPullRequest).not.toHaveBeenCalled();
+      expect(slack.messages).toHaveLength(0);
+    },
+  );
 
   it("does not announce the 'behind' state (noisy update-your-branch nudge)", async () => {
     await reportMergeability(deps(state("behind")), await row(), "evt-1");

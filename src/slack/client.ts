@@ -98,6 +98,8 @@ export interface SlackClient {
   setTopic(channelId: string, topic: string): Promise<void>;
   archiveChannel(channelId: string): Promise<void>;
   unarchiveChannel(channelId: string): Promise<void>;
+  /** Whether a channel is currently archived; undefined if it can't be read. */
+  isChannelArchived(channelId: string): Promise<boolean | undefined>;
   inviteUsers(channelId: string, userIds: string[]): Promise<void>;
   /** All member IDs of a channel (bot token, paginated). Includes the bot. */
   listChannelMembers(channelId: string): Promise<string[]>;

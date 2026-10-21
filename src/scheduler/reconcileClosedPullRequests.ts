@@ -1,6 +1,7 @@
 import {
   findById,
   listOpenPullRequestsForReconciliation,
+  listRecentlyClosedPullRequests,
 } from "../db/repositories/pullRequests.ts";
 import type { PullRequestRow } from "../db/schema.ts";
 import { isTerminal } from "../domain/prState.ts";
@@ -38,7 +39,15 @@ export interface ReconciliationSummary {
   rateLimited: boolean;
   /** Another run was already in progress in this process. */
   overlapped: boolean;
+  /** Terminal PRs whose channel had drifted open (late write) and was re-archived. */
+  reArchived: number;
 }
+
+/**
+ * Window for the re-archive sweep: only PRs that went terminal this recently are
+ * checked, since channel drift happens from writes clustered around the merge.
+ */
+const RE_ARCHIVE_WINDOW_MS = 7 * 24 * 60 * 60_000;
 
 export interface ClosedPullRequestReconciliationDeps {
   /** Same dependencies the webhook worker uses for pull_request events. */
@@ -58,6 +67,7 @@ const ZERO: ReconciliationSummary = {
   skippedMergeComments: 0,
   rateLimited: false,
   overlapped: false,
+  reArchived: 0,
 };
 
 function summary(overrides: Partial<ReconciliationSummary> = {}): ReconciliationSummary {
@@ -189,8 +199,47 @@ async function reconcile(
     }
   }
 
+  // Independent of the GitHub reads above (and of any rate-limit break): close
+  // back up any terminal channel a late write reopened.
+  await reArchiveDriftedChannels(deps, result);
+
   logger.info("pull request reconciliation finished", { ...result });
   return result;
+}
+
+/**
+ * Re-archive channels that drifted open. A CI check / comment / review that lands
+ * just after a merge is delivered via the Slack client's `is_archived` recovery,
+ * which unarchives the channel — and `handlePullRequest` won't re-close it because
+ * its applied state already matches. So directly archive any recently-terminal
+ * PR whose channel is currently open. Best-effort: one failure never stops the rest.
+ */
+async function reArchiveDriftedChannels(
+  deps: ClosedPullRequestReconciliationDeps,
+  result: ReconciliationSummary,
+): Promise<void> {
+  const { handler, logger } = deps;
+  const since = new Date(Date.now() - RE_ARCHIVE_WINDOW_MS);
+  const rows = await listRecentlyClosedPullRequests(handler.db, since);
+  for (const row of rows) {
+    if (!row.channelId) continue;
+    const fields = { repoFullName: row.repoFullName, number: row.number, channelId: row.channelId };
+    try {
+      const archived = await handler.slack.isChannelArchived(row.channelId);
+      if (archived !== false) continue; // already archived, or unreadable — leave it
+      // Empty the channel first (silent) when quiet-archive is configured, then close.
+      if (handler.quietArchive) await handler.quietArchive(row.channelId);
+      await handler.slack.archiveChannel(row.channelId);
+      result.reArchived += 1;
+      logger.info("re-archived PR channel that drifted open after a late write", fields);
+    } catch (error) {
+      result.failed += 1;
+      logger.error("re-archive sweep failed for a channel", {
+        ...fields,
+        err: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 }
 
 /** Apply one GitHub snapshot. Rate-limit exhaustion is decided by the caller. */

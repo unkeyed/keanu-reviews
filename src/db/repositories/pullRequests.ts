@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, eq, inArray, isNull, lt, lte, ne, or } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, or } from "drizzle-orm";
 import type { PrState } from "../../domain/prState.ts";
 import type { Db } from "../client.ts";
 import { type PullRequestRow, pullRequestLifecycleClaims, pullRequests } from "../schema.ts";
@@ -289,6 +289,32 @@ export async function listOpenPullRequestsForReconciliation(db: Db): Promise<Pul
       ),
     )
     .orderBy(asc(pullRequests.repoFullName), asc(pullRequests.number));
+}
+
+/**
+ * Recently closed/merged PRs that still have a channel, for the re-archive sweep.
+ * A late write (CI/comment/review) can unarchive a terminal PR's channel via the
+ * Slack client's `is_archived` recovery; this bounds the sweep to PRs that went
+ * terminal since `since`, where such drift happens, instead of all history.
+ */
+export async function listRecentlyClosedPullRequests(
+  db: Db,
+  since: Date,
+  limit = 500,
+): Promise<PullRequestRow[]> {
+  return db
+    .select()
+    .from(pullRequests)
+    .where(
+      and(
+        inArray(pullRequests.currentState, ["closed", "merged"]),
+        isNotNull(pullRequests.channelId),
+        isNotNull(pullRequests.sourceUpdatedAt),
+        gte(pullRequests.sourceUpdatedAt, since),
+      ),
+    )
+    .orderBy(desc(pullRequests.sourceUpdatedAt))
+    .limit(limit);
 }
 
 /** CI mapping (U7): resolve a repository-scoped head SHA to every tracked PR. */

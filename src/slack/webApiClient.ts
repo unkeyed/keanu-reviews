@@ -94,6 +94,7 @@ interface SlackWebApi {
     setTopic(input: { channel: string; topic: string }): Promise<unknown>;
     archive(input: { channel: string }): Promise<unknown>;
     unarchive(input: { channel: string }): Promise<unknown>;
+    info(input: { channel: string }): Promise<{ channel?: { is_archived?: boolean } }>;
     invite(input: { channel: string; users: string }): Promise<unknown>;
     members(input: { channel: string; cursor?: string; limit: number }): Promise<unknown>;
     leave(input: { channel: string }): Promise<unknown>;
@@ -218,7 +219,9 @@ export function createWebApiSlackClient(
   //   • `is_archived` — the channel was archived (a prior terminal event, an
   //     out-of-order merge, or a manual archive). Any write/rename to it fails,
   //     which otherwise poisons every future job for that PR. Unarchive and retry
-  //     (needs `channels:manage`); the reconciler re-archives later if terminal.
+  //     (needs `channels:manage`). This can leave a merged PR's channel open if a
+  //     late write (CI/comment/review) lands after archive; the daily reconcile's
+  //     re-archive sweep closes such drift back up.
   // Bounded to two recoveries so a channel that is both archived AND left can be
   // healed in one call without risking an infinite loop.
   const withWritableChannel = async <T>(channel: string, op: () => Promise<T>): Promise<T> => {
@@ -382,6 +385,20 @@ export function createWebApiSlackClient(
           );
         } catch (error) {
           if (!isSlackChannelAlreadyInState(error, "not_archived")) throw error;
+        }
+      }),
+    isChannelArchived: (channelId) =>
+      call(async () => {
+        try {
+          const res = (await web.conversations.info({ channel: channelId })) as {
+            channel?: { is_archived?: unknown };
+          };
+          const archived = res.channel?.is_archived;
+          return typeof archived === "boolean" ? archived : undefined;
+        } catch (error) {
+          // A missing/invalid channel can't be read — report "unknown", not a crash.
+          if (slackErrorCode(error) === "channel_not_found") return undefined;
+          throw error;
         }
       }),
     inviteUsers: (channelId, userIds) =>

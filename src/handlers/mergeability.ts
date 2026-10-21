@@ -1,6 +1,7 @@
 import type { Db } from "../db/client.ts";
 import { setMergeableState } from "../db/repositories/pullRequests.ts";
 import type { PullRequestRow } from "../db/schema.ts";
+import { isTerminal } from "../domain/prState.ts";
 import type { Logger } from "../logger.ts";
 import { sanitizeMrkdwn } from "../slack/blocks.ts";
 import type { SlackClient } from "../slack/client.ts";
@@ -57,6 +58,10 @@ export async function reportMergeability(
   if (!row.channelId) {
     throw new RetryableError(`PR channel is not ready for ${row.repoFullName}#${row.number}`);
   }
+  // A closed/merged PR already shows its terminal state and its channel is
+  // archived; posting a late mergeability update (e.g. a CI check that finished
+  // just after the merge) would unarchive the channel to deliver it. Skip it.
+  if (isTerminal(row.currentState)) return;
 
   const pr = await deps.fetchPullRequest(row.repoFullName, row.number);
   if (!pr || pr.draft) return; // draft PRs already show `draft` in the channel name

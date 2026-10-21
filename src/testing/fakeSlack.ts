@@ -56,6 +56,9 @@ export class FakeSlackClient implements SlackClient {
     const ch = this.channels.find((c) => c.id === channelId);
     if (ch) ch.archived = false;
   }
+  async isChannelArchived(channelId: string): Promise<boolean | undefined> {
+    return this.channels.find((c) => c.id === channelId)?.archived;
+  }
   async inviteUsers(channelId: string, userIds: string[]): Promise<void> {
     const missing = userIds.filter(
       (userId) =>
