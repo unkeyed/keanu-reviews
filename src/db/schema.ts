@@ -179,33 +179,6 @@ export const slackUserTokens = pgTable(
   (t) => ({ teamIdx: index("slack_user_tokens_team_idx").on(t.slackTeamId) }),
 );
 
-/**
- * Review-needed alerts that are waiting for a non-draft PR with passing CI.
- * One row per PR reviewer. `held` has not been sent; `sent` already notified
- * them; `cancelled` was removed or reviewed before (or after) the send.
- */
-export const reviewAlerts = pgTable(
-  "review_alerts",
-  {
-    id: text("id").primaryKey(),
-    prId: text("pr_id")
-      .notNull()
-      .references(() => pullRequests.id),
-    reviewerGithubId: bigint("reviewer_github_id", { mode: "number" }).notNull(),
-    reviewerLogin: text("reviewer_login").notNull(),
-    // Slack idempotency key for this request cycle. Stable while the alert
-    // stays held so a later CI event cannot post a second invite.
-    effectRef: text("effect_ref").notNull(),
-    status: text("status").notNull(), // held | sent | cancelled
-    sourceUpdatedAt: timestamp("source_updated_at", { withTimezone: true }).notNull(),
-    sourceVersion: text("source_version").notNull().default(""),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (t) => ({
-    prStatusIdx: index("review_alerts_pr_status_idx").on(t.prId, t.status),
-  }),
-);
-
 export const reminders = pgTable(
   "reminders",
   {
@@ -256,7 +229,6 @@ export const processedDeliveries = pgTable("processed_deliveries", {
 });
 
 export type PullRequestRow = typeof pullRequests.$inferSelect;
-export type ReviewAlertRow = typeof reviewAlerts.$inferSelect;
 export type IdentityRow = typeof identities.$inferSelect;
 export type ReminderRow = typeof reminders.$inferSelect;
 export type JobRow = typeof jobs.$inferSelect;

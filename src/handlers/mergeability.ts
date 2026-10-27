@@ -3,6 +3,8 @@ export interface PullRequestMergeability {
   mergeable: boolean | null;
   mergeableState: string;
   draft: boolean;
+  /** Present when the pull-request read included the current requested reviewers. */
+  requestedReviewers?: { id: number; login: string }[];
 }
 
 /** Read a PR's current mergeability (a GitHub read; within the one-way boundary). */

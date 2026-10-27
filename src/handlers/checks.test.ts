@@ -6,15 +6,7 @@ import { setChannel, updateState, upsertPullRequest } from "../db/repositories/p
 import { createTestDb } from "../db/testDb.ts";
 import { createLogger } from "../logger.ts";
 import { FakeSlackClient } from "../testing/fakeSlack.ts";
-import {
-  type CheckRunPayload,
-  type CheckSuitePayload,
-  type ChecksDeps,
-  type CommitStatusPayload,
-  handleCheckRun,
-  handleCheckSuite,
-  handleCommitStatus,
-} from "./checks.ts";
+import { type CheckRunPayload, type ChecksDeps, handleCheckRun } from "./checks.ts";
 import { handleReviewRequest } from "./reviewRequest.ts";
 
 let db: Db;
@@ -36,6 +28,12 @@ const deps = (over: Partial<ChecksDeps> = {}): ChecksDeps => ({
   slack,
   logger: createLogger("error"),
   fetchCiReadiness: async () => ci,
+  fetchPullRequest: async (_repo, number) => ({
+    mergeable: false,
+    mergeableState: "blocked",
+    draft: false,
+    requestedReviewers: number === 2 ? [{ id: 8, login: "ada" }] : [{ id: 7, login: "flo" }],
+  }),
   ...over,
 });
 
@@ -101,9 +99,20 @@ const payload = (over: Partial<CheckRunPayload["check_run"]> = {}): CheckRunPayl
 describe("CI events release review alerts", () => {
   it("does not post CI or merge status when a check completes", async () => {
     await seedPr("sha-1");
-    await handleCheckRun(deps(), payload());
+    await handleCheckRun(
+      deps({
+        fetchPullRequest: async () => ({
+          mergeable: true,
+          mergeableState: "clean",
+          draft: false,
+          requestedReviewers: [],
+        }),
+      }),
+      payload(),
+    );
     expect(slack.messages).toHaveLength(0);
     expect(JSON.stringify(slack.messages)).not.toContain("Ready to merge");
+    expect(JSON.stringify(slack.messages)).not.toContain("checks are failing");
   });
 
   it("does nothing while the run is still in progress", async () => {
@@ -263,44 +272,6 @@ describe("CI events release review alerts", () => {
     const event = payload({ pull_requests: [{ number: 1 }, { number: 2 }] });
     await expect(handleCheckRun(deps(), event)).rejects.toThrow("PR channel is not ready");
     expect(slack.invites.map((invite) => invite.channelId)).toEqual(["C1"]);
-  });
-
-  it("releases a held alert when a check suite completes green", async () => {
-    await seedPr("sha-1");
-    ci = "failing";
-    await requestReview();
-    ci = "passing";
-    const suite: CheckSuitePayload = {
-      action: "completed",
-      repository: { full_name: "unkey/api" },
-      check_suite: {
-        id: 5,
-        status: "completed",
-        conclusion: "success",
-        head_sha: "sha-1",
-        pull_requests: [{ number: 1 }],
-      },
-    };
-    await handleCheckSuite(deps(), suite);
-    expect(slack.invites).toHaveLength(1);
-    await handleCheckSuite(deps(), { ...suite, check_suite: { ...suite.check_suite, id: 6 } });
-    expect(slack.invites).toHaveLength(1);
-  });
-
-  it("releases a held alert when a legacy commit status goes green", async () => {
-    await seedPr("sha-1");
-    ci = "failing";
-    await requestReview();
-    ci = "passing";
-    const status: CommitStatusPayload = {
-      sha: "sha-1",
-      state: "success",
-      repository: { full_name: "unkey/api" },
-    };
-    await handleCommitStatus(deps(), status);
-    expect(slack.invites).toHaveLength(1);
-    await handleCommitStatus(deps(), status);
-    expect(slack.invites).toHaveLength(1);
   });
 
   it("does not alert when the aggregate is still failing or pending", async () => {

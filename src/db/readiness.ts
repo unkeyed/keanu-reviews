@@ -11,7 +11,6 @@ import {
   pullRequestLifecycleClaims,
   pullRequests,
   reminders,
-  reviewAlerts,
 } from "./schema.ts";
 
 export type ReadyCheck = () => Promise<void>;
@@ -59,11 +58,6 @@ export function createDbReadyCheck(db: Db): ReadyCheck {
           ${githubLinkConfirmations.githubLogin}, ${githubLinkConfirmations.expiresAt},
           ${githubLinkConfirmations.createdAt}
         )::text from ${githubLinkConfirmations} limit 0) as github_link_confirmations,
-        (select row(
-          ${reviewAlerts.id}, ${reviewAlerts.prId}, ${reviewAlerts.reviewerGithubId},
-          ${reviewAlerts.reviewerLogin}, ${reviewAlerts.effectRef}, ${reviewAlerts.status},
-          ${reviewAlerts.sourceUpdatedAt}, ${reviewAlerts.sourceVersion}, ${reviewAlerts.updatedAt}
-        )::text from ${reviewAlerts} limit 0) as review_alerts,
         (select row(
           ${reminders.id}, ${reminders.prId}, ${reminders.reviewerGithubId},
           ${reminders.dueAt}, ${reminders.availableAt}, ${reminders.sourceUpdatedAt},

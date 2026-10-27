@@ -1,4 +1,4 @@
-/** CI aggregate used to decide whether a review-needed alert may fire. */
+/** CI aggregate from check runs, used to decide whether a review-needed alert may fire. */
 export type CiReadiness = "passing" | "failing" | "pending" | "absent";
 
 export interface CiCheckRun {
@@ -8,25 +8,6 @@ export interface CiCheckRun {
   /** ISO timestamp; the newest run wins when the same check name is rerun. */
   startedAt?: string | null;
   completedAt?: string | null;
-}
-
-export interface CiCheckSuite {
-  status: string;
-}
-
-export interface CiCommitStatus {
-  /**
-   * Combined commit-status state. GitHub reports `"pending"` with a count of 0
-   * when the commit has no statuses at all, so a zero count is "no statuses".
-   */
-  state: string | null;
-  count: number;
-}
-
-export interface CiSnapshot {
-  checkRuns: CiCheckRun[];
-  checkSuites: CiCheckSuite[];
-  commitStatus: CiCommitStatus;
 }
 
 /** Conclusions that mean CI did not pass. `cancelled` is handled separately. */
@@ -63,39 +44,25 @@ function latestRuns(runs: CiCheckRun[]): CiCheckRun[] {
 }
 
 /**
- * Fold check runs, check suites, and legacy commit statuses into one signal.
+ * Fold check runs into one signal. Legacy commit statuses are ignored.
  *
  * In-progress work waits, even when another check has already failed: the next
- * completion event re-reads the aggregate, and a failing result still does not
- * alert. `absent` means the commit has no checks and no commit statuses (the
- * repo likely has no CI). Callers decide whether to wait briefly for checks to
- * register or to treat that as ready.
+ * `check_run` completion re-reads the list, and a failing result still does not
+ * alert. `absent` means the commit has no check runs (no GitHub Checks CI, or
+ * checks have not been created yet).
  */
-export function classifyCiReadiness(snapshot: CiSnapshot): CiReadiness {
-  const runs = latestRuns(snapshot.checkRuns);
-  const suites = snapshot.checkSuites;
-  const status = snapshot.commitStatus;
-  const statusPending = status.count > 0 && status.state === "pending";
-  const statusFailing =
-    status.count > 0 && (status.state === "failure" || status.state === "error");
-
-  const incomplete =
-    runs.some((run) => run.status !== "completed" || run.conclusion === null) ||
-    suites.some((suite) => suite.status !== "completed") ||
-    statusPending;
-  if (incomplete) return "pending";
-
-  const hardFail = runs.some((run) => run.conclusion !== null && HARD_FAIL.has(run.conclusion));
-  if (hardFail || statusFailing) return "failing";
-
-  // A commit whose latest runs are all cancelled did not pass. A cancelled
-  // sibling next to a success (fail-fast or a superseded attempt) does not.
-  const cancelledOnly =
-    runs.length > 0 &&
-    runs.every((run) => run.conclusion === "cancelled") &&
-    status.state !== "success";
-  if (cancelledOnly) return "failing";
-
-  if (runs.length > 0 || suites.length > 0 || status.count > 0) return "passing";
-  return "absent";
+export function classifyCiReadiness(runs: CiCheckRun[]): CiReadiness {
+  const latest = latestRuns(runs);
+  if (latest.length === 0) return "absent";
+  if (latest.some((run) => run.status !== "completed" || run.conclusion === null)) {
+    return "pending";
+  }
+  if (latest.some((run) => run.conclusion !== null && HARD_FAIL.has(run.conclusion))) {
+    return "failing";
+  }
+  // Every latest run was cancelled: CI did not pass. A cancelled sibling next
+  // to a success (fail-fast or a superseded attempt) does not, because that
+  // sibling is not "every" run.
+  if (latest.every((run) => run.conclusion === "cancelled")) return "failing";
+  return "passing";
 }

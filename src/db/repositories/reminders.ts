@@ -32,6 +32,34 @@ async function findReminder(db: Db, id: string): Promise<ReminderRow | undefined
   return row;
 }
 
+/** The reminder row for one requested reviewer, if review was requested or cancelled. */
+export async function findReminderForReviewer(
+  db: Db,
+  prId: string,
+  reviewerGithubId: number,
+): Promise<ReminderRow | undefined> {
+  return findReminder(db, reminderId(prId, reviewerGithubId));
+}
+
+/**
+ * Move a still-pending reminder's due time without starting a new generation.
+ * Used when the review-needed alert was held and is only sent once CI is green,
+ * so the 12h clock starts at the alert rather than at the original request.
+ */
+export async function pushReminderDue(
+  db: Db,
+  prId: string,
+  reviewerGithubId: number,
+  dueAt: Date,
+): Promise<void> {
+  await db
+    .update(reminders)
+    .set({ dueAt, availableAt: dueAt, attempts: 0, claimedAt: null })
+    .where(
+      and(eq(reminders.id, reminderId(prId, reviewerGithubId)), eq(reminders.status, "pending")),
+    );
+}
+
 /** Schedule a new generation only when its source version is newer than stored state. */
 export async function scheduleReminder(
   db: Db,

@@ -1,6 +1,5 @@
 import { findMessageEffect } from "../db/repositories/messages.ts";
 import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
-import { cancelReviewAlert } from "../db/repositories/reviewAlerts.ts";
 import { isBotActor, shouldSkipActor } from "../github/actors.ts";
 import { resolveEmbeddedImages } from "../github/attachments.ts";
 import { reviewerDisplayLabel } from "../identity/resolve.ts";
@@ -73,15 +72,9 @@ export async function handleReview(
   // GitHub is the source of truth: cancel before enrichment or Slack delivery,
   // so a downstream failure cannot leave an obsolete reminder live.
   const reviewedAt = sourceDate(r.submitted_at ?? payload.pull_request.updated_at);
+  // Cancels the reminder. A later check_run sees that cancellation and does not
+  // send the review-needed alert.
   await deps.onReviewSubmitted?.(row.id, r.user.id, reviewedAt, sourceVersion);
-  // A review already happened — don't ping them later when CI goes green.
-  await cancelReviewAlert(deps.db, {
-    prId: row.id,
-    reviewerGithubId: r.user.id,
-    reviewerLogin: r.user.login,
-    sourceUpdatedAt: reviewedAt ?? new Date(0),
-    sourceVersion,
-  });
   const author = await resolveMessageAuthor(deps, r.user);
   // A "commented" review whose body is empty after cleaning is just the wrapper
   // GitHub emits around inline review comments — the real content arrives as

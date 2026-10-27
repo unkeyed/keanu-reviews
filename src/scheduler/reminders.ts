@@ -8,6 +8,7 @@ import {
   isReminderClaimCurrent,
   listDue,
   markReminderSent,
+  pushReminderDue,
   rescheduleOrFailReminder,
   scheduleReminder,
 } from "../db/repositories/reminders.ts";
@@ -253,10 +254,15 @@ export function createReminderScheduler(deps: ReminderDeps) {
     return posted;
   };
 
+  const onReviewAlerted = async (prId: string, reviewerGithubId: number): Promise<void> => {
+    await pushReminderDue(deps.db, prId, reviewerGithubId, new Date(now() + windowMs));
+  };
+
   return {
     onReviewRequested,
     onReviewSubmitted: cancel,
     onReviewRequestRemoved: cancel,
+    onReviewAlerted,
     processDue,
   };
 }

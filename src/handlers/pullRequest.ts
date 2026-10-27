@@ -11,7 +11,6 @@ import {
   setChannel,
 } from "../db/repositories/pullRequests.ts";
 import { cancelForPr } from "../db/repositories/reminders.ts";
-import { cancelReviewAlertsForPr } from "../db/repositories/reviewAlerts.ts";
 import { type PrState, computeTargetState, isTerminal } from "../domain/prState.ts";
 import type { PrCommenter } from "../github/comments.ts";
 import type { CiReadinessFetcher } from "../github/users.ts";
@@ -31,6 +30,7 @@ import { deliverSlackMessage } from "../slack/deliver.ts";
 import { slackChannelUrl } from "../slack/links.ts";
 import { CURRENT_CHANNEL_NAME_VERSION, channelName } from "../slack/naming.ts";
 import { RetryableError } from "../worker/retryable.ts";
+import type { PullRequestFetcher } from "./mergeability.ts";
 import { notifyShipped } from "./shipped.ts";
 
 export interface PullRequestPayload {
@@ -65,6 +65,8 @@ export interface PrHandlerDeps {
    * consulted).
    */
   fetchCiReadiness?: CiReadinessFetcher;
+  /** Optional PR read: mergeability for reminders, and requested reviewers for alerts. */
+  fetchPullRequest?: PullRequestFetcher;
   /** Optional #shipped channel (id or name); announces a PR when it merges. */
   shippedChannel?: string;
   /** Opt-in: post the Slack channel URL as a comment on the PR when it merges. */
@@ -323,12 +325,6 @@ export async function handlePullRequest(
     // review ping after the PR is already done.
     if (isTerminal(desiredState)) {
       await cancelForPr(db, current.id, sourceUpdatedAt, options.sourceArrivalKey ?? "");
-      await cancelReviewAlertsForPr(
-        db,
-        current.id,
-        sourceUpdatedAt,
-        options.sourceArrivalKey ?? "",
-      );
     }
 
     // Default true: the webhook path announces a merge. Late reconciliation opts out.

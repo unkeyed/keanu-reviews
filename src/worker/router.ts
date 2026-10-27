@@ -1,6 +1,6 @@
 import type { PrForShaFetcher } from "../ci/status.ts";
 import type { JobRow } from "../db/schema.ts";
-import { handleCheckRun, handleCheckSuite, handleCommitStatus } from "../handlers/checks.ts";
+import { handleCheckRun } from "../handlers/checks.ts";
 import { type PrHandlerDeps, handlePullRequest } from "../handlers/pullRequest.ts";
 import { handleIssueComment, handleReview } from "../handlers/review.ts";
 import { handleReviewComment } from "../handlers/reviewComment.ts";
@@ -8,6 +8,7 @@ import {
   type ReviewRequestDeps,
   handleReadyForReview,
   handleReviewRequest,
+  handleSynchronizedReviewAlerts,
 } from "../handlers/reviewRequest.ts";
 import type { GithubEmailFetcher } from "../identity/resolve.ts";
 
@@ -55,8 +56,12 @@ export function createRouter(deps: RouterDeps): Router {
           });
         } else if (job.action === "ready_for_review") {
           // Invite reviewers who were assigned while the PR was still a draft,
-          // once CI is passing.
+          // once check runs are passing.
           await handleReadyForReview(deps, payload, job.deliveryId, sourceArrivalKey, {
+            attempt: job.attempts,
+          });
+        } else if (job.action === "synchronize") {
+          await handleSynchronizedReviewAlerts(deps, payload, job.deliveryId, sourceArrivalKey, {
             attempt: job.attempts,
           });
         }
@@ -72,12 +77,6 @@ export function createRouter(deps: RouterDeps): Router {
         return;
       case "check_run":
         await handleCheckRun(deps, payload, { attempt: job.attempts });
-        return;
-      case "check_suite":
-        await handleCheckSuite(deps, payload, { attempt: job.attempts });
-        return;
-      case "status":
-        await handleCommitStatus(deps, payload, { attempt: job.attempts });
         return;
       default:
         deps.logger.debug("unhandled event", { event: job.event, action: job.action });

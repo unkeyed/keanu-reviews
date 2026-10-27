@@ -71,13 +71,6 @@
       "when": 1787307715694,
       "tag": "0009_channel_name_version",
       "breakpoints": true
-    },
-    {
-      "idx": 10,
-      "version": "7",
-      "when": 1793067523894,
-      "tag": "0010_minor_annihilus",
-      "breakpoints": true
     }
   ]
 }

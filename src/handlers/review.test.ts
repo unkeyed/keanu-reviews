@@ -223,8 +223,17 @@ describe("handleReview (U6, R5)", () => {
       currentState: "pr",
       headSha: "sha-1",
     });
+    const scheduler = createReminderScheduler({
+      db,
+      slack,
+      logger: createLogger("error"),
+      reminderHours: 12,
+    });
     await handleReviewRequest(
-      deps({ fetchCiReadiness: async () => "failing" }),
+      deps({
+        fetchCiReadiness: async () => "failing",
+        onReviewRequested: scheduler.onReviewRequested,
+      }),
       {
         action: "review_requested",
         repository: { full_name: "unkey/api" },
@@ -238,22 +247,37 @@ describe("handleReview (U6, R5)", () => {
 
     const submitted = review("approved");
     submitted.review.submitted_at = "2026-08-11T12:30:00Z";
-    await handleReview(deps(), submitted, "delivery-review");
+    await handleReview(
+      deps({ onReviewSubmitted: scheduler.onReviewSubmitted }),
+      submitted,
+      "delivery-review",
+    );
     const afterReview = slack.messages.length;
 
-    await handleCheckRun(deps({ fetchCiReadiness: async () => "passing" }), {
-      action: "completed",
-      repository: { full_name: "unkey/api" },
-      check_run: {
-        id: 100,
-        status: "completed",
-        conclusion: "success",
-        html_url: "https://github.com/unkey/api/runs/100",
-        head_sha: "sha-1",
-        name: "test",
-        pull_requests: [{ number: 1 }],
+    await handleCheckRun(
+      deps({
+        fetchCiReadiness: async () => "passing",
+        fetchPullRequest: async () => ({
+          mergeable: false,
+          mergeableState: "blocked",
+          draft: false,
+          requestedReviewers: [{ id: 7, login: "flo" }],
+        }),
+      }),
+      {
+        action: "completed",
+        repository: { full_name: "unkey/api" },
+        check_run: {
+          id: 100,
+          status: "completed",
+          conclusion: "success",
+          html_url: "https://github.com/unkey/api/runs/100",
+          head_sha: "sha-1",
+          name: "test",
+          pull_requests: [{ number: 1 }],
+        },
       },
-    });
+    );
     expect(slack.invites).toHaveLength(0);
     expect(slack.messages).toHaveLength(afterReview);
   });

@@ -1,7 +1,5 @@
 import {
   type CiCheckRun,
-  type CiCheckSuite,
-  type CiCommitStatus,
   type CiReadiness,
   type PrForShaFetcher,
   classifyCiReadiness,
@@ -9,7 +7,6 @@ import {
 import type { PullRequestFetcher } from "../handlers/mergeability.ts";
 import type { GithubUserFetcher } from "../identity/link.ts";
 import type { GithubEmailFetcher } from "../identity/resolve.ts";
-import type { Logger } from "../logger.ts";
 import type { InstallationAuth } from "./auth.ts";
 import { GithubApiError, type GithubRequestOptions, githubGetJson } from "./http.ts";
 
@@ -75,12 +72,14 @@ export function createPullRequestFetcher(
       mergeable?: unknown;
       mergeable_state?: unknown;
       draft?: unknown;
+      requested_reviewers?: unknown;
     }>(auth, installationId, path, options);
     if (body === undefined) return undefined;
     return {
       mergeable: typeof body.mergeable === "boolean" ? body.mergeable : null,
       mergeableState: typeof body.mergeable_state === "string" ? body.mergeable_state : "unknown",
       draft: body.draft === true,
+      requestedReviewers: requestedReviewersFrom(body.requested_reviewers),
     };
   };
 }
@@ -126,7 +125,20 @@ export function createReviewApprovalFetcher(
   };
 }
 
-/** Read whether the commit's CI is passing, failing, still running, or not configured. */
+function requestedReviewersFrom(value: unknown): { id: number; login: string }[] {
+  if (!Array.isArray(value)) return [];
+  const reviewers: { id: number; login: string }[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const id = (entry as { id?: unknown }).id;
+    const login = (entry as { login?: unknown }).login;
+    if (!Number.isInteger(id) || typeof login !== "string" || login.length === 0) continue;
+    reviewers.push({ id: id as number, login });
+  }
+  return reviewers;
+}
+
+/** Read whether the commit's check runs are passing, failing, still running, or absent. */
 export type CiReadinessFetcher = (repoFullName: string, sha: string) => Promise<CiReadiness>;
 
 interface CheckRunList {
@@ -134,31 +146,20 @@ interface CheckRunList {
   check_runs?: unknown;
 }
 
-interface CheckSuiteList {
-  total_count?: unknown;
-  check_suites?: unknown;
-}
-
-interface CombinedStatus {
-  state?: unknown;
-  total_count?: unknown;
-}
-
-function repoPath(repoFullName: string): string {
+function encodedRepoPath(repoFullName: string): string {
   return repoFullName.split("/").map(encodeURIComponent).join("/");
 }
 
 const PAGE_LIMIT = 10;
 
 /**
- * Page a GitHub list endpoint. Stops after {@link PAGE_LIMIT} pages; the caller
- * treats a truncated list as still pending so a missing later failure cannot
- * look like a green commit.
+ * Page check runs. Stops after {@link PAGE_LIMIT} pages and the caller treats a
+ * truncated list as still pending so a missing later failure cannot look green.
  */
-async function listAll<T>(
-  load: (page: number) => Promise<{ total: number; items: T[] }>,
-): Promise<{ items: T[]; truncated: boolean }> {
-  const items: T[] = [];
+async function listCheckRuns(
+  load: (page: number) => Promise<{ total: number; items: CiCheckRun[] }>,
+): Promise<{ items: CiCheckRun[]; truncated: boolean }> {
+  const items: CiCheckRun[] = [];
   let total = 0;
   for (let page = 1; page <= PAGE_LIMIT; page++) {
     const body = await load(page);
@@ -178,21 +179,18 @@ function stringField(value: unknown): string | null {
 }
 
 /**
- * Production CI aggregate (read-only). Check runs and check suites use the
- * Checks permission. Legacy commit statuses use Commit statuses: Read. A 403
- * on that endpoint means the App has not been granted it; status-only CI is
- * then ignored and a warning is logged, while GitHub Actions checks still gate
- * alerts. Enable the permission and the Status webhook to cover both.
+ * Production CI aggregate (read-only). Uses only the check-runs API, which the
+ * existing Checks: Read permission already allows. Legacy commit statuses are
+ * not consulted.
  */
 export function createCiReadinessFetcher(
   auth: InstallationAuth,
   installationId: string,
-  options: GithubRequestOptions & { logger?: Logger } = {},
+  options: GithubRequestOptions = {},
 ): CiReadinessFetcher {
   return async (repoFullName: string, sha: string): Promise<CiReadiness> => {
-    const root = `/repos/${repoPath(repoFullName)}/commits/${encodeURIComponent(sha)}`;
-
-    const runs = await listAll<CiCheckRun>(async (page) => {
+    const root = `/repos/${encodedRepoPath(repoFullName)}/commits/${encodeURIComponent(sha)}`;
+    const runs = await listCheckRuns(async (page) => {
       const path = `${root}/check-runs?per_page=100&page=${page}`;
       const body = await githubGetJson<CheckRunList>(auth, installationId, path, options);
       if (body === undefined || !Array.isArray(body.check_runs)) throw invalidResponse(path);
@@ -217,47 +215,8 @@ export function createCiReadinessFetcher(
         }),
       };
     });
-
-    const suites = await listAll<CiCheckSuite>(async (page) => {
-      const path = `${root}/check-suites?per_page=100&page=${page}`;
-      const body = await githubGetJson<CheckSuiteList>(auth, installationId, path, options);
-      if (body === undefined || !Array.isArray(body.check_suites)) throw invalidResponse(path);
-      return {
-        total: numberField(body.total_count),
-        items: body.check_suites.map((entry) => {
-          const suite = typeof entry === "object" && entry !== null ? entry : {};
-          return { status: stringField((suite as { status?: unknown }).status) ?? "" };
-        }),
-      };
-    });
-
-    let commitStatus: CiCommitStatus = { state: null, count: 0 };
-    const statusPath = `${root}/status`;
-    try {
-      const body = await githubGetJson<CombinedStatus>(auth, installationId, statusPath, options);
-      if (body !== undefined) {
-        commitStatus = {
-          state: stringField(body.state),
-          count: numberField(body.total_count),
-        };
-      }
-    } catch (err) {
-      if (err instanceof GithubApiError && err.status === 403) {
-        options.logger?.warn(
-          "commit status API returned 403; grant the GitHub App Commit statuses: Read to gate status-only CI",
-          { repoFullName },
-        );
-      } else {
-        throw err;
-      }
-    }
-
-    if (runs.truncated || suites.truncated) return "pending";
-    return classifyCiReadiness({
-      checkRuns: runs.items,
-      checkSuites: suites.items,
-      commitStatus,
-    });
+    if (runs.truncated) return "pending";
+    return classifyCiReadiness(runs.items);
   };
 }
 

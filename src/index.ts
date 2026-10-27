@@ -71,6 +71,7 @@ function boot(): void {
     onReviewRequested: scheduler.onReviewRequested,
     onReviewSubmitted: scheduler.onReviewSubmitted,
     onReviewRequestRemoved: scheduler.onReviewRequestRemoved,
+    onReviewAlerted: scheduler.onReviewAlerted,
   });
   const worker = createWorker({ db, logger, router });
 

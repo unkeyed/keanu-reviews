@@ -101,13 +101,14 @@ export function createServiceHandlers(input: {
   }
 
   const fetchPullRequest = createPullRequestFetcher(auth, installationId);
-  const fetchCiReadiness = createCiReadinessFetcher(auth, installationId, { logger });
+  const fetchCiReadiness = createCiReadinessFetcher(auth, installationId);
   const handler: PrHandlerDeps = {
     db,
     slack,
     logger,
     fetchGithubEmail: createGithubEmailFetcher(auth, installationId),
     fetchCiReadiness,
+    fetchPullRequest,
     shippedChannel: config.SLACK_SHIPPED_CHANNEL,
     commentOnMerge: config.GITHUB_COMMENT_ON_MERGE,
     postPrComment: config.GITHUB_COMMENT_ON_MERGE

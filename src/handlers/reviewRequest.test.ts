@@ -1,11 +1,12 @@
+import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../db/client.ts";
 import { upsertIdentity } from "../db/repositories/identities.ts";
 import { setChannel, upsertPullRequest } from "../db/repositories/pullRequests.ts";
-import { reviewAlerts } from "../db/schema.ts";
-import { pullRequests } from "../db/schema.ts";
+import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createLogger } from "../logger.ts";
+import { createReminderScheduler } from "../scheduler/reminders.ts";
 import { FakeSlackClient } from "../testing/fakeSlack.ts";
 import {
   type ReviewRequestPayload,
@@ -237,17 +238,28 @@ describe("handleReviewRequest (U5)", () => {
       slackUserId: "U7",
       source: "self-link",
     });
-    const onReviewRequested = vi.fn(async () => {});
-    await handleReviewRequest(
-      deps({ fetchCiReadiness: async () => "failing", onReviewRequested }),
-      payload(),
-    );
+    const scheduler = createReminderScheduler({
+      db,
+      slack,
+      logger: createLogger("error"),
+      reminderHours: 12,
+    });
+    const recorded = deps({
+      fetchCiReadiness: async () => "failing",
+      onReviewRequested: scheduler.onReviewRequested,
+    });
+    await handleReviewRequest(recorded, payload());
     expect(slack.invites).toHaveLength(0);
     expect(slack.messages).toHaveLength(0);
-    expect(onReviewRequested).not.toHaveBeenCalled();
+    const [row] = await db.select().from(reminders).where(eq(reminders.prId, "unkey/api#1"));
+    expect(row?.status).toBe("pending");
+    const generation = row?.generation;
 
     await handleReviewRequest(
-      deps({ fetchCiReadiness: async () => "pending", onReviewRequested }),
+      deps({
+        fetchCiReadiness: async () => "pending",
+        onReviewRequested: scheduler.onReviewRequested,
+      }),
       payload({
         pull_request: { ...payload().pull_request, updated_at: "2026-08-11T12:05:00Z" },
       }),
@@ -255,7 +267,9 @@ describe("handleReviewRequest (U5)", () => {
       "delivery-pending",
     );
     expect(slack.invites).toHaveLength(0);
-    expect(onReviewRequested).not.toHaveBeenCalled();
+    expect(slack.messages).toHaveLength(0);
+    const [still] = await db.select().from(reminders).where(eq(reminders.prId, "unkey/api#1"));
+    expect(still?.generation).toBe(generation);
   });
 
   it("alerts immediately when CI is already passing", async () => {
@@ -345,35 +359,7 @@ describe("handleReviewRequest (U5)", () => {
       "delivery-ready",
     );
     expect(slack.invites).toHaveLength(0);
-    const [held] = await db.select().from(reviewAlerts);
-    expect(held?.status).toBe("held");
-  });
-
-  it("keeps one Slack effect ref while the alert stays held", async () => {
-    await upsertPullRequest(db, {
-      repoFullName: "unkey/api",
-      number: 1,
-      githubPrId: 1,
-      currentState: "pr",
-      headSha: "sha-1",
-    });
-    await handleReviewRequest(
-      deps({ fetchCiReadiness: async () => "failing" }),
-      payload(),
-      "delivery-1",
-      "delivery-1",
-    );
-    await handleReviewRequest(
-      deps({ fetchCiReadiness: async () => "pending" }),
-      payload({
-        pull_request: { ...payload().pull_request, updated_at: "2026-08-11T12:10:00Z" },
-      }),
-      "delivery-2",
-      "delivery-2",
-    );
-    const [held] = await db.select().from(reviewAlerts);
-    expect(held?.status).toBe("held");
-    expect(held?.effectRef).toBe("7:delivery-1");
+    expect(slack.messages).toHaveLength(0);
   });
 
   it("converges the invite again for a later review request", async () => {
