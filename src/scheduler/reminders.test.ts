@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { CiReadiness } from "../ci/status.ts";
 import type { Db } from "../db/client.ts";
 import {
   prId,
@@ -126,6 +127,80 @@ describe("reminder scheduler (U8, R9)", () => {
     await updateState(db, PR, "merged");
     advanceHours(HOURS);
     expect(await s.processDue()).toBe(0);
+  });
+
+  it("holds a due reminder while the PR is a draft and sends it once ready", async () => {
+    const s = scheduler();
+    await s.onReviewRequested(PR, 7);
+    await updateState(db, PR, "draft");
+    advanceHours(HOURS);
+    expect(await s.processDue()).toBe(0);
+    expect(slack.messages).toHaveLength(0);
+    const [row] = await db.select().from(reminders).where(eq(reminders.prId, PR));
+    expect(row?.status).toBe("pending");
+
+    await updateState(db, PR, "pr");
+    expect(await s.processDue()).toBe(1);
+    expect(slack.messages).toHaveLength(1);
+  });
+
+  it("holds a due reminder while CI is failing or pending, then sends it when CI passes", async () => {
+    await upsertPullRequest(db, {
+      repoFullName: "unkey/api",
+      number: 1,
+      githubPrId: 1,
+      currentState: "pr",
+      headSha: "sha-1",
+    });
+    let readiness: CiReadiness = "failing";
+    const s = scheduler({ fetchCiReadiness: async () => readiness });
+    await s.onReviewRequested(PR, 7);
+    advanceHours(HOURS);
+
+    expect(await s.processDue()).toBe(0);
+    readiness = "pending";
+    expect(await s.processDue()).toBe(0);
+    const [row] = await db.select().from(reminders).where(eq(reminders.prId, PR));
+    expect(row?.status).toBe("pending");
+    expect(slack.messages).toHaveLength(0);
+
+    readiness = "passing";
+    expect(await s.processDue()).toBe(1);
+    expect(slack.messages).toHaveLength(1);
+  });
+
+  it("still reminds when the commit has no CI configured", async () => {
+    await upsertPullRequest(db, {
+      repoFullName: "unkey/api",
+      number: 1,
+      githubPrId: 1,
+      currentState: "pr",
+      headSha: "sha-1",
+    });
+    const s = scheduler({ fetchCiReadiness: async () => "absent" });
+    await s.onReviewRequested(PR, 7);
+    advanceHours(HOURS);
+    expect(await s.processDue()).toBe(1);
+  });
+
+  it("holds the reminder when the CI lookup fails", async () => {
+    await upsertPullRequest(db, {
+      repoFullName: "unkey/api",
+      number: 1,
+      githubPrId: 1,
+      currentState: "pr",
+      headSha: "sha-1",
+    });
+    const s = scheduler({
+      fetchCiReadiness: async () => {
+        throw new Error("github down");
+      },
+    });
+    await s.onReviewRequested(PR, 7);
+    advanceHours(HOURS);
+    expect(await s.processDue()).toBe(0);
+    const [row] = await db.select().from(reminders).where(eq(reminders.prId, PR));
+    expect(row?.status).toBe("pending");
   });
 
   it("suppresses the reminder when the PR is ready to merge", async () => {

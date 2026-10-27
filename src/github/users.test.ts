@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { createLogger } from "../logger.ts";
 import type { InstallationAuth } from "./auth.ts";
 import {
   GithubApiError,
+  createCiReadinessFetcher,
   createGithubEmailFetcher,
   createGithubUserFetcher,
   createPrForShaFetcher,
@@ -116,6 +118,84 @@ describe("GitHub API fetchers", () => {
     const fetchApprovals = createReviewApprovalFetcher(auth, "42", { fetch: fetchFn });
 
     await expect(fetchApprovals("unkey/api", 7)).resolves.toBe(3); // reviewers 1, 2, 3
+  });
+
+  it("classifies check runs, suites, and commit status for one commit", async () => {
+    const auth = createAuth();
+    const fetchFn = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/check-runs")) {
+        return jsonResponse(200, {
+          total_count: 1,
+          check_runs: [
+            {
+              name: "test",
+              status: "completed",
+              conclusion: "success",
+              completed_at: "2026-08-11T12:00:00Z",
+            },
+          ],
+        });
+      }
+      if (url.includes("/check-suites")) {
+        return jsonResponse(200, {
+          total_count: 1,
+          check_suites: [{ status: "completed", conclusion: "success" }],
+        });
+      }
+      if (url.endsWith("/status")) {
+        return jsonResponse(200, { state: "success", total_count: 1, statuses: [{}] });
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+    const fetchCi = createCiReadinessFetcher(auth, "42", { fetch: fetchFn });
+
+    await expect(fetchCi("unkey/api", "abc123")).resolves.toBe("passing");
+  });
+
+  it("treats a commit with no checks and no statuses as absent", async () => {
+    const auth = createAuth();
+    const fetchFn = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/check-runs")) return jsonResponse(200, { total_count: 0, check_runs: [] });
+      if (url.includes("/check-suites")) {
+        return jsonResponse(200, { total_count: 0, check_suites: [] });
+      }
+      if (url.endsWith("/status")) {
+        return jsonResponse(200, { state: "pending", total_count: 0, statuses: [] });
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+    const fetchCi = createCiReadinessFetcher(auth, "42", { fetch: fetchFn });
+
+    await expect(fetchCi("unkey/api", "abc123")).resolves.toBe("absent");
+  });
+
+  it("ignores legacy commit statuses when that permission is missing", async () => {
+    const auth = createAuth();
+    const fetchFn = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/check-runs")) {
+        return jsonResponse(200, {
+          total_count: 1,
+          check_runs: [{ name: "test", status: "completed", conclusion: "success" }],
+        });
+      }
+      if (url.includes("/check-suites")) {
+        return jsonResponse(200, { total_count: 0, check_suites: [] });
+      }
+      if (url.endsWith("/status")) return jsonResponse(403, { message: "Resource not accessible" });
+      throw new Error(`unexpected ${url}`);
+    });
+    const logger = createLogger("warn");
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    const fetchCi = createCiReadinessFetcher(auth, "42", { fetch: fetchFn, logger });
+
+    await expect(fetchCi("unkey/api", "abc123")).resolves.toBe("passing");
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("Commit statuses"),
+      expect.any(Object),
+    );
   });
 
   it("returns undefined counting approvals for a missing PR (404)", async () => {

@@ -13,6 +13,7 @@ import {
 } from "../db/repositories/reminders.ts";
 import type { PullRequestRow } from "../db/schema.ts";
 import { isTerminal } from "../domain/prState.ts";
+import type { CiReadinessFetcher } from "../github/users.ts";
 import type { ReviewApprovalFetcher } from "../github/users.ts";
 import type { PullRequestFetcher } from "../handlers/mergeability.ts";
 import type { Logger } from "../logger.ts";
@@ -42,6 +43,12 @@ export interface ReminderDeps {
   deliveryWindow?: ReminderWindow;
   /** Suppress reminders once the PR is ready to merge (mergeable_state clean). */
   fetchPullRequest?: PullRequestFetcher;
+  /**
+   * Hold a due reminder while CI is failing or still running. Absent CI (no
+   * checks configured) does not hold it — the initial alert already waited for
+   * checks to appear. Omit to deliver without consulting CI.
+   */
+  fetchCiReadiness?: CiReadinessFetcher;
   /**
    * Suppress every pending reminder for a PR once it has at least this many
    * approvals. Defaults to 1 (`REMINDER_SUPPRESS_APPROVALS`).
@@ -75,6 +82,26 @@ async function remindersNoLongerNeeded(
       prId: pr.id,
       err: err instanceof Error ? err.message : String(err),
     });
+  }
+  return false;
+}
+
+/** True when a due reminder should stay pending until CI finishes and passes. */
+async function reminderWaitingOnCi(deps: ReminderDeps, pr: PullRequestRow): Promise<boolean> {
+  if (!deps.fetchCiReadiness || !pr.headSha) return false;
+  try {
+    const readiness = await deps.fetchCiReadiness(pr.repoFullName, pr.headSha);
+    if (readiness === "failing" || readiness === "pending") {
+      deps.logger.debug("reminder held: CI is not passing", { prId: pr.id, readiness });
+      return true;
+    }
+  } catch (err) {
+    // Fail closed: a lookup error must not ping reviewers while CI might be red.
+    deps.logger.warn("reminder CI check failed; holding the reminder", {
+      prId: pr.id,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return true;
   }
   return false;
 }
@@ -138,12 +165,28 @@ export function createReminderScheduler(deps: ReminderDeps) {
     let posted = 0;
     // One readiness lookup per PR per scan, shared across its reviewers.
     const readiness = new Map<string, boolean>();
+    const ciHold = new Map<string, boolean>();
     for (const r of due) {
+      const pr = await findById(deps.db, r.prId);
+      // Drafts and red/in-progress CI are not claimable yet: claiming would
+      // burn the retry budget while we wait for the PR to become reviewable.
+      if (pr && !isTerminal(pr.currentState)) {
+        if (pr.currentState === "draft") {
+          deps.logger.debug("reminder held: PR is still a draft", { prId: r.prId });
+          continue;
+        }
+        let holdForCi = ciHold.get(r.prId);
+        if (holdForCi === undefined) {
+          holdForCi = await reminderWaitingOnCi(deps, pr);
+          ciHold.set(r.prId, holdForCi);
+        }
+        if (holdForCi) continue;
+      }
+
       const claimed = await claimReminder(deps.db, r.id, scanTime, leaseMs);
       if (!claimed) continue; // lost the race to another scanner
 
       try {
-        const pr = await findById(deps.db, r.prId);
         if (!pr?.channelId) throw new Error(`Reminder PR channel is unavailable for ${r.prId}`);
         if (isTerminal(pr.currentState)) {
           await cancelReminderClaim(deps.db, claimed);

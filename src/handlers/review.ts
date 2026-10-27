@@ -1,5 +1,6 @@
 import { findMessageEffect } from "../db/repositories/messages.ts";
 import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
+import { cancelReviewAlert } from "../db/repositories/reviewAlerts.ts";
 import { isBotActor, shouldSkipActor } from "../github/actors.ts";
 import { resolveEmbeddedImages } from "../github/attachments.ts";
 import { reviewerDisplayLabel } from "../identity/resolve.ts";
@@ -20,7 +21,6 @@ import {
   updateAuthoredMessage,
 } from "./authorship.ts";
 import { inviteMentionedUsers } from "./mentions.ts";
-import { reportMergeability } from "./mergeability.ts";
 import {
   type PrHandlerDeps,
   type PullRequestPayload,
@@ -72,18 +72,21 @@ export async function handleReview(
   const r = payload.review;
   // GitHub is the source of truth: cancel before enrichment or Slack delivery,
   // so a downstream failure cannot leave an obsolete reminder live.
-  await deps.onReviewSubmitted?.(
-    row.id,
-    r.user.id,
-    sourceDate(r.submitted_at ?? payload.pull_request.updated_at),
+  const reviewedAt = sourceDate(r.submitted_at ?? payload.pull_request.updated_at);
+  await deps.onReviewSubmitted?.(row.id, r.user.id, reviewedAt, sourceVersion);
+  // A review already happened — don't ping them later when CI goes green.
+  await cancelReviewAlert(deps.db, {
+    prId: row.id,
+    reviewerGithubId: r.user.id,
+    reviewerLogin: r.user.login,
+    sourceUpdatedAt: reviewedAt ?? new Date(0),
     sourceVersion,
-  );
+  });
   const author = await resolveMessageAuthor(deps, r.user);
   // A "commented" review whose body is empty after cleaning is just the wrapper
   // GitHub emits around inline review comments — the real content arrives as
   // review_comment events. Posting it would be an empty "💬 commented by …" line,
-  // so skip the message (but still cancel the reminder above and report
-  // mergeability below).
+  // so skip the message (the reminder is still cancelled above).
   const isEmptyCommentWrapper = r.state === "commented" && !cleanGithubMarkdown(r.body ?? "");
   if (!isEmptyCommentWrapper) {
     // Never ping the reviewer for their own review activity (approve, request
@@ -120,9 +123,6 @@ export async function handleReview(
   // Pull anyone @-mentioned in the review body into the channel (best-effort).
   // The PR author is skipped — already a member of their own channel.
   await inviteMentionedUsers(deps, channelId, r.body ?? "", payload.pull_request.user.login);
-
-  // A submitted review can flip mergeability (e.g. required approval satisfied).
-  await reportMergeability(deps, row, `review:${r.id}`);
 }
 
 export interface IssueCommentPayload {

@@ -1,13 +1,17 @@
 import type { PrForShaFetcher } from "../ci/status.ts";
 import type { JobRow } from "../db/schema.ts";
-import { handleCheckRun } from "../handlers/checks.ts";
+import { handleCheckRun, handleCheckSuite, handleCommitStatus } from "../handlers/checks.ts";
 import { type PrHandlerDeps, handlePullRequest } from "../handlers/pullRequest.ts";
 import { handleIssueComment, handleReview } from "../handlers/review.ts";
 import { handleReviewComment } from "../handlers/reviewComment.ts";
-import { handleReadyForReview, handleReviewRequest } from "../handlers/reviewRequest.ts";
+import {
+  type ReviewRequestDeps,
+  handleReadyForReview,
+  handleReviewRequest,
+} from "../handlers/reviewRequest.ts";
 import type { GithubEmailFetcher } from "../identity/resolve.ts";
 
-export interface RouterDeps extends PrHandlerDeps {
+export interface RouterDeps extends PrHandlerDeps, ReviewRequestDeps {
   fetchGithubEmail?: GithubEmailFetcher;
   onReviewRequested?: (
     prId: string,
@@ -46,10 +50,15 @@ export function createRouter(deps: RouterDeps): Router {
         await handlePullRequest(deps, payload, { sourceArrivalKey });
         // review_requested / review_request_removed arrive as pull_request actions.
         if (job.action === "review_requested" || job.action === "review_request_removed") {
-          await handleReviewRequest(deps, payload, job.deliveryId, sourceArrivalKey);
+          await handleReviewRequest(deps, payload, job.deliveryId, sourceArrivalKey, {
+            attempt: job.attempts,
+          });
         } else if (job.action === "ready_for_review") {
-          // Invite reviewers who were assigned while the PR was still a draft.
-          await handleReadyForReview(deps, payload, job.deliveryId, sourceArrivalKey);
+          // Invite reviewers who were assigned while the PR was still a draft,
+          // once CI is passing.
+          await handleReadyForReview(deps, payload, job.deliveryId, sourceArrivalKey, {
+            attempt: job.attempts,
+          });
         }
         return;
       case "pull_request_review_comment":
@@ -62,7 +71,13 @@ export function createRouter(deps: RouterDeps): Router {
         await handleIssueComment(deps, payload);
         return;
       case "check_run":
-        await handleCheckRun(deps, payload);
+        await handleCheckRun(deps, payload, { attempt: job.attempts });
+        return;
+      case "check_suite":
+        await handleCheckSuite(deps, payload, { attempt: job.attempts });
+        return;
+      case "status":
+        await handleCommitStatus(deps, payload, { attempt: job.attempts });
         return;
       default:
         deps.logger.debug("unhandled event", { event: job.event, action: job.action });

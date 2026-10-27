@@ -32,6 +32,14 @@ describe("database readiness", () => {
     await expect(createDbReadyCheck(testDb.db)()).rejects.toThrow(/pull_request_lifecycle_claims/i);
   });
 
+  it("rejects a database that has not applied the review-alert migration", async () => {
+    const testDb = await createTestDb();
+    cleanups.push(() => testDb.client.close());
+    await testDb.client.exec("drop table review_alerts");
+
+    await expect(createDbReadyCheck(testDb.db)()).rejects.toThrow(/review_alerts/i);
+  });
+
   it.each(["github_link_confirmations", "oauth_state_nonces"])(
     "rejects a database missing OAuth table %s",
     async (table) => {

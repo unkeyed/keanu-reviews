@@ -35,7 +35,7 @@ beforeEach(async () => {
     db,
     slack,
     logger,
-    fetchPullRequest: async () => ({ mergeable: true, mergeableState: "clean", draft: false }),
+    fetchCiReadiness: async () => "passing" as const,
     onReviewRequested: scheduler.onReviewRequested,
     onReviewSubmitted: scheduler.onReviewSubmitted,
     onReviewRequestRemoved: scheduler.onReviewRequestRemoved,
@@ -110,7 +110,8 @@ describe("end-to-end webhook -> Slack smoke", () => {
       "https://github.com/unkey/api/pull/1423#r55|Open", // links to the discussion
     );
 
-    // 3. CI completion -> mergeability status posted to the channel (by head_sha)
+    // 3. CI completion does not post merge or check status into the channel.
+    const beforeCi = slack.messages.length;
     await deliver("check_run", {
       action: "completed",
       check_run: {
@@ -122,7 +123,9 @@ describe("end-to-end webhook -> Slack smoke", () => {
         name: "test",
       },
     });
-    expect(JSON.stringify(slack.messages.at(-1)?.blocks)).toContain("Ready to merge");
+    expect(slack.messages).toHaveLength(beforeCi);
+    expect(JSON.stringify(slack.messages)).not.toContain("Ready to merge");
+    expect(JSON.stringify(slack.messages)).not.toContain("checks are failing");
 
     // 4. merged -> rename to merged then archive
     await deliver("pull_request", { action: "closed", pull_request: pr({ merged: true }) });

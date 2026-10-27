@@ -1,15 +1,18 @@
 import type { Hono } from "hono";
+import type { PrForShaFetcher } from "../ci/status.ts";
 import type { Config } from "../config.ts";
 import type { Db } from "../db/client.ts";
 import { deleteSlackUserToken, getSlackUserTokenRow } from "../db/repositories/slackUserTokens.ts";
 import type { InstallationAuth } from "../github/auth.ts";
 import { createPrCommenter } from "../github/comments.ts";
 import {
+  createCiReadinessFetcher,
   createGithubEmailFetcher,
+  createPrForShaFetcher,
   createPullRequestFetcher,
   createReviewApprovalFetcher,
 } from "../github/users.ts";
-import type { ReviewApprovalFetcher } from "../github/users.ts";
+import type { CiReadinessFetcher, ReviewApprovalFetcher } from "../github/users.ts";
 import type { Logger } from "../logger.ts";
 import { createSlackOAuthRoute } from "../routes/slackOAuth.ts";
 import type { SlackClient } from "../slack/client.ts";
@@ -24,6 +27,8 @@ export interface ServiceHandlers {
   handler: PrHandlerDeps;
   fetchPullRequest: PullRequestFetcher;
   fetchApprovalCount: ReviewApprovalFetcher;
+  fetchCiReadiness: CiReadinessFetcher;
+  fetchPrForSha: PrForShaFetcher;
   slackOauthRoute?: Hono;
 }
 
@@ -96,12 +101,13 @@ export function createServiceHandlers(input: {
   }
 
   const fetchPullRequest = createPullRequestFetcher(auth, installationId);
+  const fetchCiReadiness = createCiReadinessFetcher(auth, installationId, { logger });
   const handler: PrHandlerDeps = {
     db,
     slack,
     logger,
     fetchGithubEmail: createGithubEmailFetcher(auth, installationId),
-    fetchPullRequest,
+    fetchCiReadiness,
     shippedChannel: config.SLACK_SHIPPED_CHANNEL,
     commentOnMerge: config.GITHUB_COMMENT_ON_MERGE,
     postPrComment: config.GITHUB_COMMENT_ON_MERGE
@@ -118,6 +124,8 @@ export function createServiceHandlers(input: {
     handler,
     fetchPullRequest,
     fetchApprovalCount: createReviewApprovalFetcher(auth, installationId),
+    fetchCiReadiness,
+    fetchPrForSha: createPrForShaFetcher(auth, installationId),
     slackOauthRoute,
   };
 }
