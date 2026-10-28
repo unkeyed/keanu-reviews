@@ -13,6 +13,7 @@ import {
 import { cancelForPr } from "../db/repositories/reminders.ts";
 import { type PrState, computeTargetState, isTerminal } from "../domain/prState.ts";
 import type { PrCommenter } from "../github/comments.ts";
+import type { CiReadinessFetcher } from "../github/users.ts";
 import {
   type GithubEmailFetcher,
   resolveSlackUser,
@@ -58,7 +59,13 @@ export interface PrHandlerDeps {
   logger: Logger;
   /** Optional GitHub email lookup so identity resolution can fall back past the map. */
   fetchGithubEmail?: GithubEmailFetcher;
-  /** Optional PR read used to report mergeability (replaces per-check CI messages). */
+  /**
+   * Aggregate CI for the PR head. Review-needed alerts wait until this is
+   * passing. Omit to keep the previous behavior (drafts still wait; CI is not
+   * consulted).
+   */
+  fetchCiReadiness?: CiReadinessFetcher;
+  /** Optional PR read: mergeability for reminders, and requested reviewers for alerts. */
   fetchPullRequest?: PullRequestFetcher;
   /** Optional #shipped channel (id or name); announces a PR when it merges. */
   shippedChannel?: string;

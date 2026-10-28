@@ -1,10 +1,12 @@
+import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../db/client.ts";
 import { upsertIdentity } from "../db/repositories/identities.ts";
 import { setChannel, upsertPullRequest } from "../db/repositories/pullRequests.ts";
-import { pullRequests } from "../db/schema.ts";
+import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createLogger } from "../logger.ts";
+import { createReminderScheduler } from "../scheduler/reminders.ts";
 import { FakeSlackClient } from "../testing/fakeSlack.ts";
 import {
   type ReviewRequestPayload,
@@ -218,6 +220,144 @@ describe("handleReviewRequest (U5)", () => {
       repository: { full_name: "unkey/api" },
       pull_request: { ...payload().pull_request, requested_reviewers: [] },
     });
+    expect(slack.invites).toHaveLength(0);
+    expect(slack.messages).toHaveLength(0);
+  });
+
+  it("does not alert while CI is failing or still running", async () => {
+    await upsertPullRequest(db, {
+      repoFullName: "unkey/api",
+      number: 1,
+      githubPrId: 1,
+      currentState: "pr",
+      headSha: "sha-1",
+    });
+    await upsertIdentity(db, {
+      githubUserId: 7,
+      githubLogin: "flo",
+      slackUserId: "U7",
+      source: "self-link",
+    });
+    const scheduler = createReminderScheduler({
+      db,
+      slack,
+      logger: createLogger("error"),
+      reminderHours: 12,
+    });
+    const recorded = deps({
+      fetchCiReadiness: async () => "failing",
+      onReviewRequested: scheduler.onReviewRequested,
+    });
+    await handleReviewRequest(recorded, payload());
+    expect(slack.invites).toHaveLength(0);
+    expect(slack.messages).toHaveLength(0);
+    const [row] = await db.select().from(reminders).where(eq(reminders.prId, "unkey/api#1"));
+    expect(row?.status).toBe("pending");
+    const generation = row?.generation;
+
+    await handleReviewRequest(
+      deps({
+        fetchCiReadiness: async () => "pending",
+        onReviewRequested: scheduler.onReviewRequested,
+      }),
+      payload({
+        pull_request: { ...payload().pull_request, updated_at: "2026-08-11T12:05:00Z" },
+      }),
+      "delivery-pending",
+      "delivery-pending",
+    );
+    expect(slack.invites).toHaveLength(0);
+    expect(slack.messages).toHaveLength(0);
+    const [still] = await db.select().from(reminders).where(eq(reminders.prId, "unkey/api#1"));
+    expect(still?.generation).toBe(generation);
+  });
+
+  it("alerts immediately when CI is already passing", async () => {
+    await upsertPullRequest(db, {
+      repoFullName: "unkey/api",
+      number: 1,
+      githubPrId: 1,
+      currentState: "pr",
+      headSha: "sha-1",
+    });
+    await upsertIdentity(db, {
+      githubUserId: 7,
+      githubLogin: "flo",
+      slackUserId: "U7",
+      source: "self-link",
+    });
+    const onReviewRequested = vi.fn(async () => {});
+    await handleReviewRequest(
+      deps({ fetchCiReadiness: async () => "passing", onReviewRequested }),
+      payload(),
+    );
+    expect(slack.invites).toEqual([{ channelId: "C1", userIds: ["U7"] }]);
+    expect(onReviewRequested).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(slack.messages)).not.toContain("Ready to merge");
+    expect(JSON.stringify(slack.messages)).not.toContain("checks are failing");
+  });
+
+  it("retries while CI has not registered, then alerts if it never does", async () => {
+    await upsertPullRequest(db, {
+      repoFullName: "unkey/api",
+      number: 1,
+      githubPrId: 1,
+      currentState: "pr",
+      headSha: "sha-1",
+    });
+    await upsertIdentity(db, {
+      githubUserId: 7,
+      githubLogin: "flo",
+      slackUserId: "U7",
+      source: "self-link",
+    });
+    const waiting = deps({ fetchCiReadiness: async () => "absent" });
+    await expect(
+      handleReviewRequest(waiting, payload(), "delivery-absent", "delivery-absent", {
+        attempt: 1,
+      }),
+    ).rejects.toThrow("CI has not reported");
+    expect(slack.invites).toHaveLength(0);
+
+    await handleReviewRequest(waiting, payload(), "delivery-absent", "delivery-absent", {
+      attempt: 4,
+    });
+    expect(slack.invites).toEqual([{ channelId: "C1", userIds: ["U7"] }]);
+  });
+
+  it("does not alert on ready_for_review while CI is failing", async () => {
+    await upsertPullRequest(db, {
+      repoFullName: "unkey/api",
+      number: 1,
+      githubPrId: 1,
+      currentState: "draft",
+      headSha: "sha-1",
+    });
+    await upsertIdentity(db, {
+      githubUserId: 7,
+      githubLogin: "flo",
+      slackUserId: "U7",
+      source: "self-link",
+    });
+    await handleReviewRequest(
+      deps({ fetchCiReadiness: async () => "failing" }),
+      payload({ pull_request: { ...payload().pull_request, draft: true } }),
+    );
+    await handleReadyForReview(
+      deps({ fetchCiReadiness: async () => "failing" }),
+      {
+        action: "ready_for_review",
+        repository: { full_name: "unkey/api" },
+        pull_request: {
+          ...payload().pull_request,
+          draft: false,
+          updated_at: "2026-08-11T13:00:00Z",
+          requested_reviewers: [{ id: 7, login: "flo" }],
+        },
+      },
+      "delivery-ready",
+      "delivery-ready",
+    );
     expect(slack.invites).toHaveLength(0);
     expect(slack.messages).toHaveLength(0);
   });

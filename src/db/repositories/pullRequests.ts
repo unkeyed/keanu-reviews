@@ -183,14 +183,6 @@ export async function updateState(db: Db, id: string, state: PrState): Promise<v
     .where(eq(pullRequests.id, id));
 }
 
-/** Record the mergeable_state last announced to the channel (post-on-change gate). */
-export async function setMergeableState(db: Db, id: string, state: string): Promise<void> {
-  await db
-    .update(pullRequests)
-    .set({ lastMergeableState: state, updatedAt: new Date() })
-    .where(eq(pullRequests.id, id));
-}
-
 /**
  * Atomically claim the right to post the one merge comment (opt-in GitHub write).
  * Returns true for exactly one caller; the loser skips. Release on failure so a

@@ -62,12 +62,16 @@ function boot(): void {
     suppressApprovals: config.REMINDER_SUPPRESS_APPROVALS,
     fetchPullRequest: services.fetchPullRequest,
     fetchApprovalCount: services.fetchApprovalCount,
+    // Hold the 12h ping while CI is failing or still running.
+    fetchCiReadiness: services.fetchCiReadiness,
   });
   const router = createRouter({
     ...services.handler,
+    fetchPrForSha: services.fetchPrForSha,
     onReviewRequested: scheduler.onReviewRequested,
     onReviewSubmitted: scheduler.onReviewSubmitted,
     onReviewRequestRemoved: scheduler.onReviewRequestRemoved,
+    onReviewAlerted: scheduler.onReviewAlerted,
   });
   const worker = createWorker({ db, logger, router });
 

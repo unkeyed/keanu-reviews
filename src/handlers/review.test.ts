@@ -8,12 +8,14 @@ import { createTestDb } from "../db/testDb.ts";
 import { createLogger } from "../logger.ts";
 import { createReminderScheduler } from "../scheduler/reminders.ts";
 import { FakeSlackClient } from "../testing/fakeSlack.ts";
+import { handleCheckRun } from "./checks.ts";
 import {
   type IssueCommentPayload,
   type ReviewPayload,
   handleIssueComment,
   handleReview,
 } from "./review.ts";
+import { handleReviewRequest } from "./reviewRequest.ts";
 
 let db: Db;
 let slack: FakeSlackClient;
@@ -201,6 +203,83 @@ describe("handleReview (U6, R5)", () => {
     expect(blocks).toContain("Looks good overall.");
     expect(blocks).not.toContain("<!--");
     expect(blocks).not.toContain("marketing footer");
+  });
+
+  it("does not include CI or merge status in the review message", async () => {
+    await handleReview(deps(), review("approved"));
+    const rendered = JSON.stringify(slack.messages);
+    expect(rendered).toContain("approved");
+    expect(rendered).toContain("looks good");
+    expect(rendered).not.toContain("Ready to merge");
+    expect(rendered).not.toContain("checks are failing");
+    expect(rendered).not.toContain("mergeable");
+  });
+
+  it("does not alert a reviewer who already reviewed once CI passes", async () => {
+    await upsertPullRequest(db, {
+      repoFullName: "unkey/api",
+      number: 1,
+      githubPrId: 1,
+      currentState: "pr",
+      headSha: "sha-1",
+    });
+    const scheduler = createReminderScheduler({
+      db,
+      slack,
+      logger: createLogger("error"),
+      reminderHours: 12,
+    });
+    await handleReviewRequest(
+      deps({
+        fetchCiReadiness: async () => "failing",
+        onReviewRequested: scheduler.onReviewRequested,
+      }),
+      {
+        action: "review_requested",
+        repository: { full_name: "unkey/api" },
+        pull_request: review("approved").pull_request,
+        requested_reviewer: { id: 7, login: "flo" },
+      },
+      "delivery-request",
+      "delivery-request",
+    );
+    expect(slack.invites).toHaveLength(0);
+
+    const submitted = review("approved");
+    submitted.review.submitted_at = "2026-08-11T12:30:00Z";
+    await handleReview(
+      deps({ onReviewSubmitted: scheduler.onReviewSubmitted }),
+      submitted,
+      "delivery-review",
+    );
+    const afterReview = slack.messages.length;
+
+    await handleCheckRun(
+      deps({
+        fetchCiReadiness: async () => "passing",
+        fetchPullRequest: async () => ({
+          mergeable: false,
+          mergeableState: "blocked",
+          draft: false,
+          requestedReviewers: [{ id: 7, login: "flo" }],
+        }),
+      }),
+      {
+        action: "completed",
+        repository: { full_name: "unkey/api" },
+        check_run: {
+          id: 100,
+          status: "completed",
+          conclusion: "success",
+          html_url: "https://github.com/unkey/api/runs/100",
+          head_sha: "sha-1",
+          name: "test",
+          pull_requests: [{ number: 1 }],
+        },
+      },
+    );
+    expect(slack.invites).toHaveLength(0);
+    expect(slack.messages).toHaveLength(afterReview);
   });
 
   it("does not thread a human review", async () => {

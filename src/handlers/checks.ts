@@ -1,7 +1,11 @@
 import type { PrForShaFetcher } from "../ci/status.ts";
 import { findAllByRepoHeadSha, findAllByRepoNumbers } from "../db/repositories/pullRequests.ts";
 import { RetryableError } from "../worker/retryable.ts";
-import { type MergeabilityDeps, reportMergeability } from "./mergeability.ts";
+import {
+  type ReviewAlertGate,
+  type ReviewRequestDeps,
+  releaseReadyReviewAlerts,
+} from "./reviewRequest.ts";
 
 export interface CheckRunPayload {
   action: string;
@@ -17,31 +21,34 @@ export interface CheckRunPayload {
   };
 }
 
-export interface ChecksDeps extends MergeabilityDeps {
+export interface ChecksDeps extends ReviewRequestDeps {
   /** Fallback PR resolution for a head_sha not stored locally (e.g. fork checks). */
   fetchPrForSha?: PrForShaFetcher;
 }
 
 /**
- * CI completion is the trigger to refresh PR mergeability (R6, replaces the
- * former per-check messages). When a check finishes we resolve the associated
- * PR(s) by head_sha and report their overall `mergeable_state` — conflicts,
- * branch protection, and required checks folded into one signal — posting only
- * when it changed (see `reportMergeability`).
+ * A completed check run re-reads check runs for the PR head. The alert fires
+ * only when that list is passing and the PR is not a draft. In-progress runs
+ * are ignored; their completion event is the trigger.
  */
-export async function handleCheckRun(deps: ChecksDeps, payload: CheckRunPayload): Promise<void> {
+export async function handleCheckRun(
+  deps: ChecksDeps,
+  payload: CheckRunPayload,
+  gate: ReviewAlertGate = {},
+): Promise<void> {
   const run = payload.check_run;
-  if (payload.action !== "completed" || run.status !== "completed") return;
+  if (run.status !== "completed") return;
 
   const repoFullName = payload.repository.full_name;
+  const headSha = run.head_sha;
   const associatedNumbers = new Set(run.pull_requests?.map((pr) => pr.number) ?? []);
   let rows =
     associatedNumbers.size > 0
       ? await findAllByRepoNumbers(deps.db, repoFullName, [...associatedNumbers])
-      : await findAllByRepoHeadSha(deps.db, repoFullName, run.head_sha);
+      : await findAllByRepoHeadSha(deps.db, repoFullName, headSha);
 
   if (rows.length === 0 && associatedNumbers.size === 0 && deps.fetchPrForSha) {
-    for (const number of await deps.fetchPrForSha(repoFullName, run.head_sha)) {
+    for (const number of await deps.fetchPrForSha(repoFullName, headSha)) {
       associatedNumbers.add(number);
     }
     rows = await findAllByRepoNumbers(deps.db, repoFullName, [...associatedNumbers]);
@@ -51,23 +58,41 @@ export async function handleCheckRun(deps: ChecksDeps, payload: CheckRunPayload)
   if (rows.length === 0) {
     if (hasMissingAssociations) {
       throw new RetryableError(
-        `PR channel is not ready for every check_run association in ${repoFullName}`,
-        { sha: run.head_sha, associations: [...associatedNumbers] },
+        `PR channel is not ready for every CI association in ${repoFullName}`,
+        { sha: headSha, associations: [...associatedNumbers] },
       );
     }
-    deps.logger.debug("check_run maps to no tracked PR", { sha: run.head_sha });
+    deps.logger.debug("CI event maps to no tracked PR", { sha: headSha });
     return;
   }
 
+  let retry: RetryableError | undefined;
   for (const row of rows) {
     if (!row.channelId) continue;
-    await reportMergeability(deps, row, `check-run:${run.id}`);
+    if (row.headSha && row.headSha !== headSha) {
+      deps.logger.debug("ignoring CI event for a stale head", {
+        prId: row.id,
+        headSha: row.headSha,
+        eventSha: headSha,
+      });
+      continue;
+    }
+    try {
+      await releaseReadyReviewAlerts(deps, row, gate);
+    } catch (err) {
+      if (err instanceof RetryableError) {
+        retry = err;
+        continue;
+      }
+      throw err;
+    }
   }
 
   if (hasMissingAssociations || rows.some((row) => !row.channelId)) {
     throw new RetryableError(
-      `PR channel is not ready for every check_run association in ${repoFullName}`,
-      { sha: run.head_sha, associations: [...associatedNumbers] },
+      `PR channel is not ready for every CI association in ${repoFullName}`,
+      { sha: headSha, associations: [...associatedNumbers] },
     );
   }
+  if (retry) throw retry;
 }

@@ -20,7 +20,6 @@ import {
   updateAuthoredMessage,
 } from "./authorship.ts";
 import { inviteMentionedUsers } from "./mentions.ts";
-import { reportMergeability } from "./mergeability.ts";
 import {
   type PrHandlerDeps,
   type PullRequestPayload,
@@ -72,18 +71,15 @@ export async function handleReview(
   const r = payload.review;
   // GitHub is the source of truth: cancel before enrichment or Slack delivery,
   // so a downstream failure cannot leave an obsolete reminder live.
-  await deps.onReviewSubmitted?.(
-    row.id,
-    r.user.id,
-    sourceDate(r.submitted_at ?? payload.pull_request.updated_at),
-    sourceVersion,
-  );
+  const reviewedAt = sourceDate(r.submitted_at ?? payload.pull_request.updated_at);
+  // Cancels the reminder. A later check_run sees that cancellation and does not
+  // send the review-needed alert.
+  await deps.onReviewSubmitted?.(row.id, r.user.id, reviewedAt, sourceVersion);
   const author = await resolveMessageAuthor(deps, r.user);
   // A "commented" review whose body is empty after cleaning is just the wrapper
   // GitHub emits around inline review comments — the real content arrives as
   // review_comment events. Posting it would be an empty "💬 commented by …" line,
-  // so skip the message (but still cancel the reminder above and report
-  // mergeability below).
+  // so skip the message (the reminder is still cancelled above).
   const isEmptyCommentWrapper = r.state === "commented" && !cleanGithubMarkdown(r.body ?? "");
   if (!isEmptyCommentWrapper) {
     // Never ping the reviewer for their own review activity (approve, request
@@ -120,9 +116,6 @@ export async function handleReview(
   // Pull anyone @-mentioned in the review body into the channel (best-effort).
   // The PR author is skipped — already a member of their own channel.
   await inviteMentionedUsers(deps, channelId, r.body ?? "", payload.pull_request.user.login);
-
-  // A submitted review can flip mergeability (e.g. required approval satisfied).
-  await reportMergeability(deps, row, `review:${r.id}`);
 }
 
 export interface IssueCommentPayload {

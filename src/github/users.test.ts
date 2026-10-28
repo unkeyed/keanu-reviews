@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { InstallationAuth } from "./auth.ts";
 import {
   GithubApiError,
+  createCiReadinessFetcher,
   createGithubEmailFetcher,
   createGithubUserFetcher,
   createPrForShaFetcher,
@@ -116,6 +117,39 @@ describe("GitHub API fetchers", () => {
     const fetchApprovals = createReviewApprovalFetcher(auth, "42", { fetch: fetchFn });
 
     await expect(fetchApprovals("unkey/api", 7)).resolves.toBe(3); // reviewers 1, 2, 3
+  });
+
+  it("classifies check runs for one commit and ignores anything else", async () => {
+    const auth = createAuth();
+    const fetchFn = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/check-runs")) {
+        return jsonResponse(200, {
+          total_count: 1,
+          check_runs: [
+            {
+              name: "test",
+              status: "completed",
+              conclusion: "success",
+              completed_at: "2026-08-11T12:00:00Z",
+            },
+          ],
+        });
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+    const fetchCi = createCiReadinessFetcher(auth, "42", { fetch: fetchFn });
+
+    await expect(fetchCi("unkey/api", "abc123")).resolves.toBe("passing");
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats a commit with no check runs as absent", async () => {
+    const auth = createAuth();
+    const fetchFn = vi.fn(async () => jsonResponse(200, { total_count: 0, check_runs: [] }));
+    const fetchCi = createCiReadinessFetcher(auth, "42", { fetch: fetchFn });
+
+    await expect(fetchCi("unkey/api", "abc123")).resolves.toBe("absent");
   });
 
   it("returns undefined counting approvals for a missing PR (404)", async () => {
