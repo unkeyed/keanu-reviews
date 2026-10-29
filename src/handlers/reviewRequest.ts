@@ -112,6 +112,15 @@ export async function handleReviewRequest(
     return;
   }
 
+  if (isTerminal(row.currentState)) {
+    logger.info("review alert skipped: PR is closed", {
+      prId: row.id,
+      reviewer: reviewer.login,
+      state: row.currentState,
+    });
+    return;
+  }
+
   // Defer the alert on a draft. ready_for_review (or a later check_run, once
   // the PR is not a draft) sends it. Requesting review before marking ready is
   // common; pulling the reviewer in then is premature.
@@ -154,9 +163,10 @@ export async function handleReadyForReview(
   if (reviewers.length === 0) return;
   const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
   if (!row.channelId) throw new RetryableError(`PR channel is not ready for ${row.id}`);
+  if (isTerminal(row.currentState) || row.currentState === "draft") return;
 
   const source = alertSource(payload.pull_request.updated_at, sourceVersion);
-  const viewed = { ...row, currentState: "pr" as const, headSha: payload.pull_request.head.sha };
+  const viewed = { ...row, headSha: payload.pull_request.head.sha };
   const ready = await ciAllowsAlert(deps, viewed, { ...gate, absentMeansReady: true });
   for (const reviewer of reviewers) {
     if (!ready) {

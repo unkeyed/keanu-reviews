@@ -8,6 +8,7 @@ import { createTestDb } from "../db/testDb.ts";
 import { createLogger } from "../logger.ts";
 import { createReminderScheduler } from "../scheduler/reminders.ts";
 import { FakeSlackClient } from "../testing/fakeSlack.ts";
+import { handlePullRequest } from "./pullRequest.ts";
 import {
   type ReviewRequestPayload,
   handleReadyForReview,
@@ -360,6 +361,73 @@ describe("handleReviewRequest (U5)", () => {
     );
     expect(slack.invites).toHaveLength(0);
     expect(slack.messages).toHaveLength(0);
+  });
+
+  it("does not alert on a stale ready_for_review that lands after converted_to_draft", async () => {
+    await db.delete(pullRequests);
+    await upsertIdentity(db, {
+      githubUserId: 7,
+      githubLogin: "flo",
+      slackUserId: "U7",
+      source: "self-link",
+    });
+    const onReviewRequested = vi.fn(async () => {});
+    const readyPayload = {
+      action: "ready_for_review",
+      repository: { full_name: "unkey/api" },
+      pull_request: { ...payload().pull_request, requested_reviewers: [{ id: 7, login: "flo" }] },
+    };
+    await handlePullRequest(deps(), {
+      action: "converted_to_draft",
+      repository: { full_name: "unkey/api" },
+      pull_request: { ...payload().pull_request, draft: true, updated_at: "2026-08-11T12:05:00Z" },
+    });
+
+    const lifecycle = await handlePullRequest(deps(), readyPayload);
+    await handleReadyForReview(deps({ onReviewRequested }), readyPayload, "delivery-stale-ready");
+
+    expect(lifecycle.sourceAccepted).toBe(false);
+    expect(slack.invites).toHaveLength(0);
+    expect(JSON.stringify(slack.messages)).not.toContain("Review requested");
+    expect(onReviewRequested).not.toHaveBeenCalled();
+  });
+
+  it("does not alert or reopen the channel when the PR merges during the CI wait", async () => {
+    await db.delete(pullRequests);
+    await upsertIdentity(db, {
+      githubUserId: 7,
+      githubLogin: "flo",
+      slackUserId: "U7",
+      source: "self-link",
+    });
+    const waiting = deps({ fetchCiReadiness: async () => "absent" });
+    const readyPayload = {
+      action: "ready_for_review",
+      repository: { full_name: "unkey/api" },
+      pull_request: { ...payload().pull_request, requested_reviewers: [{ id: 7, login: "flo" }] },
+    };
+    await handlePullRequest(deps(), readyPayload);
+    await expect(
+      handleReadyForReview(waiting, readyPayload, "delivery-ready", "delivery-ready", {
+        attempt: 1,
+      }),
+    ).rejects.toThrow("CI has not reported");
+
+    await handlePullRequest(deps(), {
+      action: "closed",
+      repository: { full_name: "unkey/api" },
+      pull_request: { ...payload().pull_request, merged: true, updated_at: "2026-08-11T12:10:00Z" },
+    });
+    await handleReadyForReview(waiting, readyPayload, "delivery-ready", "delivery-ready", {
+      attempt: 4,
+    });
+    await handleReviewRequest(waiting, payload(), "delivery-request", "delivery-request", {
+      attempt: 4,
+    });
+
+    expect(slack.invites).toHaveLength(0);
+    expect(JSON.stringify(slack.messages)).not.toContain("Review requested");
+    expect(slack.channels).toEqual([expect.objectContaining({ archived: true })]);
   });
 
   it("converges the invite again for a later review request", async () => {
