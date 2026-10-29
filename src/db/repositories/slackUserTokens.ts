@@ -79,25 +79,13 @@ export async function completeSlackTokenAuthorization(
       .returning({ nonceHash: oauthStateNonces.nonceHash });
     if (consumed.length === 0) return { outcome: "state_replayed" as const };
 
-    await tx
-      .insert(slackUserTokens)
-      .values({
-        slackUserId: input.slackUserId,
-        slackTeamId: input.slackTeamId,
-        encryptedToken: input.encryptedToken,
-        scopes: input.scopes,
-        updatedAt: now,
-        createdAt: now,
-      })
-      .onConflictDoUpdate({
-        target: slackUserTokens.slackUserId,
-        set: {
-          slackTeamId: input.slackTeamId,
-          encryptedToken: input.encryptedToken,
-          scopes: input.scopes,
-          updatedAt: now,
-        },
-      });
+    await upsertSlackUserToken(tx, {
+      slackUserId: input.slackUserId,
+      slackTeamId: input.slackTeamId,
+      encryptedToken: input.encryptedToken,
+      scopes: input.scopes,
+      now,
+    });
     return { outcome: "stored" as const };
   });
 }
