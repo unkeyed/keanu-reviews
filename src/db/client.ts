@@ -12,7 +12,13 @@ import * as schema from "./schema.ts";
 export type Db = PgDatabase<any, typeof schema>;
 
 export function createDb(databaseUrl: string): { db: Db; close: () => Promise<void> } {
-  const sql = postgres(databaseUrl, { max: 10 });
+  // One worker runs jobs serially, so a hung query or unreachable host would
+  // stall every job while /health stays green. Fail it and let the job retry.
+  const sql = postgres(databaseUrl, {
+    max: 10,
+    connect_timeout: 10,
+    connection: { statement_timeout: 30_000 },
+  });
   const db = drizzle(sql, { schema }) as unknown as Db;
   return { db, close: () => sql.end({ timeout: 5 }) };
 }
