@@ -31,6 +31,7 @@ import { deliverSlackMessage } from "../slack/deliver.ts";
 import { slackChannelUrl } from "../slack/links.ts";
 import { CURRENT_CHANNEL_NAME_VERSION, channelName } from "../slack/naming.ts";
 import { RetryableError } from "../worker/retryable.ts";
+import { inviteToChannel } from "./invites.ts";
 import type { PullRequestFetcher } from "./mergeability.ts";
 import { notifyShipped } from "./shipped.ts";
 
@@ -305,7 +306,8 @@ export async function handlePullRequest(
             },
           ],
         },
-        () => slack.inviteUsers(channelId, [authorSlackId]),
+        () =>
+          inviteToChannel(deps, channelId, [authorSlackId], { prId: current.id, role: "author" }),
       );
     }
 

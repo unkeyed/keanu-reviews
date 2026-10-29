@@ -79,6 +79,26 @@ describe("handleReviewRequest (U5)", () => {
     expect(fetchGithubEmail).toHaveBeenCalledTimes(1);
   });
 
+  it("posts the review note and warns when Slack refuses to invite the reviewer", async () => {
+    await upsertIdentity(db, {
+      githubUserId: 7,
+      githubLogin: "flo",
+      slackUserId: "U7",
+      source: "self-link",
+    });
+    slack.uninvitableUsers.set("U7", "user_is_ultra_restricted");
+    const warn = vi.fn();
+
+    await handleReviewRequest(deps({ logger: { ...createLogger("error"), warn } }), payload());
+
+    expect(slack.invites).toHaveLength(0);
+    expect(slack.messages.at(-1)?.text).toContain("Review requested from flo");
+    expect(warn).toHaveBeenCalledWith(
+      "Slack refused to invite user into channel",
+      expect.objectContaining({ userId: "U7", slackError: "user_is_ultra_restricted" }),
+    );
+  });
+
   it("degrades to a plain-login note when identity cannot be resolved", async () => {
     const fetchGithubEmail = vi.fn(async () => undefined);
     await handleReviewRequest(deps({ fetchGithubEmail }), payload());

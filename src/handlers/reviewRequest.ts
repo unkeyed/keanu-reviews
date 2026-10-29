@@ -9,6 +9,7 @@ import {
 import { sanitizeInlineCode, sanitizeMrkdwn } from "../slack/blocks.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { RetryableError } from "../worker/retryable.ts";
+import { inviteToChannel } from "./invites.ts";
 import {
   type PrHandlerDeps,
   type PullRequestPayload,
@@ -359,7 +360,7 @@ async function inviteReviewer(
           },
         ],
       },
-      () => slack.inviteUsers(channelId, [slackUserId]),
+      () => inviteToChannel(deps, channelId, [slackUserId], { prId, role: "reviewer" }),
     );
     return delivered.posted;
   }

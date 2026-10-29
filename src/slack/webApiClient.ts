@@ -5,6 +5,7 @@ import {
   type SlackClient,
   type SlackMessage,
   type SlackMessageUpdate,
+  type UninvitableUser,
   isSlackChannelAlreadyInState,
 } from "./client.ts";
 import { Pacer, RateLimitedError, type SleepFn, withRetry } from "./rateLimiter.ts";
@@ -60,6 +61,26 @@ function slackErrorCode(error: unknown): string | undefined {
   return (error as { data?: { error?: string } })?.data?.error;
 }
 
+const UNINVITABLE_USER_ERRORS: ReadonlySet<string> = new Set([
+  "cant_invite",
+  "cant_invite_self",
+  "user_not_found",
+  "user_is_restricted",
+  "user_is_ultra_restricted",
+  "ura_max_channels",
+]);
+
+/** Per-user failures in a `conversations.invite` response, minus users already present. */
+function refusedInvites(response: unknown): UninvitableUser[] {
+  const errors = (response as { errors?: unknown })?.errors;
+  if (!Array.isArray(errors)) return [];
+  return errors.flatMap((entry) => {
+    const { user, error } = entry as { user?: unknown; error?: unknown };
+    if (typeof error !== "string" || error === "already_in_channel") return [];
+    return [{ userId: typeof user === "string" ? user : undefined, error }];
+  });
+}
+
 /**
  * The user's display name + avatar for authoring a mirrored comment as them.
  * Returns undefined for an unknown user so callers fall back to bot authorship.
@@ -95,7 +116,7 @@ interface SlackWebApi {
     archive(input: { channel: string }): Promise<unknown>;
     unarchive(input: { channel: string }): Promise<unknown>;
     info(input: { channel: string }): Promise<{ channel?: { is_archived?: boolean } }>;
-    invite(input: { channel: string; users: string }): Promise<unknown>;
+    invite(input: { channel: string; users: string; force?: boolean }): Promise<unknown>;
     members(input: { channel: string; cursor?: string; limit: number }): Promise<unknown>;
     leave(input: { channel: string }): Promise<unknown>;
     list(input: {
@@ -403,16 +424,23 @@ export function createWebApiSlackClient(
       }),
     inviteUsers: (channelId, userIds) =>
       call(async () => {
-        if (userIds.length > 0) {
-          try {
-            await withWritableChannel(channelId, () =>
-              web.conversations.invite({ channel: channelId, users: userIds.join(",") }),
-            );
-          } catch (error) {
-            // An ambiguous earlier invite may have succeeded. Treat Slack's
-            // already-present response as the idempotent success it represents.
-            if (slackErrorCode(error) !== "already_in_channel") throw error;
-          }
+        if (userIds.length === 0) return [];
+        try {
+          // `force` keeps inviting the valid users when another one in the list
+          // is already present or cannot be invited.
+          const result = await withWritableChannel(channelId, () =>
+            web.conversations.invite({ channel: channelId, users: userIds.join(","), force: true }),
+          );
+          return refusedInvites(result);
+        } catch (error) {
+          const code = slackErrorCode(error);
+          const data = (error as { data?: unknown }).data;
+          // An ambiguous earlier invite may have succeeded. Treat Slack's
+          // already-present response as the idempotent success it represents.
+          if (code === "already_in_channel") return refusedInvites(data);
+          if (!code || !UNINVITABLE_USER_ERRORS.has(code)) throw error;
+          const refused = refusedInvites(data);
+          return refused.length > 0 ? refused : userIds.map((userId) => ({ userId, error: code }));
         }
       }),
     listChannelMembers: async (channelId) => {

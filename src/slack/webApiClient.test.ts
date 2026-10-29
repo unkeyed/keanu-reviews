@@ -248,7 +248,48 @@ describe("Slack Web API adapter", () => {
     expect(web.conversations.archive).toHaveBeenCalledWith({ channel: "C123" });
     expect(web.conversations.unarchive).toHaveBeenCalledWith({ channel: "C123" });
     expect(web.conversations.invite).toHaveBeenCalledOnce();
-    expect(web.conversations.invite).toHaveBeenCalledWith({ channel: "C123", users: "U1,U2" });
+    expect(web.conversations.invite).toHaveBeenCalledWith({
+      channel: "C123",
+      users: "U1,U2",
+      force: true,
+    });
+  });
+
+  it("returns users Slack permanently refuses instead of failing the invite", async () => {
+    const web = fakeWebApi();
+    web.conversations.invite
+      .mockRejectedValueOnce({ data: { error: "user_is_restricted" } })
+      .mockResolvedValueOnce({
+        ok: true,
+        errors: [
+          { user: "U2", ok: false, error: "already_in_channel" },
+          { user: "U3", ok: false, error: "cant_invite" },
+        ],
+      })
+      .mockRejectedValueOnce({
+        data: {
+          error: "already_in_channel",
+          errors: [
+            { user: "U1", ok: false, error: "already_in_channel" },
+            { user: "U4", ok: false, error: "user_not_found" },
+          ],
+        },
+      })
+      .mockRejectedValueOnce({ data: { error: "channel_not_found" } });
+    const slack = createWebApiSlackClient("unused", { web });
+
+    await expect(slack.inviteUsers("C123", ["U9"])).resolves.toEqual([
+      { userId: "U9", error: "user_is_restricted" },
+    ]);
+    await expect(slack.inviteUsers("C123", ["U1", "U2", "U3"])).resolves.toEqual([
+      { userId: "U3", error: "cant_invite" },
+    ]);
+    await expect(slack.inviteUsers("C123", ["U1", "U4"])).resolves.toEqual([
+      { userId: "U4", error: "user_not_found" },
+    ]);
+    await expect(slack.inviteUsers("C123", ["U1"])).rejects.toMatchObject({
+      slackError: "channel_not_found",
+    });
   });
 
   it("lists channel members across pages", async () => {
@@ -488,7 +529,7 @@ describe("Slack Web API adapter", () => {
 
     await expect(slack.archiveChannel("C123")).resolves.toBeUndefined();
     await expect(slack.unarchiveChannel("C123")).resolves.toBeUndefined();
-    await expect(slack.inviteUsers("C123", ["U123"])).resolves.toBeUndefined();
+    await expect(slack.inviteUsers("C123", ["U123"])).resolves.toEqual([]);
   });
 
   it("recognizes Slack v8 rate-limit errors and honors a bounded Retry-After", async () => {
