@@ -425,6 +425,23 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     expect((await findByRepoNumber(db, "unkey/api", 1423))?.channelId).toBe("C1");
   });
 
+  it.each([
+    ["a rate limit", { status: 429, retryAfterSeconds: 30 }],
+    ["invalid_name", { data: { error: "invalid_name" } }],
+    ["missing_scope", Object.assign(new Error("missing_scope"), { slackError: "missing_scope" })],
+  ])("fails a create rejected with %s without scanning channels", async (_, failure) => {
+    slack.createChannel = async () => {
+      throw failure;
+    };
+    const findChannelByName = vi.spyOn(slack, "findChannelByName");
+
+    await expect(handlePullRequest(deps(), payload("opened"))).rejects.toBe(failure);
+
+    expect(findChannelByName).not.toHaveBeenCalled();
+    expect(slack.channels).toHaveLength(0);
+    expect((await findByRepoNumber(db, "unkey/api", 1423))?.channelId).toBeNull();
+  });
+
   it("sanitizes untrusted PR titles and logins in blocks and fallback text", async () => {
     const event = payload("opened", {
       title: "ship <!channel>",

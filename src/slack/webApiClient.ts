@@ -346,7 +346,7 @@ export function createWebApiSlackClient(
           web.conversations.list({
             cursor,
             exclude_archived: false,
-            limit: 200,
+            limit: 999,
             // This service creates public channels, so recovery needs only the
             // channels:read scope and never enumerates private conversations.
             types: "public_channel",

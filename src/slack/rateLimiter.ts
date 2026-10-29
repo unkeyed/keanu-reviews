@@ -23,7 +23,9 @@ export class RateLimitedError extends RetryableError {
   }
 }
 
-const isRateLimited = (e: unknown): e is Pick<RateLimitedError, "status" | "retryAfterSeconds"> =>
+export const isRateLimited = (
+  e: unknown,
+): e is Pick<RateLimitedError, "status" | "retryAfterSeconds"> =>
   typeof e === "object" && e !== null && (e as { status?: number }).status === 429;
 
 export type SleepFn = (ms: number) => Promise<void>;

@@ -375,13 +375,13 @@ describe("Slack Web API adapter", () => {
     expect(web.conversations.list).toHaveBeenNthCalledWith(1, {
       cursor: undefined,
       exclude_archived: false,
-      limit: 200,
+      limit: 999,
       types: "public_channel",
     });
     expect(web.conversations.list).toHaveBeenNthCalledWith(2, {
       cursor: "page-2",
       exclude_archived: false,
-      limit: 200,
+      limit: 999,
       types: "public_channel",
     });
   });

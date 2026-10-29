@@ -30,6 +30,7 @@ import {
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { slackChannelUrl } from "../slack/links.ts";
 import { CURRENT_CHANNEL_NAME_VERSION, channelName } from "../slack/naming.ts";
+import { isRateLimited } from "../slack/rateLimiter.ts";
 import { RetryableError } from "../worker/retryable.ts";
 import { inviteToChannel } from "./invites.ts";
 import type { PullRequestFetcher } from "./mergeability.ts";
@@ -222,7 +223,9 @@ export async function handlePullRequest(
       } catch (error) {
         // conversations.create can succeed remotely and fail locally, or a
         // retry can receive name_taken. Exact deterministic-name lookup
-        // recovers only the intended PR channel.
+        // recovers only the intended PR channel. The lookup pages through every
+        // public channel, so it runs only when the channel may exist.
+        if (!createMayHaveSucceeded(error)) throw error;
         const recovered = await slack.findChannelByName(name);
         if (!recovered) throw error;
         channelId = recovered;
@@ -466,6 +469,18 @@ export async function handlePullRequest(
       logger.error("PR lifecycle lease was lost before release", { githubPrId: pr.id });
     }
   }
+}
+
+/**
+ * A failed `conversations.create` may still have left the channel in Slack when
+ * Slack said `name_taken` or when no Slack response arrived at all. A rate limit
+ * or any other Slack error means nothing was created.
+ */
+function createMayHaveSucceeded(error: unknown): boolean {
+  if (isRateLimited(error)) return false;
+  const failure = error as { slackError?: string; data?: { error?: string } };
+  const code = failure?.slackError ?? failure?.data?.error;
+  return code === undefined || code === "name_taken";
 }
 
 async function postLifecycleNote(
