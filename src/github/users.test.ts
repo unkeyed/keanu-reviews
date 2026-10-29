@@ -101,6 +101,17 @@ describe("GitHub API fetchers", () => {
     await expect(fetchPrs("unkeyed/example", "abc123")).resolves.toEqual([7, 9]);
   });
 
+  it("encodes the owner and repo as separate path segments", async () => {
+    const auth = createAuth();
+    const fetchFn = vi.fn<typeof fetch>(async () => jsonResponse(200, []));
+    const fetchPrs = createPrForShaFetcher(auth, "42", { fetch: fetchFn });
+
+    await fetchPrs("own er/re#po", "abc123");
+    expect(fetchFn.mock.calls[0]?.[0]).toBe(
+      "https://api.github.com/repos/own%20er/re%23po/commits/abc123/pulls",
+    );
+  });
+
   it("counts current approvals: latest decision per reviewer, ignoring comments", async () => {
     const auth = createAuth();
     const reviews = [

@@ -22,6 +22,11 @@ export class GithubApiError extends Error {
   }
 }
 
+/** `owner/repo` as a URL path, each segment encoded and the separator kept. */
+export function encodedRepoPath(repoFullName: string): string {
+  return repoFullName.split("/").map(encodeURIComponent).join("/");
+}
+
 export interface GithubRequestOptions {
   fetch?: typeof globalThis.fetch;
   timeoutMs?: number;

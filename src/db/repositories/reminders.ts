@@ -227,11 +227,6 @@ export async function rescheduleOrFailReminder(
   return terminal ? "failed" : "pending";
 }
 
-/** Release without backoff for non-delivery control flow. */
-export async function releaseReminderClaim(db: Db, claim: ReminderRow): Promise<void> {
-  await db.update(reminders).set({ status: "pending", claimedAt: null }).where(currentClaim(claim));
-}
-
 export async function cancelReminderClaim(db: Db, claim: ReminderRow): Promise<void> {
   await db
     .update(reminders)

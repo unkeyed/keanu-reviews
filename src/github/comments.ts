@@ -1,5 +1,5 @@
 import type { InstallationAuth } from "./auth.ts";
-import { type GithubRequestOptions, githubPostJson } from "./http.ts";
+import { type GithubRequestOptions, encodedRepoPath, githubPostJson } from "./http.ts";
 
 /** Post a comment on a PR (opt-in write — see the merge-comment feature). */
 export type PrCommenter = (repoFullName: string, number: number, body: string) => Promise<void>;
@@ -15,11 +15,10 @@ export function createPrCommenter(
   options: GithubRequestOptions = {},
 ): PrCommenter {
   return async (repoFullName, number, body) => {
-    const repoPath = repoFullName.split("/").map(encodeURIComponent).join("/");
     await githubPostJson(
       auth,
       installationId,
-      `/repos/${repoPath}/issues/${number}/comments`,
+      `/repos/${encodedRepoPath(repoFullName)}/issues/${number}/comments`,
       { body },
       options,
     );
