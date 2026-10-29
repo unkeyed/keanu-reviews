@@ -75,19 +75,18 @@ export function createServiceHandlers(input: {
     });
     const dropToken = (slackUserId: string) =>
       deleteSlackUserToken(db, config.SLACK_TEAM_ID, slackUserId);
-    // A token that no longer decrypts (rotated key, corrupt row) can never be
-    // used again, so it is dropped like a token Slack reports dead.
+    // A token that no longer decrypts falls back to the bot but is kept: a
+    // misconfigured key at deploy would otherwise wipe every stored token.
     const readUserToken = async (slackUserId: string, requiredScope?: string) => {
       const row = await getSlackUserTokenRow(db, config.SLACK_TEAM_ID, slackUserId);
       if (!row || (requiredScope && !hasScope(row.scopes, requiredScope))) return undefined;
       try {
         return cipher.decrypt(row.encryptedToken);
       } catch (error) {
-        logger.warn("dropping a Slack user token that cannot be decrypted", {
+        logger.warn("Slack user token cannot be decrypted; posting as the bot", {
           slackUserId,
           err: error instanceof Error ? error.message : String(error),
         });
-        await dropToken(slackUserId);
         return undefined;
       }
     };

@@ -46,7 +46,7 @@ beforeEach(async () => {
 afterEach(() => close());
 
 describe("createServiceHandlers post-as-user", () => {
-  it("drops a token that no longer decrypts and posts the comment as the bot", async () => {
+  it("posts as the bot when a stored token no longer decrypts, keeping the token", async () => {
     const row = await upsertPullRequest(db, {
       repoFullName: "unkey/api",
       number: 1423,
@@ -104,9 +104,9 @@ describe("createServiceHandlers post-as-user", () => {
     expect(slack.messages).toHaveLength(1);
     expect(slack.messages[0]?.authorUserToken).toBeUndefined();
     expect(slack.messages[0]?.username).toBe("Flo Rider");
-    expect(await getSlackUserTokenRow(db, "T123", "U7")).toBeUndefined();
+    expect(await getSlackUserTokenRow(db, "T123", "U7")).toBeDefined();
     expect(warn).toHaveBeenCalledWith(
-      "dropping a Slack user token that cannot be decrypted",
+      "Slack user token cannot be decrypted; posting as the bot",
       expect.objectContaining({ slackUserId: "U7" }),
     );
   });
