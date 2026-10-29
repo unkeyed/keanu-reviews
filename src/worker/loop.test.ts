@@ -195,24 +195,48 @@ describe("worker retry hints", () => {
 });
 
 describe("worker loop", () => {
-  it("does not overlap drains when one interval takes longer than the timer", async () => {
-    vi.useFakeTimers();
-    let resolveDrain: (() => void) | undefined;
-    const drain = vi.fn(
+  const pendingTicks = () => {
+    const finishers: ((more: boolean) => void)[] = [];
+    const tick = vi.fn(
       () =>
-        new Promise<number>((resolve) => {
-          resolveDrain = () => resolve(1);
+        new Promise<boolean>((resolve) => {
+          finishers.push(resolve);
         }),
     );
-    const loop = startWorkerLoop({ drain }, 10, createLogger("error"));
+    return { tick, finish: (more: boolean) => finishers.shift()?.(more) };
+  };
+
+  it("does not overlap drains when one interval takes longer than the timer", async () => {
+    vi.useFakeTimers();
+    const { tick, finish } = pendingTicks();
+    const loop = startWorkerLoop({ tick }, 10, createLogger("error"));
 
     await vi.advanceTimersByTimeAsync(30);
-    expect(drain).toHaveBeenCalledTimes(1);
+    expect(tick).toHaveBeenCalledTimes(1);
 
-    resolveDrain?.();
-    await Promise.resolve();
+    finish(false);
     await vi.advanceTimersByTimeAsync(10);
-    expect(drain).toHaveBeenCalledTimes(2);
-    loop.stop();
+    expect(tick).toHaveBeenCalledTimes(2);
+    finish(false);
+    await loop.stop();
+  });
+
+  it("stop resolves after the in-flight job finishes and claims no further jobs", async () => {
+    vi.useFakeTimers();
+    const { tick, finish } = pendingTicks();
+    const loop = startWorkerLoop({ tick }, 10, createLogger("error"));
+    await vi.advanceTimersByTimeAsync(10);
+
+    let stopped = false;
+    const stopping = loop.stop().then(() => {
+      stopped = true;
+    });
+    await vi.advanceTimersByTimeAsync(30);
+    expect(stopped).toBe(false);
+
+    finish(true);
+    await stopping;
+    expect(stopped).toBe(true);
+    expect(tick).toHaveBeenCalledTimes(1);
   });
 });

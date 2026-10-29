@@ -20,6 +20,9 @@ import { createWebApiSlackClient } from "./slack/webApiClient.ts";
 import { createWorker, startWorkerLoop } from "./worker/loop.ts";
 import { createRouter } from "./worker/router.ts";
 
+// Most platforms send SIGKILL 30s after SIGTERM. Finish inside that window.
+const SHUTDOWN_DEADLINE_MS = 20_000;
+
 function boot(): void {
   let config: Config;
   try {
@@ -38,7 +41,7 @@ function boot(): void {
   const logger = createLogger(config.LOG_LEVEL, { service: "keanu-reviews" });
 
   // Infrastructure
-  const { db } = createDb(config.DATABASE_URL);
+  const { db, close: closeDb } = createDb(config.DATABASE_URL);
   const slack = createWebApiSlackClient(config.SLACK_BOT_TOKEN);
   const auth = createInstallationAuth(
     octokitMintFn(config.GITHUB_APP_ID, config.GITHUB_APP_PRIVATE_KEY),
@@ -128,16 +131,57 @@ function boot(): void {
     fetchSnapshot: createPullRequestSnapshotFetcher(auth, installationId, { logger }),
     logger,
   });
-  startWorkerLoop(worker, 1000, logger);
-  startReminderLoop(scheduler.processDue, config.REMINDER_SCAN_INTERVAL_MS, logger);
-  startDailyLoop(() => reconcileClosedPullRequests(), DAILY_RECONCILE_HOUR_UTC, logger);
+  const workerLoop = startWorkerLoop(worker, 1000, logger);
+  const reminderLoop = startReminderLoop(
+    scheduler.processDue,
+    config.REMINDER_SCAN_INTERVAL_MS,
+    logger,
+  );
+  const dailyLoop = startDailyLoop(
+    () => reconcileClosedPullRequests(),
+    DAILY_RECONCILE_HOUR_UTC,
+    logger,
+  );
   logger.info("closed pull request reconciliation scheduled", {
     hourUtc: DAILY_RECONCILE_HOUR_UTC,
   });
 
-  serve({ fetch: app.fetch, port: config.PORT }, (info) => {
+  const server = serve({ fetch: app.fetch, port: config.PORT }, (info) => {
     logger.info("service listening", { port: info.port, env: config.NODE_ENV });
   });
+
+  let shuttingDown = false;
+  const shutdown = async (signal: NodeJS.Signals) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info("shutting down", { signal });
+    dailyLoop.stop();
+    const settled = Promise.all([
+      new Promise<void>((resolve) => server.close(() => resolve())),
+      workerLoop.stop(),
+      reminderLoop.stop(),
+    ]).then(() => "drained" as const);
+    const deadline = new Promise<"timeout">((resolve) => {
+      setTimeout(resolve, SHUTDOWN_DEADLINE_MS, "timeout");
+    });
+    // Past the deadline an unfinished job keeps its lease and is reclaimed
+    // after restart, so exiting cannot lose it.
+    if ((await Promise.race([settled, deadline])) === "timeout") {
+      logger.warn("shutdown deadline reached with work in flight", {
+        deadlineMs: SHUTDOWN_DEADLINE_MS,
+      });
+    }
+    try {
+      await closeDb();
+    } catch (err) {
+      logger.error("database close failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+    process.exit(0);
+  };
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdown("SIGINT"));
 }
 
 boot();

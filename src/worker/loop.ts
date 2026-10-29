@@ -88,33 +88,38 @@ export function createWorker(deps: WorkerDeps) {
   return { tick, drain };
 }
 
-/** Continuously drain the job queue on an interval (production loop). */
+/**
+ * Continuously drain the job queue on an interval (production loop). `stop`
+ * claims no further jobs and resolves once the job already running finishes.
+ */
 export function startWorkerLoop(
-  worker: { drain: () => Promise<number> },
+  worker: { tick: () => Promise<boolean> },
   intervalMs: number,
   logger: Logger,
-): { stop: () => void } {
-  let draining = false;
+): { stop: () => Promise<void> } {
   let stopped = false;
+  let inFlight: Promise<void> | undefined;
+  const drainUntilStopped = async () => {
+    while (!stopped && (await worker.tick())) {}
+  };
   const timer = setInterval(() => {
-    if (draining || stopped) return;
-    draining = true;
-    worker
-      .drain()
+    if (inFlight || stopped) return;
+    inFlight = drainUntilStopped()
       .catch((err) => {
         logger.error("worker drain failed", {
           err: err instanceof Error ? err.message : String(err),
         });
       })
       .finally(() => {
-        draining = false;
+        inFlight = undefined;
       });
   }, intervalMs);
   timer.unref?.();
   return {
-    stop: () => {
+    stop: async () => {
       stopped = true;
       clearInterval(timer);
+      await inFlight;
     },
   };
 }
