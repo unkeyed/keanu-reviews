@@ -192,6 +192,39 @@ describe("worker retry hints", () => {
     expect(await availableAt(job.id)).toMatchObject({ status: "done" });
     expect(slack.channels).toHaveLength(1);
   });
+
+  it("waits only for the time left on a PR lifecycle lease another claim holds", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.now();
+    await claimPullRequestLifecycle(db, 999, { now: new Date(start - 4.5 * 60_000) });
+    const job = await enqueue("lifecycle-nearly-free");
+    const payload = {
+      action: "opened",
+      repository: { full_name: "unkey/api" },
+      pull_request: {
+        number: 1423,
+        id: 999,
+        draft: false,
+        merged: false,
+        title: "Add auth",
+        html_url: "https://github.com/unkey/api/pull/1423",
+        user: { login: "oz", id: 100 },
+        head: { sha: "sha1" },
+        updated_at: "2026-08-11T12:00:00Z",
+      },
+    } satisfies PullRequestPayload;
+    const slack = new FakeSlackClient();
+    const worker = createWorker({
+      db,
+      logger: createLogger("error"),
+      router: async () => {
+        await handlePullRequest({ db, slack, logger: createLogger("error") }, payload);
+      },
+    });
+
+    await worker.drain();
+    expect(await availableAt(job.id)).toEqual({ status: "pending", at: start + 30_000 });
+  });
 });
 
 describe("worker loop", () => {

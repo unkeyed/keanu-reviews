@@ -1,12 +1,12 @@
 import type { Db } from "../db/client.ts";
 import {
-  PULL_REQUEST_LIFECYCLE_LEASE_MS,
   applyPullRequestSource,
   claimMergeComment,
   claimPullRequestLifecycle,
   findByGithubPrId,
   findByRepoNumber,
   markSlackStateApplied,
+  pullRequestLifecycleLeaseRemainingMs,
   releaseMergeComment,
   releasePullRequestLifecycle,
   setChannel,
@@ -156,14 +156,12 @@ export async function handlePullRequest(
     throw new Error(`Invalid pull_request.updated_at for GitHub PR ${pr.id}`);
   }
 
-  const lifecycleClaim = await claimPullRequestLifecycle(db, pr.id, {
-    now: options.now,
-    leaseMs: options.lifecycleLeaseMs,
-  });
+  const leaseOptions = { now: options.now, leaseMs: options.lifecycleLeaseMs };
+  const lifecycleClaim = await claimPullRequestLifecycle(db, pr.id, leaseOptions);
   if (!lifecycleClaim) {
     throw new PullRequestLifecycleBusyError(
       pr.id,
-      options.lifecycleLeaseMs ?? PULL_REQUEST_LIFECYCLE_LEASE_MS,
+      await pullRequestLifecycleLeaseRemainingMs(db, pr.id, leaseOptions),
     );
   }
 
