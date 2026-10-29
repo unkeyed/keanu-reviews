@@ -17,6 +17,9 @@ import {
 
 export { GithubApiError } from "./http.ts";
 
+/** Most pages (of 100) read from one paged GitHub list. */
+const PAGE_LIMIT = 10;
+
 type GithubUserResponse = { id?: unknown; login?: unknown };
 type GithubEmailResponse = { email?: unknown };
 
@@ -106,9 +109,17 @@ export function createReviewApprovalFetcher(
   options: GithubRequestOptions = {},
 ): ReviewApprovalFetcher {
   return async (repoFullName: string, number: number) => {
+    const reviews = `/repos/${encodedRepoPath(repoFullName)}/pulls/${number}/reviews`;
     const latestByUser = new Map<number, string>();
     for (let page = 1; ; page++) {
-      const path = `/repos/${encodedRepoPath(repoFullName)}/pulls/${number}/reviews?per_page=100&page=${page}`;
+      if (page > PAGE_LIMIT) {
+        // A partial history can miss a later dismissal, so don't report a count.
+        throw new GithubApiError(`GitHub reviews list exceeded ${PAGE_LIMIT} pages`, {
+          kind: "invalid_response",
+          url: `https://api.github.com${reviews}`,
+        });
+      }
+      const path = `${reviews}?per_page=100&page=${page}`;
       const body = await githubGetJson<unknown>(auth, installationId, path, options);
       if (body === undefined) return undefined;
       if (!Array.isArray(body)) throw invalidResponse(path);
@@ -148,8 +159,6 @@ interface CheckRunList {
   total_count?: unknown;
   check_runs?: unknown;
 }
-
-const PAGE_LIMIT = 10;
 
 /**
  * Page check runs. Stops after {@link PAGE_LIMIT} pages and the caller treats a

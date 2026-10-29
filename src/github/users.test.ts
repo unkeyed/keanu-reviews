@@ -130,6 +130,22 @@ describe("GitHub API fetchers", () => {
     await expect(fetchApprovals("unkey/api", 7)).resolves.toBe(3); // reviewers 1, 2, 3
   });
 
+  it("stops paging reviews after 10 full pages instead of counting a partial history", async () => {
+    const auth = createAuth();
+    const fullPage = Array.from({ length: 100 }, (_, i) => ({
+      user: { id: i },
+      state: "APPROVED",
+    }));
+    const fetchFn = vi.fn(async () => jsonResponse(200, fullPage));
+    const fetchApprovals = createReviewApprovalFetcher(auth, "42", { fetch: fetchFn });
+
+    await expect(fetchApprovals("unkey/api", 7)).rejects.toMatchObject({
+      name: "GithubApiError",
+      kind: "invalid_response",
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(10);
+  });
+
   it("classifies check runs for one commit and ignores anything else", async () => {
     const auth = createAuth();
     const fetchFn = vi.fn(async (input: string | URL | Request) => {
