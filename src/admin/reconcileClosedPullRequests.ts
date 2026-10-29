@@ -59,7 +59,7 @@ export async function runReconcileClosedPullRequestsCli(
     });
     const summary = await run();
     io.stdout(JSON.stringify(summary));
-    return 0;
+    return summary.failed > 0 ? 1 : 0;
   } catch (error) {
     io.stderr(
       error instanceof ConfigError
