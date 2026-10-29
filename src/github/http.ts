@@ -78,6 +78,7 @@ export async function githubRequest(
   let token = await auth.getToken(installationId);
   let response = await request(token);
   if (response.status === 401) {
+    await response.body?.cancel();
     auth.invalidate(installationId);
     token = await auth.getToken(installationId);
     response = await request(token);
@@ -98,8 +99,12 @@ export async function githubGetJson<T>(
   const url = `${GITHUB_API_BASE}${path}`;
   const response = await githubRequest(auth, installationId, path, options);
 
-  if (response.status === 404) return undefined;
+  if (response.status === 404) {
+    await response.body?.cancel();
+    return undefined;
+  }
   if (!response.ok) {
+    await response.body?.cancel();
     throw new GithubApiError(`GitHub API returned HTTP ${response.status}`, {
       kind: "http",
       status: response.status,
@@ -110,6 +115,15 @@ export async function githubGetJson<T>(
   try {
     return (await response.json()) as T;
   } catch (cause) {
+    if (cause instanceof DOMException && cause.name === "TimeoutError") {
+      const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      throw new GithubApiError(`GitHub request timed out after ${timeoutMs}ms`, {
+        kind: "timeout",
+        status: response.status,
+        url,
+        cause,
+      });
+    }
     throw new GithubApiError("GitHub API returned invalid JSON", {
       kind: "invalid_response",
       status: response.status,
@@ -138,6 +152,7 @@ export async function githubPostJson(
     method: "POST",
     jsonBody: body,
   });
+  await response.body?.cancel();
 
   if (!response.ok) {
     const hint =
