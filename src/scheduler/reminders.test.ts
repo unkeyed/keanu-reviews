@@ -8,7 +8,7 @@ import {
   updateState,
   upsertPullRequest,
 } from "../db/repositories/pullRequests.ts";
-import { listDue } from "../db/repositories/reminders.ts";
+import { claimReminder, deferReminder, listDue } from "../db/repositories/reminders.ts";
 import { reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createLogger } from "../logger.ts";
@@ -21,6 +21,7 @@ let close: () => Promise<void>;
 let clock: number;
 
 const HOURS = 12;
+const HOLD_MS = 15 * 60_000;
 const PR = prId("unkey/api", 1);
 
 beforeEach(async () => {
@@ -138,8 +139,10 @@ describe("reminder scheduler (U8, R9)", () => {
     expect(slack.messages).toHaveLength(0);
     const [row] = await db.select().from(reminders).where(eq(reminders.prId, PR));
     expect(row?.status).toBe("pending");
+    expect(row?.attempts).toBe(0);
 
     await updateState(db, PR, "pr");
+    clock += HOLD_MS;
     expect(await s.processDue()).toBe(1);
     expect(slack.messages).toHaveLength(1);
   });
@@ -159,12 +162,14 @@ describe("reminder scheduler (U8, R9)", () => {
 
     expect(await s.processDue()).toBe(0);
     readiness = "pending";
+    clock += HOLD_MS;
     expect(await s.processDue()).toBe(0);
     const [row] = await db.select().from(reminders).where(eq(reminders.prId, PR));
     expect(row?.status).toBe("pending");
     expect(slack.messages).toHaveLength(0);
 
     readiness = "passing";
+    clock += HOLD_MS;
     expect(await s.processDue()).toBe(1);
     expect(slack.messages).toHaveLength(1);
   });
@@ -402,5 +407,155 @@ describe("reminder scheduler (U8, R9)", () => {
     expect(await s.processDue()).toBe(2);
     expect(await s.processDue()).toBe(1);
     expect(slack.messages).toHaveLength(3);
+  });
+
+  it("delivers a reminder queued behind more than a batch of held reminders", async () => {
+    const s = scheduler({ batchSize: 2 });
+    await updateState(db, PR, "draft");
+    await s.onReviewRequested(PR, 7);
+    await s.onReviewRequested(PR, 8);
+    await s.onReviewRequested(PR, 9);
+    const other = await upsertPullRequest(db, {
+      repoFullName: "unkey/api",
+      number: 2,
+      githubPrId: 2,
+      currentState: "pr",
+    });
+    await setChannel(db, other.id, "C2", "ts-root-2");
+    clock += 60_000;
+    await s.onReviewRequested(other.id, 10);
+    advanceHours(HOURS);
+
+    expect((await s.processDue()) + (await s.processDue())).toBe(1);
+
+    expect(slack.messages.map((message) => message.channel)).toEqual(["C2"]);
+    const held = await db.select().from(reminders).where(eq(reminders.prId, PR));
+    expect(held).toHaveLength(3);
+    for (const row of held) {
+      expect(row.status).toBe("pending");
+      expect(row.attempts).toBe(0);
+      expect(row.availableAt.getTime()).toBe(clock + HOLD_MS);
+    }
+  });
+
+  it("checks CI for a held PR once per hold interval, not on every scan", async () => {
+    await upsertPullRequest(db, {
+      repoFullName: "unkey/api",
+      number: 1,
+      githubPrId: 1,
+      currentState: "pr",
+      headSha: "sha-1",
+    });
+    let lookups = 0;
+    const s = scheduler({
+      fetchCiReadiness: async () => {
+        lookups += 1;
+        return "failing";
+      },
+    });
+    await s.onReviewRequested(PR, 7);
+    await s.onReviewRequested(PR, 8);
+    advanceHours(HOURS);
+
+    await s.processDue();
+    await s.processDue();
+    clock += HOLD_MS - 1;
+    await s.processDue();
+    expect(lookups).toBe(1);
+
+    clock += 1;
+    await s.processDue();
+    expect(lookups).toBe(2);
+  });
+
+  it("holds a reminder for an open PR whose channel does not exist yet", async () => {
+    const s = scheduler({ maxAttempts: 2 });
+    const pending = await upsertPullRequest(db, {
+      repoFullName: "unkey/api",
+      number: 2,
+      githubPrId: 2,
+      currentState: "pr",
+    });
+    await s.onReviewRequested(pending.id, 7);
+    advanceHours(HOURS);
+
+    for (let scan = 0; scan < 3; scan++) {
+      expect(await s.processDue()).toBe(0);
+      clock += HOLD_MS;
+    }
+    const [held] = await db.select().from(reminders).where(eq(reminders.prId, pending.id));
+    expect(held?.status).toBe("pending");
+    expect(held?.attempts).toBe(0);
+
+    await setChannel(db, pending.id, "C2", "ts-root-2");
+    expect(await s.processDue()).toBe(1);
+    expect(slack.messages.map((message) => message.channel)).toEqual(["C2"]);
+  });
+
+  it("restarts the reminder clock when the review alert goes out after a hold", async () => {
+    const s = scheduler();
+    await updateState(db, PR, "draft");
+    await s.onReviewRequested(PR, 7);
+    advanceHours(HOURS);
+    expect(await s.processDue()).toBe(0);
+
+    await updateState(db, PR, "pr");
+    await s.onReviewAlerted(PR, 7);
+    clock += HOLD_MS;
+    expect(await s.processDue()).toBe(0);
+
+    advanceHours(HOURS);
+    expect(await s.processDue()).toBe(1);
+  });
+
+  it("releases an expired sending lease back to pending when the reminder is held", async () => {
+    const s = scheduler();
+    await s.onReviewRequested(PR, 7);
+    advanceHours(HOURS);
+    await db
+      .update(reminders)
+      .set({ status: "sending", attempts: 1, claimedAt: new Date(clock - 10 * 60_000) })
+      .where(eq(reminders.prId, PR));
+    await updateState(db, PR, "draft");
+
+    expect(await s.processDue()).toBe(0);
+
+    const [row] = await db.select().from(reminders).where(eq(reminders.prId, PR));
+    expect(row?.status).toBe("pending");
+    expect(row?.claimedAt).toBeNull();
+    expect(row?.attempts).toBe(1);
+    expect(row?.availableAt.getTime()).toBe(clock + HOLD_MS);
+  });
+});
+
+describe("deferReminder", () => {
+  it("does not override a claim taken after the row was listed", async () => {
+    await scheduler().onReviewRequested(PR, 7);
+    advanceHours(HOURS);
+    const now = new Date(clock);
+    const [listed] = await listDue(db, now);
+    if (!listed) throw new Error("expected a due reminder");
+    await claimReminder(db, listed.id, now);
+
+    await deferReminder(db, listed, new Date(clock + HOLD_MS), now);
+
+    const [row] = await db.select().from(reminders).where(eq(reminders.prId, PR));
+    expect(row?.status).toBe("sending");
+    expect(row?.availableAt.getTime()).toBe(listed.availableAt.getTime());
+  });
+
+  it("does not resurrect a reminder cancelled after it was listed", async () => {
+    const s = scheduler();
+    await s.onReviewRequested(PR, 7);
+    advanceHours(HOURS);
+    const now = new Date(clock);
+    const [listed] = await listDue(db, now);
+    if (!listed) throw new Error("expected a due reminder");
+    await s.onReviewSubmitted(PR, 7);
+
+    await deferReminder(db, listed, new Date(clock + HOLD_MS), now);
+
+    const [row] = await db.select().from(reminders).where(eq(reminders.prId, PR));
+    expect(row?.status).toBe("cancelled");
   });
 });

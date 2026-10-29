@@ -5,6 +5,7 @@ import {
   cancelForReviewer,
   cancelReminderClaim,
   claimReminder,
+  deferReminder,
   isReminderClaimCurrent,
   listDue,
   markReminderSent,
@@ -39,6 +40,8 @@ export interface ReminderDeps {
   maxAttempts?: number;
   retryBaseMs?: number;
   batchSize?: number;
+  /** How long a held reminder (draft, no channel yet, CI not green) waits before its next check. */
+  holdMs?: number;
   now?: () => number;
   /** Only deliver reminders during this daily window; omit to deliver anytime. */
   deliveryWindow?: ReminderWindow;
@@ -107,6 +110,19 @@ async function reminderWaitingOnCi(deps: ReminderDeps, pr: PullRequestRow): Prom
   return false;
 }
 
+type HoldReason = "draft" | "no_channel" | "ci";
+
+/** Why an open PR's due reminders cannot be claimed yet, if anything. */
+async function reminderHold(
+  deps: ReminderDeps,
+  pr: PullRequestRow,
+): Promise<HoldReason | undefined> {
+  if (pr.currentState === "draft") return "draft";
+  if (!pr.channelId) return "no_channel";
+  if (await reminderWaitingOnCi(deps, pr)) return "ci";
+  return undefined;
+}
+
 /**
  * Reminder scheduler (U8, R9). A reminder is scheduled 12h out when a review is
  * requested and cancelled when that reviewer submits, the request is removed, or
@@ -121,6 +137,7 @@ export function createReminderScheduler(deps: ReminderDeps) {
   const maxAttempts = deps.maxAttempts ?? 5;
   const retryBaseMs = deps.retryBaseMs ?? 60_000;
   const batchSize = deps.batchSize ?? 50;
+  const holdMs = deps.holdMs ?? 15 * 60_000;
   let localSourceSequence = 0;
   const fallbackSourceVersion = (sourceTime: Date) =>
     `${sourceTime.toISOString()}:${String(++localSourceSequence).padStart(12, "0")}`;
@@ -166,33 +183,31 @@ export function createReminderScheduler(deps: ReminderDeps) {
     let posted = 0;
     // One readiness lookup per PR per scan, shared across its reviewers.
     const readiness = new Map<string, boolean>();
-    const ciHold = new Map<string, boolean>();
+    const holds = new Map<string, HoldReason | undefined>();
     for (const r of due) {
       const pr = await findById(deps.db, r.prId);
-      // Drafts and red/in-progress CI are not claimable yet: claiming would
-      // burn the retry budget while we wait for the PR to become reviewable.
+      // A held reminder is deferred rather than claimed: claiming would burn the
+      // retry budget, and leaving it due would let held rows fill every batch.
       if (pr && !isTerminal(pr.currentState)) {
-        if (pr.currentState === "draft") {
-          deps.logger.debug("reminder held: PR is still a draft", { prId: r.prId });
+        if (!holds.has(r.prId)) holds.set(r.prId, await reminderHold(deps, pr));
+        const hold = holds.get(r.prId);
+        if (hold) {
+          const until = new Date(scanTime.getTime() + holdMs);
+          await deferReminder(deps.db, r, until, scanTime, leaseMs);
+          deps.logger.debug("reminder held", { prId: r.prId, reason: hold, until });
           continue;
         }
-        let holdForCi = ciHold.get(r.prId);
-        if (holdForCi === undefined) {
-          holdForCi = await reminderWaitingOnCi(deps, pr);
-          ciHold.set(r.prId, holdForCi);
-        }
-        if (holdForCi) continue;
       }
 
       const claimed = await claimReminder(deps.db, r.id, scanTime, leaseMs);
       if (!claimed) continue; // lost the race to another scanner
 
       try {
-        if (!pr?.channelId) throw new Error(`Reminder PR channel is unavailable for ${r.prId}`);
-        if (isTerminal(pr.currentState)) {
+        if (pr && isTerminal(pr.currentState)) {
           await cancelReminderClaim(deps.db, claimed);
           continue;
         }
+        if (!pr?.channelId) throw new Error(`Reminder PR channel is unavailable for ${r.prId}`);
 
         // Don't nag the channel or any remaining reviewer once the PR is ready
         // to merge or already has enough approvals.

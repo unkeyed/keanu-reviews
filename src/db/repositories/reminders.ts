@@ -109,6 +109,21 @@ export async function scheduleReminder(
   return existing;
 }
 
+/** Due, and either pending or `sending` under an expired worker lease. */
+const claimable = (now: Date, leaseMs: number) => {
+  const leaseExpiredAt = new Date(now.getTime() - leaseMs);
+  return and(
+    lte(reminders.availableAt, now),
+    or(
+      eq(reminders.status, "pending"),
+      and(
+        eq(reminders.status, "sending"),
+        or(isNull(reminders.claimedAt), lte(reminders.claimedAt, leaseExpiredAt)),
+      ),
+    ),
+  );
+};
+
 /** Due pending reminders plus sending rows whose worker lease expired, in a bounded order. */
 export async function listDue(
   db: Db,
@@ -116,22 +131,10 @@ export async function listDue(
   leaseMs = 5 * 60_000,
   batchSize = 50,
 ): Promise<ReminderRow[]> {
-  const leaseExpiredAt = new Date(now.getTime() - leaseMs);
   return db
     .select()
     .from(reminders)
-    .where(
-      and(
-        lte(reminders.availableAt, now),
-        or(
-          eq(reminders.status, "pending"),
-          and(
-            eq(reminders.status, "sending"),
-            or(isNull(reminders.claimedAt), lte(reminders.claimedAt, leaseExpiredAt)),
-          ),
-        ),
-      ),
-    )
+    .where(claimable(now, leaseMs))
     .orderBy(asc(reminders.availableAt), asc(reminders.createdAt), asc(reminders.id))
     .limit(batchSize);
 }
@@ -143,7 +146,6 @@ export async function claimReminder(
   now = new Date(),
   leaseMs = 5 * 60_000,
 ): Promise<ReminderRow | undefined> {
-  const leaseExpiredAt = new Date(now.getTime() - leaseMs);
   const [row] = await db
     .update(reminders)
     .set({
@@ -151,21 +153,34 @@ export async function claimReminder(
       claimedAt: now,
       attempts: sql`${reminders.attempts} + 1`,
     })
-    .where(
-      and(
-        eq(reminders.id, id),
-        lte(reminders.availableAt, now),
-        or(
-          eq(reminders.status, "pending"),
-          and(
-            eq(reminders.status, "sending"),
-            or(isNull(reminders.claimedAt), lte(reminders.claimedAt, leaseExpiredAt)),
-          ),
-        ),
-      ),
-    )
+    .where(and(eq(reminders.id, id), claimable(now, leaseMs)))
     .returning();
   return row;
+}
+
+/**
+ * Push a held reminder's next scan out without spending an attempt. Matches only
+ * while the listed generation is still claimable, so it cannot override a live
+ * claim, a cancellation, or a due time an alert already pushed out. An expired
+ * `sending` lease is released back to pending.
+ */
+export async function deferReminder(
+  db: Db,
+  listed: ReminderRow,
+  availableAt: Date,
+  now: Date,
+  leaseMs = 5 * 60_000,
+): Promise<void> {
+  await db
+    .update(reminders)
+    .set({ status: "pending", claimedAt: null, availableAt })
+    .where(
+      and(
+        eq(reminders.id, listed.id),
+        eq(reminders.generation, listed.generation),
+        claimable(now, leaseMs),
+      ),
+    );
 }
 
 const currentClaim = (claim: ReminderRow) =>
