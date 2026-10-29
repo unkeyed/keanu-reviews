@@ -14,6 +14,7 @@ import { createCipheriv, createDecipheriv, randomBytes as cryptoRandomBytes } fr
 const VERSION = "v1";
 const IV_BYTES = 12; // 96-bit nonce, the GCM standard
 const KEY_BYTES = 32; // AES-256
+const TAG_BYTES = 16;
 
 export interface TokenCipher {
   encrypt(plaintext: string): string;
@@ -74,7 +75,7 @@ export function createTokenCipher(
       const tag = Buffer.from(tagPart, "base64url");
       const ciphertext = Buffer.from(ctPart, "base64url");
       if (iv.length !== IV_BYTES) throw new Error("Slack token ciphertext has an invalid IV");
-      const decipher = createDecipheriv("aes-256-gcm", key, iv);
+      const decipher = createDecipheriv("aes-256-gcm", key, iv, { authTagLength: TAG_BYTES });
       decipher.setAuthTag(tag);
       return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
     },
