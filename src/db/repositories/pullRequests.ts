@@ -101,6 +101,8 @@ export async function applyPullRequestSource(
   return upsert(db, input);
 }
 
+export const PULL_REQUEST_LIFECYCLE_LEASE_MS = 5 * 60_000;
+
 export interface PullRequestLifecycleClaim {
   githubPrId: number;
   claimToken: string;
@@ -117,7 +119,9 @@ export async function claimPullRequestLifecycle(
   options: { now?: Date; leaseMs?: number } = {},
 ): Promise<PullRequestLifecycleClaim | undefined> {
   const now = options.now ?? new Date();
-  const leaseExpiredAt = new Date(now.getTime() - (options.leaseMs ?? 5 * 60_000));
+  const leaseExpiredAt = new Date(
+    now.getTime() - (options.leaseMs ?? PULL_REQUEST_LIFECYCLE_LEASE_MS),
+  );
   const claimToken = randomUUID();
 
   const [inserted] = await db

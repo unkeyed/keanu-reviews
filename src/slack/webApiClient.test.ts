@@ -1,5 +1,6 @@
 import { ErrorCode } from "@slack/web-api";
 import { describe, expect, it, vi } from "vitest";
+import { RetryableError } from "../worker/retryable.ts";
 import {
   createWebApiSlackClient,
   isSlackChannelAlreadyInState,
@@ -517,9 +518,12 @@ describe("Slack Web API adapter", () => {
     const sleep = vi.fn(async () => {});
     const slack = createWebApiSlackClient("unused", { web, sleep });
 
-    await expect(slack.postMessage({ channel: "C123", text: "hello" })).rejects.toMatchObject({
+    const rejection = slack.postMessage({ channel: "C123", text: "hello" });
+    await expect(rejection).rejects.toBeInstanceOf(RetryableError);
+    await expect(rejection).rejects.toMatchObject({
       status: 429,
       retryAfterSeconds: 30,
+      retryAfterMs: 30_000,
     });
     expect(sleep).not.toHaveBeenCalled();
     expect(web.apiCall).toHaveBeenCalledOnce();

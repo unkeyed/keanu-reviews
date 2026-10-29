@@ -1,5 +1,6 @@
 import type { Db } from "../db/client.ts";
 import {
+  PULL_REQUEST_LIFECYCLE_LEASE_MS,
   applyPullRequestSource,
   claimMergeComment,
   claimPullRequestLifecycle,
@@ -124,9 +125,10 @@ export interface PullRequestHandlingResult {
   skippedMergeComment: boolean;
 }
 
-export class PullRequestLifecycleBusyError extends Error {
-  constructor(githubPrId: number) {
-    super(`GitHub PR ${githubPrId} is already being reconciled`);
+/** The holder may have crashed, so a retry waits until its lease can be reclaimed. */
+export class PullRequestLifecycleBusyError extends RetryableError {
+  constructor(githubPrId: number, leaseMs: number) {
+    super(`GitHub PR ${githubPrId} is already being reconciled`, { githubPrId }, leaseMs);
     this.name = "PullRequestLifecycleBusyError";
   }
 }
@@ -158,7 +160,12 @@ export async function handlePullRequest(
     now: options.now,
     leaseMs: options.lifecycleLeaseMs,
   });
-  if (!lifecycleClaim) throw new PullRequestLifecycleBusyError(pr.id);
+  if (!lifecycleClaim) {
+    throw new PullRequestLifecycleBusyError(
+      pr.id,
+      options.lifecycleLeaseMs ?? PULL_REQUEST_LIFECYCLE_LEASE_MS,
+    );
+  }
 
   try {
     const existing = await findByGithubPrId(db, pr.id);

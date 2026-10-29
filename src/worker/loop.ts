@@ -4,6 +4,9 @@ import type { Logger } from "../logger.ts";
 import { RetryableError } from "./retryable.ts";
 import type { Router } from "./router.ts";
 
+// Lease errors can ask for the full 5-minute PR lifecycle lease. Nothing waits longer.
+const MAX_RETRY_DELAY_MS = 5 * 60_000;
+
 export interface WorkerDeps {
   db: Db;
   logger: Logger;
@@ -22,8 +25,10 @@ export interface WorkerDeps {
  */
 export function createWorker(deps: WorkerDeps) {
   const now = deps.now ?? Date.now;
-  const maxAttempts = deps.maxAttempts ?? 5;
-  const retryBaseMs = deps.retryBaseMs ?? 1_000;
+  // 2s doubling over 8 attempts spans about 4 minutes, which outlasts a
+  // crashed holder's message-effect lease after a redeploy.
+  const maxAttempts = deps.maxAttempts ?? 8;
+  const retryBaseMs = deps.retryBaseMs ?? 2_000;
   const leaseMs = deps.leaseMs ?? 60_000;
 
   const tick = async (): Promise<boolean> => {
@@ -44,10 +49,19 @@ export function createWorker(deps: WorkerDeps) {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const willRetry = job.attempts < maxAttempts;
+      const backoffMs = retryBaseMs * 2 ** Math.max(0, job.attempts - 1);
+      const retryAfterMs = err instanceof RetryableError ? (err.retryAfterMs ?? 0) : 0;
+      const retryDelay = Math.min(MAX_RETRY_DELAY_MS, Math.max(backoffMs, retryAfterMs));
       if (err instanceof RetryableError) {
         // Expected transient condition (e.g. out-of-order delivery). Retry
         // quietly; only escalate to warn once it stops being transient.
-        const fields = { jobId: job.id, event: job.event, attempt: job.attempts, ...err.details };
+        const fields = {
+          jobId: job.id,
+          event: job.event,
+          attempt: job.attempts,
+          retryInMs: retryDelay,
+          ...err.details,
+        };
         if (willRetry) {
           deps.logger.info("job deferred, will retry", { ...fields, reason: message });
         } else {
@@ -56,7 +70,6 @@ export function createWorker(deps: WorkerDeps) {
       } else {
         deps.logger.error("job failed", { jobId: job.id, event: job.event, err: message });
       }
-      const retryDelay = retryBaseMs * 2 ** Math.max(0, job.attempts - 1);
       await rescheduleOrFailJob(deps.db, job, {
         maxAttempts,
         retryAt: new Date(now() + retryDelay),

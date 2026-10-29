@@ -9,13 +9,19 @@
  * them quietly (info while retrying) instead of at `error`, so a routine race
  * does not read as an incident. Slack delivery is deduped, so the eventual
  * successful attempt does not double-post.
+ *
+ * `retryAfterMs` is the earliest point a retry can succeed, such as a Slack
+ * Retry-After or the time left on a lease another claim holds. The worker
+ * waits at least that long instead of spending attempts against it.
  */
 export class RetryableError extends Error {
   readonly details?: Record<string, unknown>;
+  readonly retryAfterMs?: number;
 
-  constructor(message: string, details?: Record<string, unknown>) {
+  constructor(message: string, details?: Record<string, unknown>, retryAfterMs?: number) {
     super(message);
     this.name = "RetryableError";
     this.details = details;
+    this.retryAfterMs = retryAfterMs;
   }
 }

@@ -7,7 +7,7 @@ import {
   type SlackMessageUpdate,
   isSlackChannelAlreadyInState,
 } from "./client.ts";
-import { Pacer, type SleepFn, withRetry } from "./rateLimiter.ts";
+import { Pacer, RateLimitedError, type SleepFn, withRetry } from "./rateLimiter.ts";
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_RATE_LIMIT_RETRIES = 1;
@@ -179,7 +179,7 @@ export function createWebApiSlackClient(
       data?: { error?: string; needed?: string; provided?: string };
     };
     if (err?.code === ErrorCode.RateLimitedError) {
-      return { status: 429, retryAfterSeconds: err.retryAfter ?? 1 };
+      return new RateLimitedError(err.retryAfter ?? 1);
     }
     // Slack platform errors carry actionable detail (which scope is missing,
     // which channel, etc.) on `data`. The default `.message` drops it, so lift
