@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server";
 import { type Config, ConfigError, SECRET_KEYS, loadConfig } from "./config.ts";
 import { createDb } from "./db/client.ts";
 import { createDbReadyCheck } from "./db/readiness.ts";
+import { pruneJobHistory } from "./db/repositories/jobs.ts";
 import { createInstallationAuth } from "./github/auth.ts";
 import { createGithubOAuthClient } from "./github/oauth.ts";
 import { octokitMintFn } from "./github/octokitAuth.ts";
@@ -22,6 +23,7 @@ import { createRouter } from "./worker/router.ts";
 
 // Most platforms send SIGKILL 30s after SIGTERM. Finish inside that window.
 const SHUTDOWN_DEADLINE_MS = 20_000;
+const JOB_RETENTION_MS = 14 * 24 * 60 * 60_000;
 
 function boot(): void {
   let config: Config;
@@ -137,8 +139,23 @@ function boot(): void {
     config.REMINDER_SCAN_INTERVAL_MS,
     logger,
   );
+  const pruneJobs = async () => {
+    const pruned = await pruneJobHistory(db, new Date(Date.now() - JOB_RETENTION_MS));
+    logger.info("pruned job history", pruned);
+  };
+  const isolated = (name: string, task: () => Promise<unknown>) =>
+    task().catch((err) => {
+      logger.error("daily task failed", {
+        task: name,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
   const dailyLoop = startDailyLoop(
-    () => reconcileClosedPullRequests(),
+    () =>
+      Promise.all([
+        isolated("reconcile closed pull requests", reconcileClosedPullRequests),
+        isolated("prune job history", pruneJobs),
+      ]),
     DAILY_RECONCILE_HOUR_UTC,
     logger,
   );
