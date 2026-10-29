@@ -12,13 +12,10 @@ import * as schema from "./schema.ts";
 export type Db = PgDatabase<any, typeof schema>;
 
 export function createDb(databaseUrl: string): { db: Db; close: () => Promise<void> } {
-  // One worker runs jobs serially, so a hung query or unreachable host would
-  // stall every job while /health stays green. Fail it and let the job retry.
-  const sql = postgres(databaseUrl, {
-    max: 10,
-    connect_timeout: 10,
-    connection: { statement_timeout: 30_000 },
-  });
+  // One worker runs jobs serially, so an unreachable host would stall every job
+  // while /health stays green. statement_timeout is not set here: it would be a
+  // startup parameter, which PgBouncer-style poolers reject. Set it on the role.
+  const sql = postgres(databaseUrl, { max: 10, connect_timeout: 10 });
   const db = drizzle(sql, { schema }) as unknown as Db;
   return { db, close: () => sql.end({ timeout: 5 }) };
 }
