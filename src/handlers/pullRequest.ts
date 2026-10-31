@@ -13,6 +13,7 @@ import {
 } from "../db/repositories/pullRequests.ts";
 import { cancelForPr } from "../db/repositories/reminders.ts";
 import { type PrState, computeTargetState, isTerminal } from "../domain/prState.ts";
+import type { ImageEmbedder } from "../github/attachments.ts";
 import type { PrCommenter } from "../github/comments.ts";
 import type { CiReadinessFetcher } from "../github/users.ts";
 import {
@@ -78,6 +79,7 @@ export interface PrHandlerDeps {
   postPrComment?: PrCommenter;
   /** Slack workspace id, used to build the channel deep link for the merge comment. */
   slackTeamId?: string;
+  embedImages?: ImageEmbedder;
   /** Bot logins (normalized) whose comments/reviews should be mirrored anyway. */
   allowedBots?: ReadonlySet<string>;
   /**

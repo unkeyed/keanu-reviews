@@ -184,6 +184,233 @@ describe("Slack Web API adapter", () => {
     expect(web.apiCall).not.toHaveBeenCalled(); // never touched the bot token
   });
 
+  describe("images", () => {
+    const images = [
+      {
+        kind: "embed",
+        imageUrl: "https://bot.example.com/m/a.png",
+        sourceUrl: "https://gh/a",
+        alt: "a",
+      },
+      { kind: "link", sourceUrl: "https://gh/b|<x>", alt: "b <!here>|" },
+    ] as const;
+    const textBlock = { type: "section", text: { type: "mrkdwn", text: "body" } } as const;
+    const imageBlock = {
+      type: "image",
+      image_url: "https://bot.example.com/m/a.png",
+      alt_text: "a",
+    };
+    const linksRow = (text: string) => ({
+      type: "context",
+      elements: [{ type: "mrkdwn", text }],
+    });
+    const invalidBlocks = { data: { ok: false, error: "invalid_blocks" } };
+    const blocksSent = (mock: { mock: { calls: unknown[][] } }) =>
+      mock.mock.calls.map((c) => (c[1] as { blocks?: unknown }).blocks);
+
+    it("renders embeds as image blocks and links in one row, after the message's blocks", async () => {
+      const web = fakeWebApi();
+      const slack = createWebApiSlackClient("unused", { web });
+
+      await slack.postMessage({ channel: "C1", text: "t", blocks: [textBlock], images });
+
+      expect(blocksSent(web.apiCall)).toEqual([
+        [textBlock, imageBlock, linksRow("Image: <https://gh/b%7C%3Cx%3E|b &lt;!here&gt;¦>")],
+      ]);
+    });
+
+    it("re-posts a bot message with every image as a link when Slack refuses an embed", async () => {
+      const web = fakeWebApi();
+      web.apiCall.mockRejectedValueOnce(invalidBlocks).mockResolvedValueOnce({ ts: "1.1" });
+      const onImageFallback = vi.fn();
+      const slack = createWebApiSlackClient("unused", { web, onImageFallback });
+
+      await expect(
+        slack.postMessage({
+          channel: "C1",
+          text: "t",
+          blocks: [textBlock],
+          images,
+          clientMsgId: "m1",
+        }),
+      ).resolves.toEqual({ ts: "1.1" });
+
+      expect(blocksSent(web.apiCall)).toEqual([
+        [textBlock, imageBlock, expect.objectContaining({ type: "context" })],
+        [
+          textBlock,
+          linksRow("Images: <https://gh/a|a> · <https://gh/b%7C%3Cx%3E|b &lt;!here&gt;¦>"),
+        ],
+      ]);
+      expect((web.apiCall.mock.calls as unknown[][])[1]?.[1]).toMatchObject({
+        client_msg_id: "m1",
+        text: "t",
+      });
+      expect(onImageFallback).toHaveBeenCalledWith({
+        channel: "C1",
+        method: "chat.postMessage",
+        embeds: 1,
+      });
+    });
+
+    it("re-posts a user-token message with links, still as the user", async () => {
+      const web = fakeWebApi();
+      const userPost = vi
+        .fn()
+        .mockRejectedValueOnce(invalidBlocks)
+        .mockResolvedValueOnce({ ts: "9.9" });
+      const userWebFactory = vi.fn(() => ({ apiCall: userPost }) as never);
+      const slack = createWebApiSlackClient("unused", { web, userWebFactory });
+
+      await expect(
+        slack.postMessage({ channel: "C1", text: "t", images, authorUserToken: "xoxp-flo" }),
+      ).resolves.toEqual({ ts: "9.9" });
+
+      expect(blocksSent(userPost)[1]).toEqual([
+        linksRow("Images: <https://gh/a|a> · <https://gh/b%7C%3Cx%3E|b &lt;!here&gt;¦>"),
+      ]);
+      expect(web.apiCall).not.toHaveBeenCalled();
+    });
+
+    it("re-sends an edit with links when Slack refuses an embed", async () => {
+      const web = fakeWebApi();
+      web.apiCall.mockRejectedValueOnce(invalidBlocks).mockResolvedValueOnce({});
+      const onImageFallback = vi.fn();
+      const slack = createWebApiSlackClient("unused", { web, onImageFallback });
+
+      await slack.updateMessage({ channel: "C1", ts: "1.2", text: "t", images });
+
+      expect(web.apiCall).toHaveBeenLastCalledWith("chat.update", {
+        channel: "C1",
+        ts: "1.2",
+        text: "t",
+        blocks: [linksRow("Images: <https://gh/a|a> · <https://gh/b%7C%3Cx%3E|b &lt;!here&gt;¦>")],
+      });
+      expect(onImageFallback).toHaveBeenCalledWith({
+        channel: "C1",
+        method: "chat.update",
+        embeds: 1,
+      });
+    });
+
+    it("propagates invalid_blocks when there was no embed to blame, and other errors as is", async () => {
+      const web = fakeWebApi();
+      web.apiCall.mockRejectedValueOnce(invalidBlocks);
+      const slack = createWebApiSlackClient("unused", { web });
+      await expect(
+        slack.postMessage({ channel: "C1", text: "t", images: [images[1]] }),
+      ).rejects.toMatchObject({ slackError: "invalid_blocks" });
+
+      web.apiCall.mockRejectedValueOnce({ data: { error: "msg_too_long" } });
+      await expect(slack.postMessage({ channel: "C2", text: "t", images })).rejects.toMatchObject({
+        slackError: "msg_too_long",
+      });
+      expect(web.apiCall).toHaveBeenCalledTimes(2);
+    });
+
+    describe("within Block Kit's length limits", () => {
+      type Block = { text?: { text?: string }; elements?: { text?: string }[] } & Record<
+        string,
+        unknown
+      >;
+      const withinLimits = (b: Block) =>
+        [b.text?.text, ...(b.elements ?? []).map((e) => e.text)].every(
+          (t) => (t?.length ?? 0) <= 3000,
+        ) &&
+        String(b.image_url ?? "").length <= 3000 &&
+        String(b.alt_text ?? "").length <= 2000;
+      const limitedSlack = (refuseFirstImageFetch = false) => {
+        let refused = !refuseFirstImageFetch;
+        const apiCall = vi.fn(async (_method: string, args: { blocks?: Block[] }) => {
+          const blocks = args.blocks ?? [];
+          if (!refused && blocks.some((b) => b.type === "image")) {
+            refused = true;
+            throw invalidBlocks;
+          }
+          if (!blocks.every(withinLimits)) throw invalidBlocks;
+          return { ts: "1.1" };
+        });
+        return { web: { ...fakeWebApi(), apiCall }, apiCall };
+      };
+      const rowText = (apiCall: { mock: { calls: unknown[][] } }) =>
+        (blocksSent(apiCall).at(-1) as Block[]).at(-1)?.elements?.[0]?.text ?? "";
+      const longAlt = `Old flow: ${"R&D ".repeat(450)}`.trim();
+      const deleted = "https://github.com/user-attachments/assets/0bad";
+
+      it("posts the text with a long label clipped short", async () => {
+        const { web, apiCall } = limitedSlack();
+        const slack = createWebApiSlackClient("unused", { web });
+
+        await expect(
+          slack.postMessage({
+            channel: "C1",
+            text: "t",
+            blocks: [textBlock],
+            images: [{ kind: "link", sourceUrl: deleted, alt: longAlt }],
+          }),
+        ).resolves.toEqual({ ts: "1.1" });
+
+        expect(blocksSent(apiCall).at(-1)).toContainEqual(textBlock);
+        expect(rowText(apiCall)).toMatch(
+          /^Image: <https:\/\/github\.com\/user-attachments\/assets\/0bad\|Old flow: R&amp;D R&amp;D [^|<>]*…>$/,
+        );
+        expect(rowText(apiCall).length).toBeLessThan(600);
+      });
+
+      it("fills the link row up to the limit and counts the links that don't fit", async () => {
+        const { web, apiCall } = limitedSlack();
+        const slack = createWebApiSlackClient("unused", { web });
+        const url = (n: number) => `https://img.example.com/${String(n).repeat(876)}`;
+
+        await slack.postMessage({
+          channel: "C1",
+          text: "t",
+          blocks: [textBlock],
+          images: [1, 2, 3, 4, 5].map((n) => ({ kind: "link", sourceUrl: url(n), alt: `p${n}` })),
+        });
+
+        expect(rowText(apiCall)).toBe(
+          `Images: <${url(1)}|p1> · <${url(2)}|p2> · <${url(3)}|p3> · +2 more`,
+        );
+      });
+
+      it("never sends an image URL longer than Slack accepts", async () => {
+        const { web, apiCall } = limitedSlack();
+        const slack = createWebApiSlackClient("unused", { web });
+        const huge = `https://img.example.com/c.png?q=${"x".repeat(3000)}`;
+
+        await slack.postMessage({
+          channel: "C1",
+          text: "t",
+          blocks: [textBlock],
+          images: [{ kind: "embed", imageUrl: huge, sourceUrl: huge, alt: "chart" }, images[0]],
+        });
+
+        expect(apiCall).toHaveBeenCalledTimes(1);
+        expect(blocksSent(apiCall)[0]).toEqual([textBlock, imageBlock, linksRow("Image: +1 more")]);
+      });
+
+      it("lands an edit whose links-only resend carries a long label", async () => {
+        const { web, apiCall } = limitedSlack(true);
+        const slack = createWebApiSlackClient("unused", { web });
+
+        await slack.updateMessage({
+          channel: "C1",
+          ts: "1.2",
+          text: "t",
+          blocks: [textBlock],
+          images: [{ ...images[0], alt: longAlt }],
+        });
+
+        expect(apiCall).toHaveBeenCalledTimes(2);
+        expect(blocksSent(apiCall)[1]).toEqual([
+          textBlock,
+          expect.objectContaining({ type: "context" }),
+        ]);
+      });
+    });
+  });
+
   it("deletes a bot-authored message with the bot token via chat.delete", async () => {
     const web = fakeWebApi();
     const slack = createWebApiSlackClient("unused", { web });

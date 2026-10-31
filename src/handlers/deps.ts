@@ -3,6 +3,7 @@ import type { PrForShaFetcher } from "../ci/status.ts";
 import type { Config } from "../config.ts";
 import type { Db } from "../db/client.ts";
 import { deleteSlackUserToken, getSlackUserTokenRow } from "../db/repositories/slackUserTokens.ts";
+import { createGithubAttachmentMirror } from "../github/attachments.ts";
 import type { InstallationAuth } from "../github/auth.ts";
 import { createPrCommenter } from "../github/comments.ts";
 import {
@@ -30,6 +31,7 @@ export interface ServiceHandlers {
   fetchCiReadiness: CiReadinessFetcher;
   fetchPrForSha: PrForShaFetcher;
   slackOauthRoute?: Hono;
+  attachmentRoute: Hono;
 }
 
 /**
@@ -108,6 +110,10 @@ export function createServiceHandlers(input: {
     logger.info("quiet archiving + post-as-user enabled (Slack user OAuth configured)");
   }
 
+  const attachments = createGithubAttachmentMirror({
+    publicUrl: config.PUBLIC_URL,
+    secret: config.OAUTH_STATE_SECRET,
+  });
   const fetchPullRequest = createPullRequestFetcher(auth, installationId);
   const fetchCiReadiness = createCiReadinessFetcher(auth, installationId);
   const handler: PrHandlerDeps = {
@@ -123,6 +129,7 @@ export function createServiceHandlers(input: {
       ? createPrCommenter(auth, installationId)
       : undefined,
     slackTeamId: config.SLACK_TEAM_ID,
+    embedImages: attachments.embedImages,
     quietArchive,
     authorPoster,
     allowedBots: config.ALLOWED_BOTS,
@@ -136,5 +143,6 @@ export function createServiceHandlers(input: {
     fetchCiReadiness,
     fetchPrForSha: createPrForShaFetcher(auth, installationId),
     slackOauthRoute,
+    attachmentRoute: attachments.route,
   };
 }

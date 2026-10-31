@@ -177,6 +177,21 @@ describe("handleReview (U6, R5)", () => {
     expect(onReviewSubmitted).toHaveBeenCalled(); // reminder still cancelled
   });
 
+  it("posts a 'commented' review whose body is only a pasted image, with the image", async () => {
+    const src = "https://github.com/user-attachments/assets/257e0ab0-5b6e-496e-9762-cedb27e67783";
+    const embedImages = async (images: readonly { url: string; alt: string }[]) =>
+      images.map((img) => ({ kind: "link" as const, sourceUrl: img.url, alt: img.alt }));
+    const imageOnly = review("commented");
+    imageOnly.review.body = `<img width="1512" height="982" alt="Broken layout" src="${src}" />`;
+
+    await handleReview(deps({ embedImages }), imageOnly);
+
+    expect(slack.messages).toHaveLength(1);
+    expect(slack.messages[0]?.images).toEqual([
+      { kind: "link", sourceUrl: src, alt: "Broken layout" },
+    ]);
+  });
+
   it("still posts a 'commented' review that has body text", async () => {
     await handleReview(deps(), review("commented")); // body "looks good"
     expect(JSON.stringify(slack.messages.at(-1)?.blocks)).toContain("commented");

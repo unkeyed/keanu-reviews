@@ -128,7 +128,7 @@ managed host, from its secret store) and are **never written to logs**. See
 | `GITHUB_INSTALLATION_ID` | The single installation ID allowed to reach this service. |
 | `GITHUB_OAUTH_CLIENT_ID` | GitHub App OAuth client ID (for `/link-github`). |
 | `GITHUB_OAUTH_CLIENT_SECRET` | GitHub App OAuth client secret. **Secret.** |
-| `OAUTH_STATE_SECRET` | Independent random value ≥ 32 chars, signs OAuth state. **Secret.** |
+| `OAUTH_STATE_SECRET` | Independent random value ≥ 32 chars, signs OAuth state and image URLs. Rotating it breaks images already posted to Slack. **Secret.** |
 | `PUBLIC_URL` | Public HTTPS origin, no path (HTTP allowed only for loopback). |
 | `SLACK_BOT_TOKEN` | Slack bot token (`xoxb-…`). **Secret.** |
 | `SLACK_SIGNING_SECRET` | Slack signing secret (verifies slash commands). **Secret.** |
@@ -264,6 +264,19 @@ Reminders are delivered only **on weekdays** during the daily window
 `[REMINDER_WINDOW_START_HOUR, REMINDER_WINDOW_END_HOUR)` evaluated in
 `REMINDER_WINDOW_TZ` (DST-aware). A reminder that comes due outside the window or
 on a weekend waits until the window next opens.
+
+### Images in comments and reviews
+
+Images in human-authored comments and reviews appear under the mirrored message.
+GitHub's own link to a pasted screenshot expires after five minutes, so Slack is
+given `${PUBLIC_URL}/github-attachments/<signature>/<id>.<png|jpg|gif>` instead,
+which fetches the image from GitHub anonymously on every request. The route serves
+only URLs the bot signed, with a key derived from `OAUTH_STATE_SECRET`, so
+rotating that secret breaks every image already posted to Slack. Slack only
+embeds png, jpeg, and gif, so an svg, video, webp, or deleted attachment appears
+as a link to GitHub. A private-repo attachment is a link too, because GitHub
+won't serve it anonymously. If Slack refuses an image, the message still posts,
+with its images as links.
 
 ### Allow-listed bots
 

@@ -44,7 +44,10 @@ function boot(): void {
 
   // Infrastructure
   const { db, close: closeDb } = createDb(config.DATABASE_URL);
-  const slack = createWebApiSlackClient(config.SLACK_BOT_TOKEN);
+  const slack = createWebApiSlackClient(config.SLACK_BOT_TOKEN, {
+    onImageFallback: (info) =>
+      logger.warn("slack refused embedded images; retrying with links", info),
+  });
   const auth = createInstallationAuth(
     octokitMintFn(config.GITHUB_APP_ID, config.GITHUB_APP_PRIVATE_KEY),
   );
@@ -118,6 +121,7 @@ function boot(): void {
     checkReady: createDbReadyCheck(db),
     mounts: [
       githubWebhook,
+      services.attachmentRoute,
       githubOauth,
       slackCommand,
       ...(services.slackOauthRoute ? [services.slackOauthRoute] : []),

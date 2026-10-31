@@ -1,12 +1,7 @@
 import { findMessageEffect } from "../db/repositories/messages.ts";
-import { isBotActor, shouldSkipActor } from "../github/actors.ts";
-import { resolveEmbeddedImages } from "../github/attachments.ts";
-import {
-  extractEmbeddedImages,
-  imageBlocks,
-  reviewCommentBlocks,
-  sanitizeMrkdwn,
-} from "../slack/blocks.ts";
+import { shouldSkipActor } from "../github/actors.ts";
+import { commentImages } from "../github/attachments.ts";
+import { reviewCommentBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
 import type { SlackMessage } from "../slack/client.ts";
 import {
   deleteMirroredComment,
@@ -98,11 +93,7 @@ export async function handleReviewComment(
     threadTs = parent?.slackTs ?? undefined; // parent not mirrored yet -> top-level
   }
 
-  // Embed images from human comments only — bots' deploy-preview/logo images are noise.
-  // Resolve GitHub attachment URLs to a form Slack can actually render.
-  const images = isBotActor(c.user)
-    ? []
-    : await resolveEmbeddedImages(extractEmbeddedImages(c.body));
+  const images = await commentImages(deps, c.body, c.user);
   const effect = { prId: row.id, kind: REVIEW_COMMENT_KIND, githubEventRef: String(c.id) };
   const render = (mode: "user" | "bot"): SlackMessage => ({
     channel: channelId,
@@ -112,17 +103,14 @@ export async function handleReviewComment(
     username: mode === "bot" ? author.name : undefined,
     iconUrl: mode === "bot" ? author.iconUrl : undefined,
     text: sanitizeMrkdwn(`New review comment on ${c.path}${c.line ? `:${c.line}` : ""}`),
-    blocks: [
-      ...reviewCommentBlocks({
-        body: c.body,
-        permalink,
-        path: c.path,
-        line: c.line ?? undefined,
-        // Only label with the raw login when we have no Slack identity at all.
-        authorMention: author.name ? undefined : sanitizeMrkdwn(c.user.login),
-      }),
-      ...imageBlocks(images),
-    ],
+    blocks: reviewCommentBlocks({
+      body: c.body,
+      permalink,
+      path: c.path,
+      line: c.line ?? undefined,
+      authorMention: author.name ? undefined : sanitizeMrkdwn(c.user.login),
+    }),
+    images,
   });
 
   // An edit updates the already-mirrored message in place; otherwise post it (a

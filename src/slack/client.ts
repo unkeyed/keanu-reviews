@@ -3,6 +3,10 @@ import type { ChatPostMessageArguments } from "@slack/web-api";
 type ChatPostMessageWithBlocks = Extract<ChatPostMessageArguments, { blocks: unknown[] }>;
 export type SlackBlock = ChatPostMessageWithBlocks["blocks"][number];
 
+export type MessageImage =
+  | { kind: "embed"; imageUrl: string; sourceUrl: string; alt: string }
+  | { kind: "link"; sourceUrl: string; alt: string };
+
 /**
  * Slack surface the bot depends on (U4-U9). Defined as an interface so handlers
  * are testable with a fake and the real Web API client stays at the edge. All
@@ -12,6 +16,7 @@ export interface SlackMessage {
   channel: string;
   text: string; // required notification fallback
   blocks?: SlackBlock[];
+  images?: readonly MessageImage[];
   threadTs?: string; // parent ts only, never a reply's (KTD5 threading)
   clientMsgId?: string; // deterministic idempotency key for ambiguous retries
   // Author overrides so a mirrored comment appears to come from the linked Slack
@@ -39,6 +44,7 @@ export interface SlackMessageUpdate {
   ts: string;
   text: string;
   blocks?: SlackBlock[];
+  images?: readonly MessageImage[];
   authorUserToken?: string;
 }
 

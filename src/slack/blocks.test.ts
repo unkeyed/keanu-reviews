@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   cleanGithubMarkdown,
   extractEmbeddedImages,
-  imageBlocks,
   reviewCommentBlocks,
   sanitizeMrkdwn,
 } from "./blocks.ts";
@@ -96,14 +95,6 @@ describe("extractEmbeddedImages", () => {
 
   it("defaults alt text to 'image' when none is given", () => {
     expect(extractEmbeddedImages("![](https://img.example.com/d.webp)")[0]?.alt).toBe("image");
-  });
-});
-
-describe("imageBlocks", () => {
-  it("builds Slack image blocks with required alt_text", () => {
-    expect(imageBlocks([{ url: "https://img.example.com/a.png", alt: "diagram" }])).toEqual([
-      { type: "image", image_url: "https://img.example.com/a.png", alt_text: "diagram" },
-    ]);
   });
 });
 

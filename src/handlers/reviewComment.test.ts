@@ -20,6 +20,13 @@ beforeEach(async () => {
 afterEach(() => close());
 
 const deps = () => ({ db, slack, logger: createLogger("error") });
+const embedAll = async (images: readonly { url: string; alt: string }[]) =>
+  images.map((img) => ({
+    kind: "embed" as const,
+    imageUrl: img.url,
+    sourceUrl: img.url,
+    alt: img.alt,
+  }));
 
 const payload = (over: Partial<ReviewCommentPayload["comment"]> = {}): ReviewCommentPayload => ({
   action: "created",
@@ -289,25 +296,57 @@ describe("handleReviewComment (U6)", () => {
     expect(slack.deletes[0]?.authorUserToken).toBe("xoxp-flo");
   });
 
-  it("embeds an image from a human comment as an image block", async () => {
+  it("shows the images from a human comment under it", async () => {
     await seedChannel();
+    const attachment =
+      "https://github.com/user-attachments/assets/1710cd7e-6589-4445-889a-a5666b859fc5";
+    const embedImages = async (images: readonly { url: string; alt: string }[]) =>
+      images.map((img) =>
+        img.url === attachment
+          ? {
+              kind: "embed" as const,
+              imageUrl: "https://bot/m.png",
+              sourceUrl: img.url,
+              alt: img.alt,
+            }
+          : { kind: "link" as const, sourceUrl: img.url, alt: img.alt },
+      );
     await handleReviewComment(
-      deps(),
-      payload({ body: "here it is ![shot](https://img.example.com/x.png)" }),
+      { ...deps(), embedImages },
+      payload({ body: `here ![shot](${attachment}) and ![old](https://img.example.com/x.png)` }),
     );
-    const blocks = slack.messages.at(-1)?.blocks ?? [];
-    expect(blocks).toContainEqual({
-      type: "image",
-      image_url: "https://img.example.com/x.png",
-      alt_text: "shot",
-    });
+    const msg = slack.messages.at(-1);
+    expect(msg?.images).toEqual([
+      { kind: "embed", imageUrl: "https://bot/m.png", sourceUrl: attachment, alt: "shot" },
+      { kind: "link", sourceUrl: "https://img.example.com/x.png", alt: "old" },
+    ]);
     // The raw markdown is not left in the quoted text.
-    expect(JSON.stringify(blocks)).not.toContain("![shot]");
+    expect(JSON.stringify(msg?.blocks)).not.toContain("![shot]");
+  });
+
+  it("carries the images into an edit", async () => {
+    await seedChannel();
+    await handleReviewComment({ ...deps(), embedImages: embedAll }, payload());
+    await handleReviewComment(
+      { ...deps(), embedImages: embedAll },
+      {
+        ...payload({ body: "now with ![shot](https://img.example.com/x.png)" }),
+        action: "edited",
+      },
+    );
+    expect(slack.updates.at(-1)?.images).toEqual([
+      {
+        kind: "embed",
+        imageUrl: "https://img.example.com/x.png",
+        sourceUrl: "https://img.example.com/x.png",
+        alt: "shot",
+      },
+    ]);
   });
 
   it("does not embed images from an allow-listed bot's comment", async () => {
     await seedChannel();
-    const allowed = { ...deps(), allowedBots: new Set(["pullfrog"]) };
+    const allowed = { ...deps(), embedImages: embedAll, allowedBots: new Set(["pullfrog"]) };
     await handleReviewComment(
       allowed,
       payload({
@@ -317,13 +356,12 @@ describe("handleReviewComment (U6)", () => {
       }),
     );
     expect(slack.messages).toHaveLength(1); // mirrored (allow-listed)
-    const blocks = slack.messages.at(-1)?.blocks ?? [];
-    expect(blocks.some((b) => (b as { type?: string }).type === "image")).toBe(false);
+    expect(slack.messages.at(-1)?.images).toEqual([]);
   });
 
   it("mirrors an allow-listed bot's comment top-level but still skips other bots", async () => {
     await seedChannel();
-    const allowed = { ...deps(), allowedBots: new Set(["pullfrog"]) };
+    const allowed = { ...deps(), embedImages: embedAll, allowedBots: new Set(["pullfrog"]) };
     // Pullfrog is allow-listed (matches "pullfrog[bot]" after normalization).
     await handleReviewComment(
       allowed,
