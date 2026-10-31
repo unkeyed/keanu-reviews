@@ -210,6 +210,19 @@ describe("GitHub attachment mirror", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
+  it("stops fetching from GitHub when the viewer disconnects first", async () => {
+    const upstream = vi.fn<AnonymousFetch>(hangsUntilAborted);
+    const mirror = createGithubAttachmentMirror({ publicUrl, secret, fetch: upstream });
+    const viewer = new AbortController();
+
+    const res = mirror.route.request(await mintedPath(), { signal: viewer.signal });
+    await vi.waitFor(() => expect(upstream).toHaveBeenCalledOnce());
+    viewer.abort();
+
+    expect(upstream.mock.calls[0]?.[1].signal.aborted).toBe(true);
+    expect((await res).status).toBe(404);
+  });
+
   it("mirrors GitHub's older repo-scoped attachment URL as the same attachment", async () => {
     const fetch = vi.fn<AnonymousFetch>(served("image/png"));
     const mirror = createGithubAttachmentMirror({ publicUrl, secret, fetch });
