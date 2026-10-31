@@ -106,6 +106,7 @@ export async function updateAuthoredMessage(
       ts: slackTs,
       text: content.text,
       blocks: content.blocks,
+      images: content.images,
       authorUserToken: asUser ? author.userToken : undefined,
     });
   } catch (error) {

@@ -32,8 +32,6 @@ export function cleanGithubMarkdown(body: string): string {
       .replace(/<!--[\s\S]*?-->/g, "")
       // The whole `<sup>…</sup>` marketing/footer block (logos, "Fix all" links).
       .replace(/<sup>[\s\S]*?<\/sup>/gi, "")
-      // Markdown images: rendered separately as image blocks (extractEmbeddedImages),
-      // so drop the raw `![alt](url)` from the text instead of showing it verbatim.
       .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
       // Media/void elements have no text to keep.
       .replace(/<(?:picture|source|img)\b[^>]*>/gi, "")
@@ -101,15 +99,6 @@ export function extractEmbeddedImages(body: string, max = 5): EmbeddedImage[] {
     if (IMAGE_EXT_RE.test(url)) add(url, "");
   }
   return out.slice(0, max);
-}
-
-/** Slack image blocks for embedded images (alt_text is required and length-capped). */
-export function imageBlocks(images: EmbeddedImage[]): SlackBlock[] {
-  return images.map((img) => ({
-    type: "image",
-    image_url: img.url,
-    alt_text: img.alt.slice(0, 2000),
-  }));
 }
 
 export const SLACK_SECTION_TEXT_LIMIT = 3_000;

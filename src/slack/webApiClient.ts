@@ -1,7 +1,10 @@
 import { ErrorCode, WebClient, type WebClientOptions } from "@slack/web-api";
+import { SLACK_SECTION_TEXT_LIMIT, sanitizeLinkLabel } from "./blocks.ts";
 import {
   DEAD_TOKEN_ERRORS,
   type LeaveChannelOutcome,
+  type MessageImage,
+  type SlackBlock,
   type SlackClient,
   type SlackMessage,
   type SlackMessageUpdate,
@@ -117,6 +120,79 @@ export interface WebApiSlackClientOptions {
   userWebFactory?: (token: string) => SlackWebApi;
   sleep?: SleepFn;
   now?: () => number;
+  onImageFallback?: (info: {
+    channel: string;
+    method: "chat.postMessage" | "chat.update";
+    embeds: number;
+  }) => void;
+}
+
+const SLACK_IMAGE_URL_LIMIT = 3_000;
+const LINK_LABEL_LIMIT = 80;
+const MORE_SUFFIX_RESERVE = " · +99 more".length;
+
+const escapeSlackLinkUrl = (url: string) =>
+  url.replace(/[|<>]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
+
+function clipLabel(alt: string): string {
+  const chars = Array.from(alt);
+  return chars.length > LINK_LABEL_LIMIT
+    ? `${chars.slice(0, LINK_LABEL_LIMIT - 1).join("")}…`
+    : alt;
+}
+
+// Slack rejects the whole message when one text object passes its limit, so a
+// link that would push the row over it is counted in "+N more" instead.
+function linkRow(links: readonly MessageImage[]): string {
+  let text = links.length > 1 ? "Images: " : "Image: ";
+  let shown = 0;
+  for (const img of links) {
+    const link = `<${escapeSlackLinkUrl(img.sourceUrl)}|${sanitizeLinkLabel(clipLabel(img.alt))}>`;
+    const next = shown === 0 ? link : ` · ${link}`;
+    if (text.length + next.length + MORE_SUFFIX_RESERVE > SLACK_SECTION_TEXT_LIMIT) continue;
+    text += next;
+    shown++;
+  }
+  const more = links.length - shown;
+  return more === 0 ? text : `${text}${shown > 0 ? " · " : ""}+${more} more`;
+}
+
+function imageBlocks(images: readonly MessageImage[], mode: "embed" | "links"): SlackBlock[] {
+  const embeddable = (i: MessageImage): i is Extract<MessageImage, { kind: "embed" }> =>
+    mode === "embed" && i.kind === "embed" && i.imageUrl.length <= SLACK_IMAGE_URL_LIMIT;
+  const embeds = images.filter(embeddable);
+  const links = images.filter((i) => !embeddable(i));
+  const blocks: SlackBlock[] = embeds.map((img) => ({
+    type: "image",
+    image_url: img.imageUrl,
+    alt_text: img.alt.slice(0, 2000),
+  }));
+  if (links.length > 0) {
+    blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: linkRow(links) }] });
+  }
+  return blocks;
+}
+
+// Slack fetches every image_url while accepting a message and rejects the whole
+// message with `invalid_blocks` if one fails. The rejected attempt posted
+// nothing, so sending again with links (same client_msg_id) is safe.
+async function sendWithImageFallback<T>(
+  msg: { channel: string; blocks?: SlackBlock[]; images?: readonly MessageImage[] },
+  method: "chat.postMessage" | "chat.update",
+  send: (blocks: SlackBlock[] | undefined) => Promise<T>,
+  onFallback: WebApiSlackClientOptions["onImageFallback"],
+): Promise<T> {
+  const images = msg.images ?? [];
+  const embeds = images.filter((i) => i.kind === "embed").length;
+  const render = (mode: "embed" | "links") =>
+    images.length > 0 ? [...(msg.blocks ?? []), ...imageBlocks(images, mode)] : msg.blocks;
+  try {
+    return await send(render("embed"));
+  } catch (error) {
+    if (embeds === 0 || slackErrorCode(error) !== "invalid_blocks") throw error;
+    onFallback?.({ channel: msg.channel, method, embeds });
+    return send(render("links"));
+  }
 }
 
 function requireNonEmptyString(value: unknown, description: string): string {
@@ -464,27 +540,33 @@ export function createWebApiSlackClient(
         call(async () => {
           // Author as the real user via their token when provided, else post as
           // the bot (optionally spoofing name/avatar). See postAsUser/postAsBot.
-          const ts = msg.authorUserToken ? await postAsUser(msg) : await postAsBot(msg);
+          const ts = await sendWithImageFallback(
+            msg,
+            "chat.postMessage",
+            (blocks) =>
+              msg.authorUserToken ? postAsUser({ ...msg, blocks }) : postAsBot({ ...msg, blocks }),
+            options.onImageFallback,
+          );
           return { ts: requireNonEmptyString(ts, "chat.postMessage timestamp") };
         }),
       ),
     updateMessage: (update: SlackMessageUpdate) =>
       postPacer.run(update.channel, () =>
         call(async () => {
-          const args = {
-            channel: update.channel,
-            ts: update.ts,
-            text: update.text,
-            blocks: update.blocks,
-          };
-          // A message posted with a user token can only be edited with that same
-          // token; a bot-posted one is edited with the bot token (and may need the
-          // channel made writable first).
-          if (update.authorUserToken) {
-            await userWebFactory(update.authorUserToken).apiCall("chat.update", args);
-          } else {
-            await withWritableChannel(update.channel, () => web.apiCall("chat.update", args));
-          }
+          await sendWithImageFallback(
+            update,
+            "chat.update",
+            (blocks) => {
+              const args = { channel: update.channel, ts: update.ts, text: update.text, blocks };
+              // A message posted with a user token can only be edited with that same
+              // token; a bot-posted one is edited with the bot token (and may need the
+              // channel made writable first).
+              return update.authorUserToken
+                ? userWebFactory(update.authorUserToken).apiCall("chat.update", args)
+                : withWritableChannel(update.channel, () => web.apiCall("chat.update", args));
+            },
+            options.onImageFallback,
+          );
         }),
       ),
     deleteMessage: (channel: string, ts: string, authorUserToken?: string) =>
