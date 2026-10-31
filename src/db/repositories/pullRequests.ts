@@ -101,6 +101,8 @@ export async function applyPullRequestSource(
   return upsert(db, input);
 }
 
+export const PULL_REQUEST_LIFECYCLE_LEASE_MS = 5 * 60_000;
+
 export interface PullRequestLifecycleClaim {
   githubPrId: number;
   claimToken: string;
@@ -117,7 +119,9 @@ export async function claimPullRequestLifecycle(
   options: { now?: Date; leaseMs?: number } = {},
 ): Promise<PullRequestLifecycleClaim | undefined> {
   const now = options.now ?? new Date();
-  const leaseExpiredAt = new Date(now.getTime() - (options.leaseMs ?? 5 * 60_000));
+  const leaseExpiredAt = new Date(
+    now.getTime() - (options.leaseMs ?? PULL_REQUEST_LIFECYCLE_LEASE_MS),
+  );
   const claimToken = randomUUID();
 
   const [inserted] = await db
@@ -138,6 +142,18 @@ export async function claimPullRequestLifecycle(
     )
     .returning();
   return reclaimed;
+}
+
+/** When the current holder claimed a PR's lifecycle, if anyone holds it. */
+export async function pullRequestLifecycleClaimedAt(
+  db: Db,
+  githubPrId: number,
+): Promise<Date | undefined> {
+  const [held] = await db
+    .select({ claimedAt: pullRequestLifecycleClaims.claimedAt })
+    .from(pullRequestLifecycleClaims)
+    .where(eq(pullRequestLifecycleClaims.githubPrId, githubPrId));
+  return held?.claimedAt;
 }
 
 export async function releasePullRequestLifecycle(

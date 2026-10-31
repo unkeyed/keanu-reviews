@@ -79,6 +79,31 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     expect(blocks).not.toContain("<@U100>"); // never tag the author
   });
 
+  it("archives a merged PR and warns when Slack refuses to invite its author", async () => {
+    await upsertIdentity(db, {
+      githubUserId: 100,
+      githubLogin: "oz",
+      slackUserId: "U100",
+      source: "self-link",
+    });
+    slack.uninvitableUsers.set("U100", "user_is_restricted");
+    const warn = vi.fn();
+    const d = { ...deps(), logger: { ...createLogger("error"), warn } };
+
+    await handlePullRequest(d, payload("opened"));
+    await handlePullRequest(d, payload("closed", { merged: true }));
+
+    expect(slack.invites).toHaveLength(0);
+    expect(JSON.stringify(slack.messages)).toContain("Opened by");
+    expect(slack.channels).toEqual([
+      expect.objectContaining({ name: expect.stringMatching(/^merged-/), archived: true }),
+    ]);
+    expect(warn).toHaveBeenCalledWith(
+      "Slack refused to invite user into channel",
+      expect.objectContaining({ userId: "U100", slackError: "user_is_restricted", role: "author" }),
+    );
+  });
+
   it("does not invite an unlinked author (degrades quietly)", async () => {
     await handlePullRequest(deps(), payload("opened"));
     expect(slack.invites).toHaveLength(0);
@@ -398,6 +423,23 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
 
     expect(slack.channels).toHaveLength(1);
     expect((await findByRepoNumber(db, "unkey/api", 1423))?.channelId).toBe("C1");
+  });
+
+  it.each([
+    ["a rate limit", { status: 429, retryAfterSeconds: 30 }],
+    ["invalid_name", { data: { error: "invalid_name" } }],
+    ["missing_scope", Object.assign(new Error("missing_scope"), { slackError: "missing_scope" })],
+  ])("fails a create rejected with %s without scanning channels", async (_, failure) => {
+    slack.createChannel = async () => {
+      throw failure;
+    };
+    const findChannelByName = vi.spyOn(slack, "findChannelByName");
+
+    await expect(handlePullRequest(deps(), payload("opened"))).rejects.toBe(failure);
+
+    expect(findChannelByName).not.toHaveBeenCalled();
+    expect(slack.channels).toHaveLength(0);
+    expect((await findByRepoNumber(db, "unkey/api", 1423))?.channelId).toBeNull();
   });
 
   it("sanitizes untrusted PR titles and logins in blocks and fallback text", async () => {

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, eq, isNotNull, isNull, lte, or } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull, lt, lte, notExists, or } from "drizzle-orm";
 import type { Db } from "../client.ts";
 import { type JobRow, jobs, processedDeliveries } from "../schema.ts";
 
@@ -85,6 +85,16 @@ const currentClaim = (job: JobRow) =>
     job.claimedAt ? eq(jobs.claimedAt, job.claimedAt) : isNull(jobs.claimedAt),
   );
 
+/** Extend a running job's lease. Undefined means another worker now holds it. */
+export async function renewJobLease(db: Db, job: JobRow, now: Date): Promise<JobRow | undefined> {
+  const rows = await db
+    .update(jobs)
+    .set({ claimedAt: now })
+    .where(currentClaim(job))
+    .returning({ id: jobs.id });
+  return rows.length > 0 ? { ...job, claimedAt: now } : undefined;
+}
+
 /** Mark done and purge the raw payload (retention, KTD13). */
 export async function completeJob(db: Db, job: JobRow): Promise<boolean> {
   const rows = await db
@@ -129,4 +139,36 @@ export async function resetFailedJob(
     .where(and(eq(jobs.id, id), eq(jobs.status, "failed"), isNotNull(jobs.raw)))
     .returning({ id: jobs.id });
   return rows.length > 0;
+}
+
+/**
+ * Delete completed jobs and delivery markers older than `before`. Failed jobs
+ * stay for admin replay, and so does the marker of any job still stored, since
+ * dropping it would let a GitHub redelivery collide with that job's row.
+ */
+export async function pruneJobHistory(
+  db: Db,
+  before: Date,
+): Promise<{ jobs: number; deliveries: number }> {
+  // A done job's available_at is when its final attempt became due, so this
+  // range scans jobs_status_created_idx.
+  const deletedJobs = await db
+    .delete(jobs)
+    .where(and(eq(jobs.status, "done"), lt(jobs.availableAt, before)))
+    .returning({ id: jobs.id });
+  const deletedDeliveries = await db
+    .delete(processedDeliveries)
+    .where(
+      and(
+        lt(processedDeliveries.seenAt, before),
+        notExists(
+          db
+            .select({ id: jobs.id })
+            .from(jobs)
+            .where(eq(jobs.deliveryId, processedDeliveries.deliveryId)),
+        ),
+      ),
+    )
+    .returning({ deliveryId: processedDeliveries.deliveryId });
+  return { jobs: deletedJobs.length, deliveries: deletedDeliveries.length };
 }

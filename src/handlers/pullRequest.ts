@@ -1,11 +1,13 @@
 import type { Db } from "../db/client.ts";
 import {
+  PULL_REQUEST_LIFECYCLE_LEASE_MS,
   applyPullRequestSource,
   claimMergeComment,
   claimPullRequestLifecycle,
   findByGithubPrId,
   findByRepoNumber,
   markSlackStateApplied,
+  pullRequestLifecycleClaimedAt,
   releaseMergeComment,
   releasePullRequestLifecycle,
   setChannel,
@@ -30,7 +32,9 @@ import {
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { slackChannelUrl } from "../slack/links.ts";
 import { CURRENT_CHANNEL_NAME_VERSION, channelName } from "../slack/naming.ts";
-import { RetryableError } from "../worker/retryable.ts";
+import { isRateLimited } from "../slack/rateLimiter.ts";
+import { RetryableError, orphanedClaimWaitMs } from "../worker/retryable.ts";
+import { inviteToChannel } from "./invites.ts";
 import type { PullRequestFetcher } from "./mergeability.ts";
 import { notifyShipped } from "./shipped.ts";
 
@@ -126,9 +130,10 @@ export interface PullRequestHandlingResult {
   skippedMergeComment: boolean;
 }
 
-export class PullRequestLifecycleBusyError extends Error {
-  constructor(githubPrId: number) {
-    super(`GitHub PR ${githubPrId} is already being reconciled`);
+/** The holder may have crashed, so a retry waits until its lease can be reclaimed. */
+export class PullRequestLifecycleBusyError extends RetryableError {
+  constructor(githubPrId: number, retryAfterMs?: number) {
+    super(`GitHub PR ${githubPrId} is already being reconciled`, { githubPrId }, retryAfterMs);
     this.name = "PullRequestLifecycleBusyError";
   }
 }
@@ -160,7 +165,16 @@ export async function handlePullRequest(
     now: options.now,
     leaseMs: options.lifecycleLeaseMs,
   });
-  if (!lifecycleClaim) throw new PullRequestLifecycleBusyError(pr.id);
+  if (!lifecycleClaim) {
+    throw new PullRequestLifecycleBusyError(
+      pr.id,
+      orphanedClaimWaitMs(
+        await pullRequestLifecycleClaimedAt(db, pr.id),
+        options.lifecycleLeaseMs ?? PULL_REQUEST_LIFECYCLE_LEASE_MS,
+        (options.now ?? new Date()).getTime(),
+      ),
+    );
+  }
 
   try {
     const existing = await findByGithubPrId(db, pr.id);
@@ -218,7 +232,9 @@ export async function handlePullRequest(
       } catch (error) {
         // conversations.create can succeed remotely and fail locally, or a
         // retry can receive name_taken. Exact deterministic-name lookup
-        // recovers only the intended PR channel.
+        // recovers only the intended PR channel. The lookup pages through every
+        // public channel, so it runs only when the channel may exist.
+        if (!createMayHaveSucceeded(error)) throw error;
         const recovered = await slack.findChannelByName(name);
         if (!recovered) throw error;
         channelId = recovered;
@@ -302,7 +318,8 @@ export async function handlePullRequest(
             },
           ],
         },
-        () => slack.inviteUsers(channelId, [authorSlackId]),
+        () =>
+          inviteToChannel(deps, channelId, [authorSlackId], { prId: current.id, role: "author" }),
       );
     }
 
@@ -463,6 +480,18 @@ export async function handlePullRequest(
   }
 }
 
+/**
+ * A failed `conversations.create` may still have left the channel in Slack when
+ * Slack said `name_taken` or when no Slack response arrived at all. A rate limit
+ * or any other Slack error means nothing was created.
+ */
+function createMayHaveSucceeded(error: unknown): boolean {
+  if (isRateLimited(error)) return false;
+  const failure = error as { slackError?: string; data?: { error?: string } };
+  const code = failure?.slackError ?? failure?.data?.error;
+  return code === undefined || code === "name_taken";
+}
+
 async function postLifecycleNote(
   db: Db,
   slack: SlackClient,
@@ -508,7 +537,7 @@ export async function ensurePullRequestChannel(
       `PR channel is not ready for ${repository.full_name}#${pullRequest.number}`,
     );
   }
-  return row;
+  return { ...row, channelId: row.channelId, rootMessageTs: row.rootMessageTs };
 }
 
 function lifecycleBlocks(pr: PullRequestPayload["pull_request"], state: PrState): SlackBlock[] {

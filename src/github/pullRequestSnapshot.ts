@@ -1,6 +1,11 @@
 import type { Logger } from "../logger.ts";
 import type { InstallationAuth } from "./auth.ts";
-import { GithubApiError, type GithubRequestOptions, githubRequest } from "./http.ts";
+import {
+  GithubApiError,
+  type GithubRequestOptions,
+  encodedRepoPath,
+  githubRequest,
+} from "./http.ts";
 
 /** A GitHub rate limit we will not wait out. The reconciliation run stops cleanly. */
 export class GithubRateLimitExhaustedError extends Error {
@@ -164,8 +169,7 @@ export function createPullRequestSnapshotFetcher(
   const maxRateLimitRetries = options.maxRateLimitRetries ?? DEFAULT_MAX_RATE_LIMIT_RETRIES;
 
   return async (repoFullName, number) => {
-    const repoPath = repoFullName.split("/").map(encodeURIComponent).join("/");
-    const path = `/repos/${repoPath}/pulls/${number}`;
+    const path = `/repos/${encodedRepoPath(repoFullName)}/pulls/${number}`;
     let rateLimitRetries = 0;
 
     for (;;) {

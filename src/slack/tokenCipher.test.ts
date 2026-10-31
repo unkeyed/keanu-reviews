@@ -33,6 +33,13 @@ describe("Slack token cipher", () => {
     expect(() => cipher.decrypt([v, iv, tag, flipped].join("."))).toThrow();
   });
 
+  it("rejects a truncated auth tag", () => {
+    const payload = cipher.encrypt("xoxp-secret");
+    const [v, iv, tag, ct] = payload.split(".") as [string, string, string, string];
+    const short = Buffer.from(tag, "base64url").subarray(0, 4).toString("base64url");
+    expect(() => cipher.decrypt([v, iv, short, ct].join("."))).toThrow();
+  });
+
   it("cannot decrypt what another key encrypted", () => {
     const other = createTokenCipher(
       "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100",

@@ -77,26 +77,34 @@ export function createServiceHandlers(input: {
     });
     const dropToken = (slackUserId: string) =>
       deleteSlackUserToken(db, config.SLACK_TEAM_ID, slackUserId);
+    // A token that no longer decrypts falls back to the bot but is kept: a
+    // misconfigured key at deploy would otherwise wipe every stored token.
+    const readUserToken = async (slackUserId: string, requiredScope?: string) => {
+      const row = await getSlackUserTokenRow(db, config.SLACK_TEAM_ID, slackUserId);
+      if (!row || (requiredScope && !hasScope(row.scopes, requiredScope))) return undefined;
+      try {
+        return cipher.decrypt(row.encryptedToken);
+      } catch (error) {
+        logger.warn("Slack user token cannot be decrypted; posting as the bot", {
+          slackUserId,
+          err: error instanceof Error ? error.message : String(error),
+        });
+        return undefined;
+      }
+    };
     quietArchive = async (channelId) => {
       await quietlyRemoveMembers(
         {
           slack,
           logger,
-          getUserToken: async (slackUserId) => {
-            const row = await getSlackUserTokenRow(db, config.SLACK_TEAM_ID, slackUserId);
-            return row ? cipher.decrypt(row.encryptedToken) : undefined;
-          },
+          getUserToken: (slackUserId) => readUserToken(slackUserId),
           onInvalidToken: dropToken,
         },
         channelId,
       );
     };
     authorPoster = {
-      getUserToken: async (slackUserId) => {
-        const row = await getSlackUserTokenRow(db, config.SLACK_TEAM_ID, slackUserId);
-        if (!row || !hasScope(row.scopes, SLACK_POST_USER_SCOPE)) return undefined;
-        return cipher.decrypt(row.encryptedToken);
-      },
+      getUserToken: (slackUserId) => readUserToken(slackUserId, SLACK_POST_USER_SCOPE),
       onInvalidToken: dropToken,
     };
     logger.info("quiet archiving + post-as-user enabled (Slack user OAuth configured)");

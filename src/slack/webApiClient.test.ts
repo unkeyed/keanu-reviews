@@ -1,8 +1,9 @@
 import { ErrorCode } from "@slack/web-api";
 import { describe, expect, it, vi } from "vitest";
+import { RetryableError } from "../worker/retryable.ts";
+import { isSlackChannelAlreadyInState } from "./client.ts";
 import {
   createWebApiSlackClient,
-  isSlackChannelAlreadyInState,
   lookupSlackUserByEmail,
   lookupSlackUserName,
   lookupSlackUserProfile,
@@ -215,6 +216,22 @@ describe("Slack Web API adapter", () => {
 
       expect(blocksSent(web.apiCall)).toEqual([
         [textBlock, imageBlock, linksRow("Image: <https://gh/b%7C%3Cx%3E|b &lt;!here&gt;¦>")],
+      ]);
+    });
+
+    it("cuts long alt text on a character boundary, never inside an emoji", async () => {
+      const web = fakeWebApi();
+      const slack = createWebApiSlackClient("unused", { web });
+      const alt = `a${"😀".repeat(2_500)}`;
+
+      await slack.postMessage({
+        channel: "C1",
+        text: "t",
+        images: [{ ...images[0], alt }],
+      });
+
+      expect(blocksSent(web.apiCall)[0]).toEqual([
+        { ...imageBlock, alt_text: `a${"😀".repeat(1_999)}` },
       ]);
     });
 
@@ -474,8 +491,62 @@ describe("Slack Web API adapter", () => {
     expect(web.conversations.archive).toHaveBeenCalledWith({ channel: "C123" });
     expect(web.conversations.unarchive).toHaveBeenCalledWith({ channel: "C123" });
     expect(web.conversations.invite).toHaveBeenCalledOnce();
-    expect(web.conversations.invite).toHaveBeenCalledWith({ channel: "C123", users: "U1,U2" });
+    expect(web.conversations.invite).toHaveBeenCalledWith({
+      channel: "C123",
+      users: "U1,U2",
+      force: true,
+    });
   });
+
+  it("returns users Slack permanently refuses instead of failing the invite", async () => {
+    const web = fakeWebApi();
+    web.conversations.invite
+      .mockRejectedValueOnce({ data: { error: "user_is_restricted" } })
+      .mockResolvedValueOnce({
+        ok: true,
+        errors: [
+          { user: "U2", ok: false, error: "already_in_channel" },
+          { user: "U3", ok: false, error: "cant_invite" },
+        ],
+      })
+      .mockRejectedValueOnce({
+        data: {
+          error: "already_in_channel",
+          errors: [
+            { user: "U1", ok: false, error: "already_in_channel" },
+            { user: "U4", ok: false, error: "user_not_found" },
+          ],
+        },
+      })
+      .mockRejectedValueOnce({ data: { error: "channel_not_found" } });
+    const slack = createWebApiSlackClient("unused", { web });
+
+    await expect(slack.inviteUsers("C123", ["U9"])).resolves.toEqual([
+      { userId: "U9", error: "user_is_restricted" },
+    ]);
+    await expect(slack.inviteUsers("C123", ["U1", "U2", "U3"])).resolves.toEqual([
+      { userId: "U3", error: "cant_invite" },
+    ]);
+    await expect(slack.inviteUsers("C123", ["U1", "U4"])).resolves.toEqual([
+      { userId: "U4", error: "user_not_found" },
+    ]);
+    await expect(slack.inviteUsers("C123", ["U1"])).rejects.toMatchObject({
+      slackError: "channel_not_found",
+    });
+  });
+
+  it.each(["org_user_not_in_team", "invitee_cant_see_channel", "no_external_invite_permission"])(
+    "returns an Enterprise Grid or Slack Connect user refused with %s",
+    async (error) => {
+      const web = fakeWebApi();
+      web.conversations.invite.mockRejectedValueOnce({
+        data: { error, errors: [{ user: "U5", ok: false, error }] },
+      });
+      const slack = createWebApiSlackClient("unused", { web });
+
+      await expect(slack.inviteUsers("C123", ["U5"])).resolves.toEqual([{ userId: "U5", error }]);
+    },
+  );
 
   it("lists channel members across pages", async () => {
     const web = fakeWebApi();
@@ -560,13 +631,13 @@ describe("Slack Web API adapter", () => {
     expect(web.conversations.list).toHaveBeenNthCalledWith(1, {
       cursor: undefined,
       exclude_archived: false,
-      limit: 200,
+      limit: 999,
       types: "public_channel",
     });
     expect(web.conversations.list).toHaveBeenNthCalledWith(2, {
       cursor: "page-2",
       exclude_archived: false,
-      limit: 200,
+      limit: 999,
       types: "public_channel",
     });
   });
@@ -714,7 +785,7 @@ describe("Slack Web API adapter", () => {
 
     await expect(slack.archiveChannel("C123")).resolves.toBeUndefined();
     await expect(slack.unarchiveChannel("C123")).resolves.toBeUndefined();
-    await expect(slack.inviteUsers("C123", ["U123"])).resolves.toBeUndefined();
+    await expect(slack.inviteUsers("C123", ["U123"])).resolves.toEqual([]);
   });
 
   it("recognizes Slack v8 rate-limit errors and honors a bounded Retry-After", async () => {
@@ -744,9 +815,12 @@ describe("Slack Web API adapter", () => {
     const sleep = vi.fn(async () => {});
     const slack = createWebApiSlackClient("unused", { web, sleep });
 
-    await expect(slack.postMessage({ channel: "C123", text: "hello" })).rejects.toMatchObject({
+    const rejection = slack.postMessage({ channel: "C123", text: "hello" });
+    await expect(rejection).rejects.toBeInstanceOf(RetryableError);
+    await expect(rejection).rejects.toMatchObject({
       status: 429,
       retryAfterSeconds: 30,
+      retryAfterMs: 30_000,
     });
     expect(sleep).not.toHaveBeenCalled();
     expect(web.apiCall).toHaveBeenCalledOnce();

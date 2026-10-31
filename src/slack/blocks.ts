@@ -24,29 +24,35 @@ export function sanitizeLinkLabel(text: string): string {
  * comments carrying machine metadata, `<sup>` marketing footers, `<picture>`/
  * `<img>` logos, and `<a>` link wrappers. Left as-is they'd be escaped and shown
  * verbatim, so we strip them to the human-readable text before sanitizing.
+ *
+ * Anyone can comment on a public PR, so every pattern here and in
+ * extractEmbeddedImages must stay linear on a 64 KB body: a scan may not run
+ * past the next opener, or a body of repeated unclosed openers rescans the
+ * rest of the text from each one.
  */
 export function cleanGithubMarkdown(body: string): string {
   return (
-    body
-      // Metadata + divider markers GitHub bots hide in HTML comments.
-      .replace(/<!--[\s\S]*?-->/g, "")
+    stripHtmlComments(body)
       // The whole `<sup>…</sup>` marketing/footer block (logos, "Fix all" links).
-      .replace(/<sup>[\s\S]*?<\/sup>/gi, "")
-      .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-      // Media/void elements have no text to keep.
-      .replace(/<(?:picture|source|img)\b[^>]*>/gi, "")
-      .replace(/<\/(?:picture|source)>/gi, "")
-      // Keep the link text, drop the <a> wrapper (URLs are usually in the text).
-      .replace(/<a\b[^>]*>([\s\S]*?)<\/a>/gi, "$1")
-      // Any remaining stray tags.
-      .replace(/<\/?[a-zA-Z][^>]*>/g, "")
+      .replace(/<sup>(?:[^<]|<(?!sup>))*?<\/sup>/gi, "")
+      .replace(/!\[[^[\]]*\]\([^()]*\)/g, "")
+      // Drop tags but keep their text: <a> wrappers, <picture>/<img> logos.
+      .replace(/<\/?[a-zA-Z][^<>]*>/g, "")
       // Non-breaking spaces GitHub emits in footers.
       .replace(/&nbsp;/gi, " ")
       // Collapse the blank space the removals leave behind.
-      .replace(/[ \t]+\n/g, "\n")
+      .replace(/(?<![ \t])[ \t]+\n/g, "\n")
       .replace(/\n{3,}/g, "\n\n")
       .trim()
   );
+}
+
+// Metadata + divider markers GitHub bots hide in HTML comments. No comment can
+// close after the last `-->`, so the lazy scan never runs over that tail.
+function stripHtmlComments(body: string): string {
+  const end = body.lastIndexOf("-->");
+  if (end < 0) return body;
+  return body.slice(0, end + 3).replace(/<!--[\s\S]*?-->/g, "") + body.slice(end + 3);
 }
 
 const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|svg)(?:[?#]|$)/i;
@@ -84,18 +90,18 @@ export function extractEmbeddedImages(body: string, max = 5): EmbeddedImage[] {
   };
   // Markdown images: ![alt](url "optional title") — parsed first so the URL is
   // clean and any alt text is captured before the bare-URL sweep sees it.
-  for (const m of body.matchAll(/!\[([^\]]*)\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)/g)) {
+  for (const m of body.matchAll(/!\[([^[\]]*)\]\(\s*([^()\s]+)(?:\s+"[^"]*")?\s*\)/g)) {
     add(m[2] ?? "", m[1] ?? "");
   }
   // HTML <img src="…" alt="…">.
-  for (const m of body.matchAll(/<img\b[^>]*?\bsrc=["']([^"']+)["'][^>]*>/gi)) {
+  for (const m of body.matchAll(/<img\b[^<>]*?\bsrc=["']([^"']+)["'][^<>]*>/gi)) {
     const alt = /\balt=["']([^"']*)["']/i.exec(m[0]);
     add(m[1] ?? "", alt?.[1] ?? "");
   }
   // Bare image-file URLs. `seen` already holds any markdown/img URLs, so this
   // only adds standalone ones; trailing punctuation is trimmed before matching.
   for (const m of body.matchAll(/https?:\/\/\S+/gi)) {
-    const url = (m[0] ?? "").replace(/[)\].,;:!'"]+$/, "");
+    const url = (m[0] ?? "").replace(/(?<![)\].,;:!'"])[)\].,;:!'"]+$/, "");
     if (IMAGE_EXT_RE.test(url)) add(url, "");
   }
   return out.slice(0, max);

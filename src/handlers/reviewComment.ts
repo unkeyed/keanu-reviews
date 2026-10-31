@@ -3,7 +3,6 @@ import { shouldSkipActor } from "../github/actors.ts";
 import { commentImages } from "../github/attachments.ts";
 import { reviewCommentBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
 import type { SlackMessage } from "../slack/client.ts";
-import { RetryableError } from "../worker/retryable.ts";
 import {
   deleteMirroredComment,
   deliverAuthoredMessage,
@@ -70,7 +69,6 @@ export async function handleReviewComment(
   // The PR author's inline replies ARE mirrored — replying to review feedback is
   // the core channel conversation.
   const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
-  if (!row.channelId) throw new RetryableError(`PR channel is not ready for ${row.id}`);
   const channelId = row.channelId;
 
   const c = payload.comment;

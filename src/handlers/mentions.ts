@@ -1,4 +1,5 @@
 import { findByGithubLogin } from "../db/repositories/identities.ts";
+import { inviteToChannel } from "./invites.ts";
 import type { PrHandlerDeps } from "./pullRequest.ts";
 
 // GitHub logins are 1–39 chars: alphanumerics with single internal hyphens, no
@@ -43,7 +44,7 @@ export async function inviteMentionedUsers(
       const identity = await findByGithubLogin(deps.db, login);
       if (identity) ids.add(identity.slackUserId);
     }
-    if (ids.size > 0) await deps.slack.inviteUsers(channelId, [...ids]);
+    if (ids.size > 0) await inviteToChannel(deps, channelId, [...ids], { role: "mention" });
   } catch (error) {
     deps.logger.warn("failed to invite mentioned users into channel", {
       channelId,

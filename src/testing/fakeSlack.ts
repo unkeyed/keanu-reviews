@@ -4,6 +4,7 @@ import type {
   SlackMessage,
   SlackMessageUpdate,
   SlackUserProfile,
+  UninvitableUser,
 } from "../slack/client.ts";
 
 /** In-memory Slack client for offline tests. Records every call for assertions. */
@@ -24,6 +25,8 @@ export class FakeSlackClient implements SlackClient {
   userTokens = new Map<string, string>();
   /** Tokens the fake should treat as revoked/invalid. */
   invalidTokens = new Set<string>();
+  /** Slack user id -> the error Slack returns when inviting that user (e.g. a guest). */
+  uninvitableUsers = new Map<string, string>();
   private memberships = new Map<string, Set<string>>();
   private chanSeq = 0;
   private tsSeq = 0;
@@ -59,7 +62,12 @@ export class FakeSlackClient implements SlackClient {
   async isChannelArchived(channelId: string): Promise<boolean | undefined> {
     return this.channels.find((c) => c.id === channelId)?.archived;
   }
-  async inviteUsers(channelId: string, userIds: string[]): Promise<void> {
+  async inviteUsers(channelId: string, requested: string[]): Promise<UninvitableUser[]> {
+    const refused = requested.flatMap((userId) => {
+      const error = this.uninvitableUsers.get(userId);
+      return error ? [{ userId, error }] : [];
+    });
+    const userIds = requested.filter((userId) => !this.uninvitableUsers.has(userId));
     const missing = userIds.filter(
       (userId) =>
         !this.invites.some(
@@ -70,6 +78,7 @@ export class FakeSlackClient implements SlackClient {
     const members = this.memberships.get(channelId) ?? new Set<string>();
     for (const userId of userIds) members.add(userId);
     this.memberships.set(channelId, members);
+    return refused;
   }
   async listChannelMembers(channelId: string): Promise<string[]> {
     return [...(this.memberships.get(channelId) ?? [])];

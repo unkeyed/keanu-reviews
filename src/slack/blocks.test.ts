@@ -98,6 +98,30 @@ describe("extractEmbeddedImages", () => {
   });
 });
 
+describe("GitHub body parsing on hostile input", () => {
+  // GitHub's 65,536-character comment limit, filled with openers that never close.
+  const hostile = (unit: string, tail = "") =>
+    unit.repeat(Math.floor((65_536 - tail.length) / unit.length)) + tail;
+  const bodies: [string, string][] = [
+    ["unclosed img tags", hostile('<img src="')],
+    ["unclosed markdown images", hostile("![a](")],
+    ["unclosed alt text", hostile("![")],
+    ["unclosed links", hostile("<a ")],
+    ["unclosed tags", hostile("<b")],
+    ["unclosed comments", hostile("<!--")],
+    ["unclosed sup blocks", hostile("<sup>")],
+    ["trailing spaces without a newline", hostile(" ", "x")],
+    ["a URL ending in punctuation runs", `https://x/${hostile(")", "a")}`],
+  ];
+
+  it.each(bodies)("handles %s in well under a second", (_name, body) => {
+    const start = performance.now();
+    cleanGithubMarkdown(body);
+    extractEmbeddedImages(body);
+    expect(performance.now() - start).toBeLessThan(250);
+  });
+});
+
 describe("sanitizeMrkdwn (KTD11)", () => {
   it("neutralizes a broadcast control sequence", () => {
     const out = sanitizeMrkdwn("ship it <!channel> now");

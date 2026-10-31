@@ -8,9 +8,17 @@ import type { PullRequestFetcher } from "../handlers/mergeability.ts";
 import type { GithubUserFetcher } from "../identity/link.ts";
 import type { GithubEmailFetcher } from "../identity/resolve.ts";
 import type { InstallationAuth } from "./auth.ts";
-import { GithubApiError, type GithubRequestOptions, githubGetJson } from "./http.ts";
+import {
+  GithubApiError,
+  type GithubRequestOptions,
+  encodedRepoPath,
+  githubGetJson,
+} from "./http.ts";
 
 export { GithubApiError } from "./http.ts";
+
+/** Most pages (of 100) read from one paged GitHub list. */
+const PAGE_LIMIT = 10;
 
 type GithubUserResponse = { id?: unknown; login?: unknown };
 type GithubEmailResponse = { email?: unknown };
@@ -66,8 +74,7 @@ export function createPullRequestFetcher(
   options: GithubRequestOptions = {},
 ): PullRequestFetcher {
   return async (repoFullName: string, number: number) => {
-    const repoPath = repoFullName.split("/").map(encodeURIComponent).join("/");
-    const path = `/repos/${repoPath}/pulls/${number}`;
+    const path = `/repos/${encodedRepoPath(repoFullName)}/pulls/${number}`;
     const body = await githubGetJson<{
       mergeable?: unknown;
       mergeable_state?: unknown;
@@ -102,10 +109,17 @@ export function createReviewApprovalFetcher(
   options: GithubRequestOptions = {},
 ): ReviewApprovalFetcher {
   return async (repoFullName: string, number: number) => {
-    const repoPath = repoFullName.split("/").map(encodeURIComponent).join("/");
+    const reviews = `/repos/${encodedRepoPath(repoFullName)}/pulls/${number}/reviews`;
     const latestByUser = new Map<number, string>();
     for (let page = 1; ; page++) {
-      const path = `/repos/${repoPath}/pulls/${number}/reviews?per_page=100&page=${page}`;
+      if (page > PAGE_LIMIT) {
+        // A partial history can miss a later dismissal, so don't report a count.
+        throw new GithubApiError(`GitHub reviews list exceeded ${PAGE_LIMIT} pages`, {
+          kind: "invalid_response",
+          url: `https://api.github.com${reviews}`,
+        });
+      }
+      const path = `${reviews}?per_page=100&page=${page}`;
       const body = await githubGetJson<unknown>(auth, installationId, path, options);
       if (body === undefined) return undefined;
       if (!Array.isArray(body)) throw invalidResponse(path);
@@ -145,12 +159,6 @@ interface CheckRunList {
   total_count?: unknown;
   check_runs?: unknown;
 }
-
-function encodedRepoPath(repoFullName: string): string {
-  return repoFullName.split("/").map(encodeURIComponent).join("/");
-}
-
-const PAGE_LIMIT = 10;
 
 /**
  * Page check runs. Stops after {@link PAGE_LIMIT} pages and the caller treats a
@@ -227,8 +235,7 @@ export function createPrForShaFetcher(
   options: GithubRequestOptions = {},
 ): PrForShaFetcher {
   return async (repoFullName: string, sha: string) => {
-    const repoPath = repoFullName.split("/").map(encodeURIComponent).join("/");
-    const path = `/repos/${repoPath}/commits/${encodeURIComponent(sha)}/pulls`;
+    const path = `/repos/${encodedRepoPath(repoFullName)}/commits/${encodeURIComponent(sha)}/pulls`;
     const body = await githubGetJson<unknown>(auth, installationId, path, options);
     if (body === undefined) return [];
     if (!Array.isArray(body)) throw invalidResponse(path);

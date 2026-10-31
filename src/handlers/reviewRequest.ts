@@ -9,6 +9,7 @@ import {
 import { sanitizeInlineCode, sanitizeMrkdwn } from "../slack/blocks.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { RetryableError } from "../worker/retryable.ts";
+import { inviteToChannel } from "./invites.ts";
 import {
   type PrHandlerDeps,
   type PullRequestPayload,
@@ -42,7 +43,8 @@ export interface ReviewRequestDeps extends PrHandlerDeps {
   onReviewAlerted?: (prId: string, reviewerGithubId: number) => Promise<void>;
 }
 
-function sourceDate(value: string): Date | undefined {
+export function sourceDate(value: string | undefined): Date | undefined {
+  if (!value) return undefined;
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 }
@@ -91,7 +93,6 @@ export async function handleReviewRequest(
 ): Promise<void> {
   const { logger } = deps;
   const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
-  if (!row.channelId) throw new RetryableError(`PR channel is not ready for ${row.id}`);
 
   if (payload.requested_team && !payload.requested_reviewer) {
     logger.info("team review requested; no per-user invite", { team: payload.requested_team.slug });
@@ -109,6 +110,15 @@ export async function handleReviewRequest(
       source.sourceUpdatedAt,
       source.sourceVersion,
     );
+    return;
+  }
+
+  if (isTerminal(row.currentState)) {
+    logger.info("review alert skipped: PR is closed", {
+      prId: row.id,
+      reviewer: reviewer.login,
+      state: row.currentState,
+    });
     return;
   }
 
@@ -153,10 +163,10 @@ export async function handleReadyForReview(
   const reviewers = payload.pull_request.requested_reviewers ?? [];
   if (reviewers.length === 0) return;
   const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
-  if (!row.channelId) throw new RetryableError(`PR channel is not ready for ${row.id}`);
+  if (isTerminal(row.currentState) || row.currentState === "draft") return;
 
   const source = alertSource(payload.pull_request.updated_at, sourceVersion);
-  const viewed = { ...row, currentState: "pr" as const, headSha: payload.pull_request.head.sha };
+  const viewed = { ...row, headSha: payload.pull_request.head.sha };
   const ready = await ciAllowsAlert(deps, viewed, { ...gate, absentMeansReady: true });
   for (const reviewer of reviewers) {
     if (!ready) {
@@ -183,7 +193,6 @@ export async function handleSynchronizedReviewAlerts(
   const reviewers = payload.pull_request.requested_reviewers ?? [];
   if (reviewers.length === 0) return;
   const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
-  if (!row.channelId) throw new RetryableError(`PR channel is not ready for ${row.id}`);
   if (isTerminal(row.currentState) || row.currentState === "draft") return;
 
   const source = alertSource(payload.pull_request.updated_at, sourceVersion);
@@ -349,7 +358,7 @@ async function inviteReviewer(
           },
         ],
       },
-      () => slack.inviteUsers(channelId, [slackUserId]),
+      () => inviteToChannel(deps, channelId, [slackUserId], { prId, role: "reviewer" }),
     );
     return delivered.posted;
   }

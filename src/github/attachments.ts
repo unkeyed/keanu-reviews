@@ -95,7 +95,9 @@ export function createGithubAttachmentMirror(opts: {
       | AttachmentId
       | undefined;
     const att =
-      id && signedBy(id, c.req.param("signature")) && (await openPublicAttachment(id, fetchFn));
+      id &&
+      signedBy(id, c.req.param("signature")) &&
+      (await openPublicAttachment(id, fetchFn, c.req.raw.signal));
     if (!att) return c.body(null, 404, { "cache-control": "no-store" });
     const headers = {
       "content-type": att.contentType,
@@ -128,13 +130,16 @@ export async function commentImages(
 async function openPublicAttachment(
   id: AttachmentId,
   fetchFn: AnonymousFetch,
+  viewer?: AbortSignal,
 ): Promise<PublicAttachment | undefined> {
   // Time the headers only: AbortSignal.timeout would also cut a large body mid-stream.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPSTREAM_HEADERS_TIMEOUT_MS);
+  // The server never cancels a body it didn't start sending, so a viewer who
+  // leaves before GitHub answers would otherwise pin the upstream socket.
   const res = await fetchFn(GITHUB_ATTACHMENT_ORIGIN + id, {
     redirect: "follow",
-    signal: controller.signal,
+    signal: viewer ? AbortSignal.any([controller.signal, viewer]) : controller.signal,
   })
     .catch(() => undefined)
     .finally(() => clearTimeout(timer));

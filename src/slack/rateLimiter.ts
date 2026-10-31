@@ -1,15 +1,31 @@
+import { RetryableError } from "../worker/retryable.ts";
+
 /**
  * Client-side rate limiting (KTD9). Two concerns:
  *  - honor Slack HTTP 429 `Retry-After` by waiting and retrying;
  *  - pace bursty methods (channel creation is Tier 2 ~20/min) via a serialized
  *    per-key minimum interval so a PR flood queues instead of being throttled.
  */
-export interface RateLimitedError {
-  status: 429;
-  retryAfterSeconds: number;
+
+/** Slack HTTP 429. A wait too long to sleep through defers the whole job instead. */
+export class RateLimitedError extends RetryableError {
+  readonly status = 429;
+  readonly retryAfterSeconds: number;
+
+  constructor(retryAfterSeconds: number) {
+    super(
+      `Slack rate limited; retry after ${retryAfterSeconds}s`,
+      undefined,
+      retryAfterSeconds * 1000,
+    );
+    this.name = "RateLimitedError";
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
 }
 
-const isRateLimited = (e: unknown): e is RateLimitedError =>
+export const isRateLimited = (
+  e: unknown,
+): e is Pick<RateLimitedError, "status" | "retryAfterSeconds"> =>
   typeof e === "object" && e !== null && (e as { status?: number }).status === 429;
 
 export type SleepFn = (ms: number) => Promise<void>;

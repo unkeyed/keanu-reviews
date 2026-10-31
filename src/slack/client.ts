@@ -89,6 +89,15 @@ export function isSlackChannelAlreadyInState(
 }
 
 /**
+ * A user Slack will not add to a channel for a reason retrying cannot fix, such
+ * as a guest account, a deactivated user, or the bot itself.
+ */
+export interface UninvitableUser {
+  userId?: string;
+  error: string;
+}
+
+/**
  * Result of asking a user (via their own token) to leave a channel:
  * - `left`: the user left the channel now.
  * - `already_out`: the user was not a member (a no-op success).
@@ -106,7 +115,8 @@ export interface SlackClient {
   unarchiveChannel(channelId: string): Promise<void>;
   /** Whether a channel is currently archived; undefined if it can't be read. */
   isChannelArchived(channelId: string): Promise<boolean | undefined>;
-  inviteUsers(channelId: string, userIds: string[]): Promise<void>;
+  /** Invites every user Slack accepts and returns the ones it permanently refused. */
+  inviteUsers(channelId: string, userIds: string[]): Promise<UninvitableUser[]>;
   /** All member IDs of a channel (bot token, paginated). Includes the bot. */
   listChannelMembers(channelId: string): Promise<string[]>;
   /** Make a specific user leave `channelId` using their own token (silent). */
