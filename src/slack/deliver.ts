@@ -7,7 +7,7 @@ import {
   findMessageEffect,
   releaseMessageEffect,
 } from "../db/repositories/messages.ts";
-import { RetryableError } from "../worker/retryable.ts";
+import { RetryableError, orphanedClaimWaitMs } from "../worker/retryable.ts";
 import type { SlackClient, SlackMessage } from "./client.ts";
 
 export interface DeliveredSlackMessage {
@@ -33,11 +33,10 @@ export async function deliverSlackMessage(
     if (existing?.status === "sent" && existing.slackTs) {
       return { slackTs: existing.slackTs, posted: false };
     }
-    const leaseEndsAt = (existing?.claimedAt?.getTime() ?? Date.now()) + MESSAGE_EFFECT_LEASE_MS;
     throw new RetryableError(
       `Slack effect is already being delivered: ${effect.kind}`,
       { kind: effect.kind },
-      Math.max(0, leaseEndsAt - Date.now()),
+      orphanedClaimWaitMs(existing?.claimedAt, MESSAGE_EFFECT_LEASE_MS, Date.now()),
     );
   }
 

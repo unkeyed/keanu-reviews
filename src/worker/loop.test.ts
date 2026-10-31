@@ -102,6 +102,30 @@ describe("worker retry hints", () => {
     const [row] = await db.select().from(jobs).where(eq(jobs.id, id));
     return { status: row?.status, at: row?.availableAt.getTime() };
   };
+  // Run the job at each retry time it asks for until it stops retrying.
+  const settle = async (worker: { drain: () => Promise<number> }, id: string) => {
+    for (;;) {
+      await worker.drain();
+      const [row] = await db.select().from(jobs).where(eq(jobs.id, id));
+      if (row?.status !== "pending") return row;
+      vi.setSystemTime(row.availableAt);
+    }
+  };
+  const openedPayload = {
+    action: "opened",
+    repository: { full_name: "unkey/api" },
+    pull_request: {
+      number: 1423,
+      id: 999,
+      draft: false,
+      merged: false,
+      title: "Add auth",
+      html_url: "https://github.com/unkey/api/pull/1423",
+      user: { login: "oz", id: 100 },
+      head: { sha: "sha1" },
+      updated_at: "2026-08-11T12:00:00Z",
+    },
+  } satisfies PullRequestPayload;
 
   it("waits out a hint longer than the backoff and caps it at five minutes", async () => {
     const short = await enqueue("hint-short");
@@ -143,15 +167,38 @@ describe("worker retry hints", () => {
       },
     });
 
-    await worker.drain();
-    expect(await availableAt(job.id)).toEqual({ status: "pending", at: start + 2 * 60_000 });
-    expect(slack.messages).toEqual([]);
+    const settled = await settle(worker, job.id);
 
-    vi.setSystemTime(start + 2 * 60_000);
-    await worker.drain();
-
-    expect(await availableAt(job.id)).toMatchObject({ status: "done" });
+    expect(settled?.status).toBe("done");
+    expect(Date.now()).toBeGreaterThanOrEqual(start + 2 * 60_000);
     expect(slack.messages.map((m) => m.text)).toEqual(["opened"]);
+  });
+
+  it("retries within seconds while a live run holds the Slack effect", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.now();
+    await upsertPullRequest(db, {
+      repoFullName: "unkey/api",
+      number: 1,
+      githubPrId: 1,
+      currentState: "pr",
+    });
+    const effect = { prId: prId("unkey/api", 1), kind: "lifecycle", githubEventRef: "opened" };
+    await claimMessageEffect(db, effect);
+    const job = await enqueue("effect-live");
+    const worker = createWorker({
+      db,
+      logger: createLogger("error"),
+      router: async () => {
+        await deliverSlackMessage(db, new FakeSlackClient(), effect, {
+          channel: "C1",
+          text: "opened",
+        });
+      },
+    });
+
+    await worker.drain();
+    expect(await availableAt(job.id)).toEqual({ status: "pending", at: start + 2_000 });
   });
 
   it("retries a PR lifecycle event after a crashed holder's lease instead of failing it", async () => {
@@ -160,65 +207,54 @@ describe("worker retry hints", () => {
     await claimPullRequestLifecycle(db, 999);
     const slack = new FakeSlackClient();
     const job = await enqueue("lifecycle-held");
-    const payload = {
-      action: "opened",
-      repository: { full_name: "unkey/api" },
-      pull_request: {
-        number: 1423,
-        id: 999,
-        draft: false,
-        merged: false,
-        title: "Add auth",
-        html_url: "https://github.com/unkey/api/pull/1423",
-        user: { login: "oz", id: 100 },
-        head: { sha: "sha1" },
-        updated_at: "2026-08-11T12:00:00Z",
-      },
-    } satisfies PullRequestPayload;
     const worker = createWorker({
       db,
       logger: createLogger("error"),
       router: async () => {
-        await handlePullRequest({ db, slack, logger: createLogger("error") }, payload);
+        await handlePullRequest({ db, slack, logger: createLogger("error") }, openedPayload);
+      },
+    });
+
+    const settled = await settle(worker, job.id);
+
+    expect(settled?.status).toBe("done");
+    expect(Date.now()).toBeGreaterThanOrEqual(start + 5 * 60_000);
+    expect(slack.channels).toHaveLength(1);
+  });
+
+  it("retries within seconds while a live run holds the PR lifecycle", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.now();
+    await claimPullRequestLifecycle(db, 999, { now: new Date(start - 1_000) });
+    const job = await enqueue("lifecycle-live");
+    const worker = createWorker({
+      db,
+      logger: createLogger("error"),
+      router: async () => {
+        await handlePullRequest(
+          { db, slack: new FakeSlackClient(), logger: createLogger("error") },
+          openedPayload,
+        );
       },
     });
 
     await worker.drain();
-    expect(await availableAt(job.id)).toEqual({ status: "pending", at: start + 5 * 60_000 });
-
-    vi.setSystemTime(start + 5 * 60_000);
-    await worker.drain();
-
-    expect(await availableAt(job.id)).toMatchObject({ status: "done" });
-    expect(slack.channels).toHaveLength(1);
+    expect(await availableAt(job.id)).toEqual({ status: "pending", at: start + 2_000 });
   });
 
-  it("waits only for the time left on a PR lifecycle lease another claim holds", async () => {
+  it("waits only for the time left on a PR lifecycle lease a crashed holder left", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const start = Date.now();
     await claimPullRequestLifecycle(db, 999, { now: new Date(start - 4.5 * 60_000) });
     const job = await enqueue("lifecycle-nearly-free");
-    const payload = {
-      action: "opened",
-      repository: { full_name: "unkey/api" },
-      pull_request: {
-        number: 1423,
-        id: 999,
-        draft: false,
-        merged: false,
-        title: "Add auth",
-        html_url: "https://github.com/unkey/api/pull/1423",
-        user: { login: "oz", id: 100 },
-        head: { sha: "sha1" },
-        updated_at: "2026-08-11T12:00:00Z",
-      },
-    } satisfies PullRequestPayload;
-    const slack = new FakeSlackClient();
     const worker = createWorker({
       db,
       logger: createLogger("error"),
       router: async () => {
-        await handlePullRequest({ db, slack, logger: createLogger("error") }, payload);
+        await handlePullRequest(
+          { db, slack: new FakeSlackClient(), logger: createLogger("error") },
+          openedPayload,
+        );
       },
     });
 

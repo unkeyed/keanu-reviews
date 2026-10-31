@@ -144,20 +144,16 @@ export async function claimPullRequestLifecycle(
   return reclaimed;
 }
 
-/** How long until a lifecycle lease held by another claim can be reclaimed. */
-export async function pullRequestLifecycleLeaseRemainingMs(
+/** When the current holder claimed a PR's lifecycle, if anyone holds it. */
+export async function pullRequestLifecycleClaimedAt(
   db: Db,
   githubPrId: number,
-  options: { now?: Date; leaseMs?: number } = {},
-): Promise<number> {
+): Promise<Date | undefined> {
   const [held] = await db
     .select({ claimedAt: pullRequestLifecycleClaims.claimedAt })
     .from(pullRequestLifecycleClaims)
     .where(eq(pullRequestLifecycleClaims.githubPrId, githubPrId));
-  if (!held) return 0;
-  const leaseEndsAt =
-    held.claimedAt.getTime() + (options.leaseMs ?? PULL_REQUEST_LIFECYCLE_LEASE_MS);
-  return Math.max(0, leaseEndsAt - (options.now ?? new Date()).getTime());
+  return held?.claimedAt;
 }
 
 export async function releasePullRequestLifecycle(

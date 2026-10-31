@@ -1,12 +1,13 @@
 import type { Db } from "../db/client.ts";
 import {
+  PULL_REQUEST_LIFECYCLE_LEASE_MS,
   applyPullRequestSource,
   claimMergeComment,
   claimPullRequestLifecycle,
   findByGithubPrId,
   findByRepoNumber,
   markSlackStateApplied,
-  pullRequestLifecycleLeaseRemainingMs,
+  pullRequestLifecycleClaimedAt,
   releaseMergeComment,
   releasePullRequestLifecycle,
   setChannel,
@@ -32,7 +33,7 @@ import { deliverSlackMessage } from "../slack/deliver.ts";
 import { slackChannelUrl } from "../slack/links.ts";
 import { CURRENT_CHANNEL_NAME_VERSION, channelName } from "../slack/naming.ts";
 import { isRateLimited } from "../slack/rateLimiter.ts";
-import { RetryableError } from "../worker/retryable.ts";
+import { RetryableError, orphanedClaimWaitMs } from "../worker/retryable.ts";
 import { inviteToChannel } from "./invites.ts";
 import type { PullRequestFetcher } from "./mergeability.ts";
 import { notifyShipped } from "./shipped.ts";
@@ -131,8 +132,8 @@ export interface PullRequestHandlingResult {
 
 /** The holder may have crashed, so a retry waits until its lease can be reclaimed. */
 export class PullRequestLifecycleBusyError extends RetryableError {
-  constructor(githubPrId: number, leaseMs: number) {
-    super(`GitHub PR ${githubPrId} is already being reconciled`, { githubPrId }, leaseMs);
+  constructor(githubPrId: number, retryAfterMs?: number) {
+    super(`GitHub PR ${githubPrId} is already being reconciled`, { githubPrId }, retryAfterMs);
     this.name = "PullRequestLifecycleBusyError";
   }
 }
@@ -160,12 +161,18 @@ export async function handlePullRequest(
     throw new Error(`Invalid pull_request.updated_at for GitHub PR ${pr.id}`);
   }
 
-  const leaseOptions = { now: options.now, leaseMs: options.lifecycleLeaseMs };
-  const lifecycleClaim = await claimPullRequestLifecycle(db, pr.id, leaseOptions);
+  const lifecycleClaim = await claimPullRequestLifecycle(db, pr.id, {
+    now: options.now,
+    leaseMs: options.lifecycleLeaseMs,
+  });
   if (!lifecycleClaim) {
     throw new PullRequestLifecycleBusyError(
       pr.id,
-      await pullRequestLifecycleLeaseRemainingMs(db, pr.id, leaseOptions),
+      orphanedClaimWaitMs(
+        await pullRequestLifecycleClaimedAt(db, pr.id),
+        options.lifecycleLeaseMs ?? PULL_REQUEST_LIFECYCLE_LEASE_MS,
+        (options.now ?? new Date()).getTime(),
+      ),
     );
   }
 
