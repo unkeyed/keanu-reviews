@@ -48,8 +48,8 @@ Keep `.env` open — you'll fill it in as you go.
 ## 1. Pick your public URL and generate secrets
 
 **`PUBLIC_URL`** is the HTTPS origin of this service, **with no path** (e.g.
-`https://pr-bot.example.com`). Three inbound endpoints hang off it — you'll paste
-these into GitHub and Slack in the next steps:
+`https://pr-bot.example.com`). These inbound endpoints hang off it. You'll paste
+the first four into GitHub and Slack in the next steps:
 
 | Endpoint | Consumer | Set in |
 | --- | --- | --- |
@@ -57,6 +57,7 @@ these into GitHub and Slack in the next steps:
 | `PUBLIC_URL/oauth/github/callback` | GitHub OAuth (account linking) | Step 3 |
 | `PUBLIC_URL/slack/commands` | Slack `/link-github` + `/link-slack` commands | Step 4 |
 | `PUBLIC_URL/oauth/slack/callback` | Slack OAuth (quiet archiving, optional) | Step 4.2b |
+| `PUBLIC_URL/github-attachments/<signature>/<id>.<ext>` | Slack's image fetcher (images pasted into comments). Public by design: it serves only URLs the bot signed, and only what GitHub serves logged out. | Nothing to set |
 
 > `PUBLIC_URL` must be `https://` with no path/query (plain `http://` is allowed
 > only for `localhost` during local dev).
