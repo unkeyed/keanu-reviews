@@ -1,9 +1,9 @@
 import { ErrorCode } from "@slack/web-api";
 import { describe, expect, it, vi } from "vitest";
 import { RetryableError } from "../worker/retryable.ts";
+import { isSlackChannelAlreadyInState } from "./client.ts";
 import {
   createWebApiSlackClient,
-  isSlackChannelAlreadyInState,
   lookupSlackUserByEmail,
   lookupSlackUserName,
   lookupSlackUserProfile,

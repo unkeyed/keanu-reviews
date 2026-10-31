@@ -14,8 +14,6 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_RATE_LIMIT_RETRIES = 1;
 const MAX_RATE_LIMIT_DELAY_MS = 5_000;
 
-export { isSlackChannelAlreadyInState } from "./client.ts";
-
 interface SlackUserLookupApi {
   lookupByEmail(input: { email: string }): Promise<{ user?: { id?: string } }>;
   info(input: { user: string }): Promise<{

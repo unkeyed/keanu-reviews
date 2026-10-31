@@ -43,7 +43,8 @@ export interface ReviewRequestDeps extends PrHandlerDeps {
   onReviewAlerted?: (prId: string, reviewerGithubId: number) => Promise<void>;
 }
 
-function sourceDate(value: string): Date | undefined {
+export function sourceDate(value: string | undefined): Date | undefined {
+  if (!value) return undefined;
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 }
@@ -92,7 +93,6 @@ export async function handleReviewRequest(
 ): Promise<void> {
   const { logger } = deps;
   const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
-  if (!row.channelId) throw new RetryableError(`PR channel is not ready for ${row.id}`);
 
   if (payload.requested_team && !payload.requested_reviewer) {
     logger.info("team review requested; no per-user invite", { team: payload.requested_team.slug });
@@ -163,7 +163,6 @@ export async function handleReadyForReview(
   const reviewers = payload.pull_request.requested_reviewers ?? [];
   if (reviewers.length === 0) return;
   const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
-  if (!row.channelId) throw new RetryableError(`PR channel is not ready for ${row.id}`);
   if (isTerminal(row.currentState) || row.currentState === "draft") return;
 
   const source = alertSource(payload.pull_request.updated_at, sourceVersion);
@@ -194,7 +193,6 @@ export async function handleSynchronizedReviewAlerts(
   const reviewers = payload.pull_request.requested_reviewers ?? [];
   if (reviewers.length === 0) return;
   const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
-  if (!row.channelId) throw new RetryableError(`PR channel is not ready for ${row.id}`);
   if (isTerminal(row.currentState) || row.currentState === "draft") return;
 
   const source = alertSource(payload.pull_request.updated_at, sourceVersion);

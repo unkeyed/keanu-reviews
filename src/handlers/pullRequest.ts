@@ -528,7 +528,7 @@ export async function ensurePullRequestChannel(
       `PR channel is not ready for ${repository.full_name}#${pullRequest.number}`,
     );
   }
-  return row;
+  return { ...row, channelId: row.channelId, rootMessageTs: row.rootMessageTs };
 }
 
 function lifecycleBlocks(pr: PullRequestPayload["pull_request"], state: PrState): SlackBlock[] {

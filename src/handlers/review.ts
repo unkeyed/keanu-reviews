@@ -25,6 +25,7 @@ import {
   type PullRequestPayload,
   ensurePullRequestChannel,
 } from "./pullRequest.ts";
+import { sourceDate } from "./reviewRequest.ts";
 
 export interface ReviewDeps extends PrHandlerDeps {
   /** U8 wires this to cancel a reviewer's pending reminder once they review. */
@@ -50,12 +51,6 @@ export interface ReviewPayload {
   };
 }
 
-function sourceDate(value: string | undefined): Date | undefined {
-  if (!value) return undefined;
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
-}
-
 /** Mirror a review submission (U6, R5) and cancel the reviewer's reminder (U8 hook). */
 export async function handleReview(
   deps: ReviewDeps,
@@ -65,7 +60,6 @@ export async function handleReview(
   if (payload.action !== "submitted") return;
   if (shouldSkipActor(payload.review.user, deps.allowedBots)) return; // skip non-allowed bots
   const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
-  if (!row.channelId) throw new RetryableError(`PR channel is not ready for ${row.id}`);
   const channelId = row.channelId;
 
   const r = payload.review;
