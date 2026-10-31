@@ -69,6 +69,9 @@ const UNINVITABLE_USER_ERRORS: ReadonlySet<string> = new Set([
   "user_is_restricted",
   "user_is_ultra_restricted",
   "ura_max_channels",
+  "org_user_not_in_team",
+  "invitee_cant_see_channel",
+  "no_external_invite_permission",
 ]);
 
 /** Per-user failures in a `conversations.invite` response, minus users already present. */

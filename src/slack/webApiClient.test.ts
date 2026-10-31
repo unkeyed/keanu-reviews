@@ -519,6 +519,19 @@ describe("Slack Web API adapter", () => {
     });
   });
 
+  it.each(["org_user_not_in_team", "invitee_cant_see_channel", "no_external_invite_permission"])(
+    "returns an Enterprise Grid or Slack Connect user refused with %s",
+    async (error) => {
+      const web = fakeWebApi();
+      web.conversations.invite.mockRejectedValueOnce({
+        data: { error, errors: [{ user: "U5", ok: false, error }] },
+      });
+      const slack = createWebApiSlackClient("unused", { web });
+
+      await expect(slack.inviteUsers("C123", ["U5"])).resolves.toEqual([{ userId: "U5", error }]);
+    },
+  );
+
   it("lists channel members across pages", async () => {
     const web = fakeWebApi();
     web.conversations.members
