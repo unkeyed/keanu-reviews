@@ -187,7 +187,7 @@ function imageBlocks(images: readonly MessageImage[], mode: "embed" | "links"): 
   const blocks: SlackBlock[] = embeds.map((img) => ({
     type: "image",
     image_url: img.imageUrl,
-    alt_text: img.alt.slice(0, 2000),
+    alt_text: Array.from(img.alt).slice(0, 2000).join(""),
   }));
   if (links.length > 0) {
     blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: linkRow(links) }] });

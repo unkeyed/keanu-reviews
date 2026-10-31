@@ -219,6 +219,22 @@ describe("Slack Web API adapter", () => {
       ]);
     });
 
+    it("cuts long alt text on a character boundary, never inside an emoji", async () => {
+      const web = fakeWebApi();
+      const slack = createWebApiSlackClient("unused", { web });
+      const alt = `a${"😀".repeat(2_500)}`;
+
+      await slack.postMessage({
+        channel: "C1",
+        text: "t",
+        images: [{ ...images[0], alt }],
+      });
+
+      expect(blocksSent(web.apiCall)[0]).toEqual([
+        { ...imageBlock, alt_text: `a${"😀".repeat(1_999)}` },
+      ]);
+    });
+
     it("re-posts a bot message with every image as a link when Slack refuses an embed", async () => {
       const web = fakeWebApi();
       web.apiCall.mockRejectedValueOnce(invalidBlocks).mockResolvedValueOnce({ ts: "1.1" });
