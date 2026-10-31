@@ -85,6 +85,16 @@ const currentClaim = (job: JobRow) =>
     job.claimedAt ? eq(jobs.claimedAt, job.claimedAt) : isNull(jobs.claimedAt),
   );
 
+/** Extend a running job's lease. Undefined means another worker now holds it. */
+export async function renewJobLease(db: Db, job: JobRow, now: Date): Promise<JobRow | undefined> {
+  const rows = await db
+    .update(jobs)
+    .set({ claimedAt: now })
+    .where(currentClaim(job))
+    .returning({ id: jobs.id });
+  return rows.length > 0 ? { ...job, claimedAt: now } : undefined;
+}
+
 /** Mark done and purge the raw payload (retention, KTD13). */
 export async function completeJob(db: Db, job: JobRow): Promise<boolean> {
   const rows = await db

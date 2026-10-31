@@ -227,6 +227,45 @@ describe("worker retry hints", () => {
   });
 });
 
+describe("worker lease", () => {
+  it("keeps a job that outlives its lease from being claimed by another worker", async () => {
+    const job = await enqueueJob(db, {
+      deliveryId: "slow-job",
+      event: "pull_request",
+      action: "opened",
+      raw: {},
+    });
+    const leaseMs = 300;
+    let started!: () => void;
+    const running = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const worker = createWorker({
+      db,
+      logger: createLogger("error"),
+      router: async () => {
+        started();
+        await finished;
+      },
+      leaseMs,
+    });
+
+    const ticking = worker.tick();
+    await running;
+    await new Promise((resolve) => setTimeout(resolve, leaseMs * 3));
+    expect(await claimNextJob(db, { leaseMs })).toBeUndefined();
+
+    finish();
+    await ticking;
+    const [row] = await db.select().from(jobs).where(eq(jobs.id, job.id));
+    expect(row).toMatchObject({ status: "done", attempts: 1 });
+  });
+});
+
 describe("worker loop", () => {
   const pendingTicks = () => {
     const finishers: ((more: boolean) => void)[] = [];
