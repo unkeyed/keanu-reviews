@@ -2,12 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseEvent } from "#events";
 import { upsertIdentity } from "#identity";
 import { createLogger } from "#lib";
+import { applyPullRequestSource, setChannel } from "#pr";
 import type { CiReadiness } from "../ci/status.ts";
 import type { Db } from "../db/client.ts";
-import { setChannel, updateState, upsertPullRequest } from "../db/repositories/pullRequests.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { type CheckRunPayload, checkRunEvent, pullRequestEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
+import { setPrState } from "../testing/pr.ts";
 import { type ChecksDeps, handleCheckRun } from "./checks.ts";
 import { handleReviewRequest } from "./reviewRequest.ts";
 
@@ -48,13 +49,15 @@ const seedPr = async (
     currentState?: "draft" | "pr";
   } = {},
 ) => {
-  const row = await upsertPullRequest(db, {
-    repoFullName: options.repoFullName ?? "unkey/api",
-    number: options.number ?? 1,
-    githubPrId: options.number ?? 1,
-    currentState: options.currentState ?? "pr",
-    headSha,
-  });
+  const row = (
+    await applyPullRequestSource(db, {
+      repoFullName: options.repoFullName ?? "unkey/api",
+      number: options.number ?? 1,
+      githubPrId: options.number ?? 1,
+      currentState: options.currentState ?? "pr",
+      headSha,
+    })
+  ).row;
   await setChannel(db, row.id, options.channelId ?? "C1", "ts-root");
   return row;
 };
@@ -177,7 +180,7 @@ describe("CI events release review alerts", () => {
     await handleCheckRun(deps(), checkRunEvent(payload()));
     expect(slack.invites).toHaveLength(0);
 
-    await updateState(db, "unkey/api#1", "pr");
+    await setPrState(db, "unkey/api#1", "pr");
     await handleCheckRun(deps(), checkRunEvent(payload({ id: 102 })));
     expect(slack.invites).toEqual([{ channelId: "C1", userIds: ["U7"] }]);
   });

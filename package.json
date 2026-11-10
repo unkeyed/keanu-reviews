@@ -67,6 +67,7 @@
     "#slack": "./src/slack/index.ts",
     "#identity": "./src/identity/index.ts",
     "#reminders": "./src/reminders/index.ts",
+    "#pr": "./src/pr/index.ts",
     "#queue": "./src/queue/index.ts",
     "#app": "./src/app/index.ts"
   }

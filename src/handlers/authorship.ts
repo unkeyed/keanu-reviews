@@ -1,5 +1,6 @@
 import { resolveSlackUser } from "#identity";
 import { errMessage } from "#lib";
+import { findByRepoNumber } from "#pr";
 import {
   type Delivered,
   type EffectKey,
@@ -10,7 +11,6 @@ import {
   createLedger,
   render,
 } from "#slack";
-import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
 import type { PrHandlerDeps } from "./pullRequest.ts";
 
 /**

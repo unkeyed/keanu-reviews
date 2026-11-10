@@ -2,13 +2,9 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDispatcher } from "#app";
 import { Retry, createLogger } from "#lib";
+import { applyPullRequestSource, claimPullRequestLifecycle, prId } from "#pr";
 import { claimNextJob } from "#queue";
 import type { Db } from "../db/client.ts";
-import {
-  claimPullRequestLifecycle,
-  prId,
-  upsertPullRequest,
-} from "../db/repositories/pullRequests.ts";
 import { jobs } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { handlePullRequest } from "../handlers/pullRequest.ts";
@@ -196,7 +192,7 @@ describe("worker retry hints", () => {
   it("delivers a Slack effect once a crashed holder's lease lifts", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const start = Date.now();
-    await upsertPullRequest(db, {
+    await applyPullRequestSource(db, {
       repoFullName: "unkey/api",
       number: 1,
       githubPrId: 1,
@@ -224,7 +220,7 @@ describe("worker retry hints", () => {
   it("retries within seconds while a live run holds the Slack effect", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const start = Date.now();
-    await upsertPullRequest(db, {
+    await applyPullRequestSource(db, {
       repoFullName: "unkey/api",
       number: 1,
       githubPrId: 1,

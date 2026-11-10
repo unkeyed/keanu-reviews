@@ -8,18 +8,6 @@ import {
 } from "#events";
 import { type GithubEmailFetcher, displayName, resolveSlackUser } from "#identity";
 import { type Logger, Retry, errMessage, leaseWaitMs } from "#lib";
-import { cancelForPr } from "#reminders";
-import {
-  type Ledger,
-  type PrView,
-  SlackApiError,
-  type SlackGateway,
-  channelSink,
-  channelTopic,
-  createLedger,
-  keys,
-} from "#slack";
-import type { Db } from "../db/client.ts";
 import {
   PULL_REQUEST_LIFECYCLE_LEASE_MS,
   applyPullRequestSource,
@@ -32,7 +20,19 @@ import {
   releaseMergeComment,
   releasePullRequestLifecycle,
   setChannel,
-} from "../db/repositories/pullRequests.ts";
+} from "#pr";
+import { cancelForPr } from "#reminders";
+import {
+  type Ledger,
+  type PrView,
+  SlackApiError,
+  type SlackGateway,
+  channelSink,
+  channelTopic,
+  createLedger,
+  keys,
+} from "#slack";
+import type { Db } from "../db/client.ts";
 import type { ImageEmbedder } from "../github/attachments.ts";
 import type { PrCommenter } from "../github/comments.ts";
 import type { CiReadinessFetcher } from "../github/users.ts";

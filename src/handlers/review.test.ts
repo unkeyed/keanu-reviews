@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseEvent } from "#events";
 import { upsertIdentity } from "#identity";
 import { createLogger } from "#lib";
+import { applyPullRequestSource, setChannel } from "#pr";
 import type { Db } from "../db/client.ts";
-import { setChannel, upsertPullRequest } from "../db/repositories/pullRequests.ts";
 import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createReminderScheduler } from "../scheduler/reminders.ts";
@@ -30,12 +30,14 @@ beforeEach(async () => {
   db = t.db;
   close = () => t.client.close();
   slack = new FakeSlackGateway();
-  const row = await upsertPullRequest(db, {
-    repoFullName: "unkey/api",
-    number: 1,
-    githubPrId: 1,
-    currentState: "pr",
-  });
+  const row = (
+    await applyPullRequestSource(db, {
+      repoFullName: "unkey/api",
+      number: 1,
+      githubPrId: 1,
+      currentState: "pr",
+    })
+  ).row;
   await setChannel(db, row.id, "C1", "ts-root");
 });
 afterEach(() => close());
@@ -241,7 +243,7 @@ describe("handleReview (U6, R5)", () => {
   });
 
   it("does not alert a reviewer who already reviewed once CI passes", async () => {
-    await upsertPullRequest(db, {
+    await applyPullRequestSource(db, {
       repoFullName: "unkey/api",
       number: 1,
       githubPrId: 1,

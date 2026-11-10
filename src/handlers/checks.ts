@@ -1,7 +1,7 @@
 import type { CheckRunEvent } from "#events";
 import { Retry } from "#lib";
+import { findAllByRepoHeadSha, findAllByRepoNumbers } from "#pr";
 import type { PrForShaFetcher } from "../ci/status.ts";
-import { findAllByRepoHeadSha, findAllByRepoNumbers } from "../db/repositories/pullRequests.ts";
 import {
   type ReviewAlertGate,
   type ReviewRequestDeps,

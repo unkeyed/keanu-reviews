@@ -1,7 +1,7 @@
 import type { IssueCommentEvent, ReviewEvent } from "#events";
 import { Retry } from "#lib";
+import { findByRepoNumber } from "#pr";
 import { type Message, cleanGithubMarkdown, createLedger, keys } from "#slack";
-import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
 import { shouldSkipActor } from "../github/actors.ts";
 import { commentImages } from "../github/attachments.ts";
 import {

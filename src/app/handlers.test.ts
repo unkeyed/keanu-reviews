@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertIdentity } from "#identity";
 import { Permanent, Retry, createLogger } from "#lib";
+import { findByRepoNumber } from "#pr";
 import type { Db } from "../db/client.ts";
-import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
 import type { JobRow } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";

@@ -1,18 +1,14 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createLogger } from "#lib";
+import { applyPullRequestSource, prId, setChannel } from "#pr";
 import { claimReminder, deferReminder, listDue } from "#reminders";
 import type { CiReadiness } from "../ci/status.ts";
 import type { Db } from "../db/client.ts";
-import {
-  prId,
-  setChannel,
-  updateState,
-  upsertPullRequest,
-} from "../db/repositories/pullRequests.ts";
 import { reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
+import { setPrState } from "../testing/pr.ts";
 import { createReminderScheduler } from "./reminders.ts";
 
 let db: Db;
@@ -30,12 +26,14 @@ beforeEach(async () => {
   close = () => t.client.close();
   slack = new FakeSlackGateway();
   clock = 1_000_000_000_000;
-  const row = await upsertPullRequest(db, {
-    repoFullName: "unkey/api",
-    number: 1,
-    githubPrId: 1,
-    currentState: "pr",
-  });
+  const row = (
+    await applyPullRequestSource(db, {
+      repoFullName: "unkey/api",
+      number: 1,
+      githubPrId: 1,
+      currentState: "pr",
+    })
+  ).row;
   await setChannel(db, row.id, "C1", "ts-root");
 });
 afterEach(() => close());
@@ -125,7 +123,7 @@ describe("reminder scheduler (U8, R9)", () => {
   it("does not post after the PR is closed/merged (state guard)", async () => {
     const s = scheduler();
     await s.onReviewRequested(PR, 7);
-    await updateState(db, PR, "merged");
+    await setPrState(db, PR, "merged");
     advanceHours(HOURS);
     expect(await s.processDue()).toBe(0);
   });
@@ -133,7 +131,7 @@ describe("reminder scheduler (U8, R9)", () => {
   it("holds a due reminder while the PR is a draft and sends it once ready", async () => {
     const s = scheduler();
     await s.onReviewRequested(PR, 7);
-    await updateState(db, PR, "draft");
+    await setPrState(db, PR, "draft");
     advanceHours(HOURS);
     expect(await s.processDue()).toBe(0);
     expect(slack.messages).toHaveLength(0);
@@ -141,14 +139,14 @@ describe("reminder scheduler (U8, R9)", () => {
     expect(row?.status).toBe("pending");
     expect(row?.attempts).toBe(0);
 
-    await updateState(db, PR, "pr");
+    await setPrState(db, PR, "pr");
     clock += HOLD_MS;
     expect(await s.processDue()).toBe(1);
     expect(slack.messages).toHaveLength(1);
   });
 
   it("holds a due reminder while CI is failing or pending, then sends it when CI passes", async () => {
-    await upsertPullRequest(db, {
+    await applyPullRequestSource(db, {
       repoFullName: "unkey/api",
       number: 1,
       githubPrId: 1,
@@ -175,7 +173,7 @@ describe("reminder scheduler (U8, R9)", () => {
   });
 
   it("still reminds when the commit has no CI configured", async () => {
-    await upsertPullRequest(db, {
+    await applyPullRequestSource(db, {
       repoFullName: "unkey/api",
       number: 1,
       githubPrId: 1,
@@ -189,7 +187,7 @@ describe("reminder scheduler (U8, R9)", () => {
   });
 
   it("holds the reminder when the CI lookup fails", async () => {
-    await upsertPullRequest(db, {
+    await applyPullRequestSource(db, {
       repoFullName: "unkey/api",
       number: 1,
       githubPrId: 1,
@@ -411,16 +409,18 @@ describe("reminder scheduler (U8, R9)", () => {
 
   it("delivers a reminder queued behind more than a batch of held reminders", async () => {
     const s = scheduler({ batchSize: 2 });
-    await updateState(db, PR, "draft");
+    await setPrState(db, PR, "draft");
     await s.onReviewRequested(PR, 7);
     await s.onReviewRequested(PR, 8);
     await s.onReviewRequested(PR, 9);
-    const other = await upsertPullRequest(db, {
-      repoFullName: "unkey/api",
-      number: 2,
-      githubPrId: 2,
-      currentState: "pr",
-    });
+    const other = (
+      await applyPullRequestSource(db, {
+        repoFullName: "unkey/api",
+        number: 2,
+        githubPrId: 2,
+        currentState: "pr",
+      })
+    ).row;
     await setChannel(db, other.id, "C2", "ts-root-2");
     clock += 60_000;
     await s.onReviewRequested(other.id, 10);
@@ -439,7 +439,7 @@ describe("reminder scheduler (U8, R9)", () => {
   });
 
   it("checks CI for a held PR once per hold interval, not on every scan", async () => {
-    await upsertPullRequest(db, {
+    await applyPullRequestSource(db, {
       repoFullName: "unkey/api",
       number: 1,
       githubPrId: 1,
@@ -470,12 +470,14 @@ describe("reminder scheduler (U8, R9)", () => {
 
   it("holds a reminder for an open PR whose channel does not exist yet", async () => {
     const s = scheduler({ maxAttempts: 2 });
-    const pending = await upsertPullRequest(db, {
-      repoFullName: "unkey/api",
-      number: 2,
-      githubPrId: 2,
-      currentState: "pr",
-    });
+    const pending = (
+      await applyPullRequestSource(db, {
+        repoFullName: "unkey/api",
+        number: 2,
+        githubPrId: 2,
+        currentState: "pr",
+      })
+    ).row;
     await s.onReviewRequested(pending.id, 7);
     advanceHours(HOURS);
 
@@ -494,12 +496,12 @@ describe("reminder scheduler (U8, R9)", () => {
 
   it("restarts the reminder clock when the review alert goes out after a hold", async () => {
     const s = scheduler();
-    await updateState(db, PR, "draft");
+    await setPrState(db, PR, "draft");
     await s.onReviewRequested(PR, 7);
     advanceHours(HOURS);
     expect(await s.processDue()).toBe(0);
 
-    await updateState(db, PR, "pr");
+    await setPrState(db, PR, "pr");
     await s.onReviewAlerted(PR, 7);
     clock += HOLD_MS;
     expect(await s.processDue()).toBe(0);
@@ -516,7 +518,7 @@ describe("reminder scheduler (U8, R9)", () => {
       .update(reminders)
       .set({ status: "sending", attempts: 1, claimedAt: new Date(clock - 10 * 60_000) })
       .where(eq(reminders.prId, PR));
-    await updateState(db, PR, "draft");
+    await setPrState(db, PR, "draft");
 
     expect(await s.processDue()).toBe(0);
 

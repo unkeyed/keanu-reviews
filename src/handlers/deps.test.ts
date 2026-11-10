@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertIdentity } from "#identity";
 import { getSlackUserTokenRow, upsertSlackUserToken } from "#identity";
 import { createLogger } from "#lib";
+import { applyPullRequestSource, setChannel } from "#pr";
 import { loadConfig } from "../config.ts";
 import type { Db } from "../db/client.ts";
-import { setChannel, upsertPullRequest } from "../db/repositories/pullRequests.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { SLACK_POST_USER_SCOPE } from "../slack/oauth.ts";
 import { createTokenCipher } from "../slack/tokenCipher.ts";
@@ -48,12 +48,14 @@ afterEach(() => close());
 
 describe("createServiceHandlers post-as-user", () => {
   it("posts as the bot when a stored token no longer decrypts, keeping the token", async () => {
-    const row = await upsertPullRequest(db, {
-      repoFullName: "unkey/api",
-      number: 1423,
-      githubPrId: 999,
-      currentState: "pr",
-    });
+    const row = (
+      await applyPullRequestSource(db, {
+        repoFullName: "unkey/api",
+        number: 1423,
+        githubPrId: 999,
+        currentState: "pr",
+      })
+    ).row;
     await setChannel(db, row.id, "C1", "ts-root");
     await upsertIdentity(db, {
       githubUserId: 7,

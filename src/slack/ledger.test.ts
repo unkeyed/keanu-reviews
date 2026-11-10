@@ -1,8 +1,8 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Retry } from "#lib";
+import { applyPullRequestSource, prId } from "#pr";
 import type { Db } from "../db/client.ts";
-import { prId, upsertPullRequest } from "../db/repositories/pullRequests.ts";
 import { messages, pullRequests } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
@@ -19,7 +19,7 @@ beforeEach(async () => {
   db = t.db;
   close = () => t.client.close();
   slack = new FakeSlackGateway();
-  await upsertPullRequest(db, {
+  await applyPullRequestSource(db, {
     repoFullName: "unkey/api",
     number: 1,
     githubPrId: 1,

@@ -2,8 +2,8 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertIdentity } from "#identity";
 import { createLogger } from "#lib";
+import { applyPullRequestSource, setChannel } from "#pr";
 import type { Db } from "../db/client.ts";
-import { setChannel, upsertPullRequest } from "../db/repositories/pullRequests.ts";
 import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createReminderScheduler } from "../scheduler/reminders.ts";
@@ -21,12 +21,14 @@ beforeEach(async () => {
   db = t.db;
   close = () => t.client.close();
   slack = new FakeSlackGateway();
-  const row = await upsertPullRequest(db, {
-    repoFullName: "unkey/api",
-    number: 1,
-    githubPrId: 1,
-    currentState: "pr",
-  });
+  const row = (
+    await applyPullRequestSource(db, {
+      repoFullName: "unkey/api",
+      number: 1,
+      githubPrId: 1,
+      currentState: "pr",
+    })
+  ).row;
   await setChannel(db, row.id, "C1", "ts-root");
 });
 afterEach(() => close());
@@ -259,7 +261,7 @@ describe("handleReviewRequest (U5)", () => {
   });
 
   it("does not alert while CI is failing or still running", async () => {
-    await upsertPullRequest(db, {
+    await applyPullRequestSource(db, {
       repoFullName: "unkey/api",
       number: 1,
       githubPrId: 1,
@@ -308,7 +310,7 @@ describe("handleReviewRequest (U5)", () => {
   });
 
   it("alerts immediately when CI is already passing", async () => {
-    await upsertPullRequest(db, {
+    await applyPullRequestSource(db, {
       repoFullName: "unkey/api",
       number: 1,
       githubPrId: 1,
@@ -333,7 +335,7 @@ describe("handleReviewRequest (U5)", () => {
   });
 
   it("retries while CI has not registered, then alerts if it never does", async () => {
-    await upsertPullRequest(db, {
+    await applyPullRequestSource(db, {
       repoFullName: "unkey/api",
       number: 1,
       githubPrId: 1,
@@ -361,7 +363,7 @@ describe("handleReviewRequest (U5)", () => {
   });
 
   it("does not alert on ready_for_review while CI is failing", async () => {
-    await upsertPullRequest(db, {
+    await applyPullRequestSource(db, {
       repoFullName: "unkey/api",
       number: 1,
       githubPrId: 1,

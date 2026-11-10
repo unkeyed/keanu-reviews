@@ -2,6 +2,15 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { findByGithubId, upsertIdentity } from "#identity";
 import {
+  applyPullRequestSource,
+  claimPullRequestLifecycle,
+  findAllByRepoHeadSha,
+  findAllByRepoNumbers,
+  findByRepoNumber,
+  prId,
+  releasePullRequestLifecycle,
+} from "#pr";
+import {
   claimNextJob,
   completeJob,
   enqueueDeliveryJob,
@@ -17,15 +26,6 @@ import {
 } from "#reminders";
 import { enqueueTestJob } from "../testing/queue.ts";
 import type { Db } from "./client.ts";
-import {
-  claimPullRequestLifecycle,
-  findAllByRepoHeadSha,
-  findAllByRepoNumbers,
-  findByRepoNumber,
-  prId,
-  releasePullRequestLifecycle,
-  upsertPullRequest,
-} from "./repositories/pullRequests.ts";
 import { jobs, messages, processedDeliveries, reminders } from "./schema.ts";
 import { createTestDb } from "./testDb.ts";
 
@@ -62,13 +62,13 @@ describe("pull_requests", () => {
   });
 
   it("upsert is idempotent on (repo, number) — updates, does not duplicate", async () => {
-    await upsertPullRequest(db, {
+    await applyPullRequestSource(db, {
       repoFullName: "unkey/api",
       number: 1423,
       githubPrId: 999,
       currentState: "draft",
     });
-    await upsertPullRequest(db, {
+    await applyPullRequestSource(db, {
       repoFullName: "unkey/api",
       number: 1423,
       githubPrId: 999,
@@ -80,14 +80,14 @@ describe("pull_requests", () => {
   });
 
   it("updates head_sha on a synchronize upsert and finds the PR by it", async () => {
-    await upsertPullRequest(db, {
+    await applyPullRequestSource(db, {
       repoFullName: "unkey/api",
       number: 1423,
       githubPrId: 999,
       currentState: "pr",
       headSha: "abc123",
     });
-    await upsertPullRequest(db, {
+    await applyPullRequestSource(db, {
       repoFullName: "unkey/api",
       number: 1423,
       githubPrId: 999,
@@ -100,18 +100,22 @@ describe("pull_requests", () => {
   });
 
   it("preserves the row id and foreign-key identity when a repository is renamed", async () => {
-    const original = await upsertPullRequest(db, {
-      repoFullName: "unkey/api",
-      number: 1423,
-      githubPrId: 999,
-      currentState: "pr",
-    });
-    const renamed = await upsertPullRequest(db, {
-      repoFullName: "unkey/platform",
-      number: 1423,
-      githubPrId: 999,
-      currentState: "pr",
-    });
+    const original = (
+      await applyPullRequestSource(db, {
+        repoFullName: "unkey/api",
+        number: 1423,
+        githubPrId: 999,
+        currentState: "pr",
+      })
+    ).row;
+    const renamed = (
+      await applyPullRequestSource(db, {
+        repoFullName: "unkey/platform",
+        number: 1423,
+        githubPrId: 999,
+        currentState: "pr",
+      })
+    ).row;
 
     expect(renamed.id).toBe(original.id);
     expect(await findByRepoNumber(db, "unkey/api", 1423)).toBeUndefined();
@@ -119,19 +123,19 @@ describe("pull_requests", () => {
   });
 
   it("finds repository-scoped PR numbers in caller order", async () => {
-    await upsertPullRequest(db, {
+    await applyPullRequestSource(db, {
       repoFullName: "unkey/api",
       number: 7,
       githubPrId: 700,
       currentState: "pr",
     });
-    await upsertPullRequest(db, {
+    await applyPullRequestSource(db, {
       repoFullName: "unkey/api",
       number: 9,
       githubPrId: 900,
       currentState: "pr",
     });
-    await upsertPullRequest(db, {
+    await applyPullRequestSource(db, {
       repoFullName: "other/api",
       number: 7,
       githubPrId: 701,
@@ -185,7 +189,7 @@ describe("dedupe", () => {
 
 describe("reminders", () => {
   const seedPr = () =>
-    upsertPullRequest(db, {
+    applyPullRequestSource(db, {
       repoFullName: "unkey/api",
       number: 1,
       githubPrId: 1,

@@ -4,7 +4,7 @@ import {
   findById,
   listOpenPullRequestsForReconciliation,
   listRecentlyClosedPullRequests,
-} from "../db/repositories/pullRequests.ts";
+} from "#pr";
 import type { PullRequestRow } from "../db/schema.ts";
 import {
   GithubRateLimitExhaustedError,

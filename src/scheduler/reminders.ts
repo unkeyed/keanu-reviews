@@ -1,6 +1,7 @@
 import { isTerminal } from "#events";
 import { findByGithubId } from "#identity";
 import { type Logger, errMessage } from "#lib";
+import { findById } from "#pr";
 import {
   cancelForReviewer,
   cancelReminderClaim,
@@ -15,7 +16,6 @@ import {
 } from "#reminders";
 import { type SlackGateway, channelSink, createLedger, keys } from "#slack";
 import type { Db } from "../db/client.ts";
-import { findById } from "../db/repositories/pullRequests.ts";
 import type { PullRequestRow } from "../db/schema.ts";
 import type { CiReadinessFetcher } from "../github/users.ts";
 import type { ReviewApprovalFetcher } from "../github/users.ts";

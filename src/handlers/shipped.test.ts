@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLogger } from "#lib";
+import { applyPullRequestSource, prId } from "#pr";
 import type { Db } from "../db/client.ts";
-import { prId, upsertPullRequest } from "../db/repositories/pullRequests.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { notifyShipped } from "./shipped.ts";
@@ -15,7 +15,7 @@ beforeEach(async () => {
   db = t.db;
   close = () => t.client.close();
   slack = new FakeSlackGateway();
-  await upsertPullRequest(db, {
+  await applyPullRequestSource(db, {
     repoFullName: "unkey/api",
     number: 1423,
     githubPrId: 999,

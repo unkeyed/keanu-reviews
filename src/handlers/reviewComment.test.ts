@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { upsertIdentity } from "#identity";
 import { createLogger } from "#lib";
+import { applyPullRequestSource, setChannel } from "#pr";
 import type { Db } from "../db/client.ts";
-import { setChannel, upsertPullRequest } from "../db/repositories/pullRequests.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { type ReviewCommentPayload, reviewCommentEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
@@ -56,12 +56,14 @@ const payload = (over: Partial<ReviewCommentPayload["comment"]> = {}): ReviewCom
 });
 
 const seedChannel = async () => {
-  const row = await upsertPullRequest(db, {
-    repoFullName: "unkey/api",
-    number: 1423,
-    githubPrId: 999,
-    currentState: "pr",
-  });
+  const row = (
+    await applyPullRequestSource(db, {
+      repoFullName: "unkey/api",
+      number: 1423,
+      githubPrId: 999,
+      currentState: "pr",
+    })
+  ).row;
   await setChannel(db, row.id, "C1", "ts-root");
 };
 

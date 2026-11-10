@@ -1,12 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, or } from "drizzle-orm";
+import { type Db, type PullRequestRow, pullRequestLifecycleClaims, pullRequests } from "#db";
 import type { PrState } from "#events";
-import type { Db } from "../client.ts";
-import { type PullRequestRow, pullRequestLifecycleClaims, pullRequests } from "../schema.ts";
 
 export const prId = (repoFullName: string, number: number): string => `${repoFullName}#${number}`;
 
-export interface UpsertPrInput {
+export interface PrSourceInput {
   repoFullName: string;
   number: number;
   githubPrId: number;
@@ -18,16 +17,16 @@ export interface UpsertPrInput {
   sourceArrivalKey?: string | null;
 }
 
-interface PullRequestSourceInput extends UpsertPrInput {
-  sourceUpdatedAt: Date;
-}
-
-interface UpsertResult {
+interface SourceResult {
   row: PullRequestRow;
   sourceAccepted: boolean;
 }
 
-async function upsert(db: Db, input: UpsertPrInput): Promise<UpsertResult> {
+/**
+ * Apply a versioned GitHub snapshot, rejecting one older than the stored source
+ * version. Idempotent on GitHub's immutable PR id; preserves the stable row id.
+ */
+export async function applyPullRequestSource(db: Db, input: PrSourceInput): Promise<SourceResult> {
   const id = prId(input.repoFullName, input.number);
   const now = new Date();
   const values = {
@@ -86,19 +85,6 @@ async function upsert(db: Db, input: UpsertPrInput): Promise<UpsertResult> {
   const existing = await findByGithubPrId(db, input.githubPrId);
   if (!existing) throw new Error(`PR upsert returned no row for GitHub PR ${input.githubPrId}`);
   return { row: existing, sourceAccepted: false };
-}
-
-/** Idempotent on GitHub's immutable PR id; preserves the stable internal row id. */
-export async function upsertPullRequest(db: Db, input: UpsertPrInput): Promise<PullRequestRow> {
-  return (await upsert(db, input)).row;
-}
-
-/** Apply a versioned GitHub snapshot, rejecting snapshots older than the stored source version. */
-export async function applyPullRequestSource(
-  db: Db,
-  input: PullRequestSourceInput,
-): Promise<UpsertResult> {
-  return upsert(db, input);
 }
 
 export const PULL_REQUEST_LIFECYCLE_LEASE_MS = 5 * 60_000;
@@ -189,13 +175,6 @@ export async function setChannel(
       ...(channelNameVersion !== undefined ? { channelNameVersion } : {}),
       updatedAt: new Date(),
     })
-    .where(eq(pullRequests.id, id));
-}
-
-export async function updateState(db: Db, id: string, state: PrState): Promise<void> {
-  await db
-    .update(pullRequests)
-    .set({ currentState: state, updatedAt: new Date() })
     .where(eq(pullRequests.id, id));
 }
 
