@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Db } from "../client.ts";
-import { githubLinkConfirmations, oauthStateNonces } from "../schema.ts";
-import { createTestDb } from "../testDb.ts";
-import { confirmGithubLink, createGithubLinkConfirmation } from "./githubLinks.ts";
-import { findByGithubId, upsertIdentity } from "./identities.ts";
+import type { Db } from "#db";
+import { githubLinkConfirmations, oauthStateNonces } from "#db";
+import { createTestDb } from "../db/testDb.ts";
+import { confirmGithubLink, createGithubLinkConfirmation } from "./store.ts";
+import { findByGithubId, upsertIdentity } from "./store.ts";
 
 const NOW = new Date("2026-08-11T12:00:00Z");
 const CODE = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB";

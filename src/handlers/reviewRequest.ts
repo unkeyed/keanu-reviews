@@ -1,9 +1,9 @@
 import { type GithubActor, type PullRequestEvent, isTerminal } from "#events";
+import { type GithubEmailFetcher, displayName, resolveSlackUser } from "#identity";
 import { Retry } from "#lib";
 import { channelSink, createLedger, keys } from "#slack";
 import { findReminderForReviewer } from "../db/repositories/reminders.ts";
 import type { PullRequestRow } from "../db/schema.ts";
-import { type GithubEmailFetcher, displayName, resolveSlackUser } from "../identity/resolve.ts";
 import { inviteToChannel } from "./invites.ts";
 import { type PrHandlerDeps, ensurePullRequestChannel } from "./pullRequest.ts";
 

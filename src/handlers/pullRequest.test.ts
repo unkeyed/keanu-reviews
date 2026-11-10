@@ -1,9 +1,9 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { upsertIdentity } from "#identity";
 import { Retry, createLogger } from "#lib";
 import { SlackApiError } from "#slack";
 import type { Db } from "../db/client.ts";
-import { upsertIdentity } from "../db/repositories/identities.ts";
 import { findByRepoNumber, prId } from "../db/repositories/pullRequests.ts";
 import { scheduleReminder } from "../db/repositories/reminders.ts";
 import { pullRequests, reminders } from "../db/schema.ts";

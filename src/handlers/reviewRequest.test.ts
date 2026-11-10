@@ -1,8 +1,8 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { upsertIdentity } from "#identity";
 import { createLogger } from "#lib";
 import type { Db } from "../db/client.ts";
-import { upsertIdentity } from "../db/repositories/identities.ts";
 import { setChannel, upsertPullRequest } from "../db/repositories/pullRequests.ts";
 import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";

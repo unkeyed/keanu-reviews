@@ -1,6 +1,6 @@
 import type { SlackGateway } from "#slack";
 import type { Db } from "../db/client.ts";
-import { upsertIdentity } from "../db/repositories/identities.ts";
+import { upsertIdentity } from "./store.ts";
 
 /** Resolve a GitHub login to its immutable numeric id (read-only). */
 export type GithubUserFetcher = (

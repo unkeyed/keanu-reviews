@@ -1,10 +1,10 @@
 import type { Hono } from "hono";
+import { deleteSlackUserToken, getSlackUserTokenRow } from "#identity";
 import { type Logger, errMessage } from "#lib";
 import type { SlackGateway } from "#slack";
 import type { PrForShaFetcher } from "../ci/status.ts";
 import type { Config } from "../config.ts";
 import type { Db } from "../db/client.ts";
-import { deleteSlackUserToken, getSlackUserTokenRow } from "../db/repositories/slackUserTokens.ts";
 import { createGithubAttachmentMirror } from "../github/attachments.ts";
 import type { InstallationAuth } from "../github/auth.ts";
 import { createPrCommenter } from "../github/comments.ts";

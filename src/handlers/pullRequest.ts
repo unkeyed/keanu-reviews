@@ -6,6 +6,7 @@ import {
   isTerminal,
   nextState,
 } from "#events";
+import { type GithubEmailFetcher, displayName, resolveSlackUser } from "#identity";
 import { type Logger, Retry, errMessage, leaseWaitMs } from "#lib";
 import {
   type Ledger,
@@ -35,7 +36,6 @@ import { cancelForPr } from "../db/repositories/reminders.ts";
 import type { ImageEmbedder } from "../github/attachments.ts";
 import type { PrCommenter } from "../github/comments.ts";
 import type { CiReadinessFetcher } from "../github/users.ts";
-import { type GithubEmailFetcher, displayName, resolveSlackUser } from "../identity/resolve.ts";
 import { slackChannelUrl } from "../slack/links.ts";
 import { CURRENT_CHANNEL_NAME_VERSION, channelName } from "../slack/naming.ts";
 import { inviteToChannel } from "./invites.ts";

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { LinkDeps } from "../identity/link.ts";
+import type { LinkDeps } from "#identity";
 import {
   IdentityImportInputError,
   parseIdentityImport,

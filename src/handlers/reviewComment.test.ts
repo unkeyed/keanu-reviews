@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { upsertIdentity } from "#identity";
 import { createLogger } from "#lib";
 import type { Db } from "../db/client.ts";
-import { upsertIdentity } from "../db/repositories/identities.ts";
 import { setChannel, upsertPullRequest } from "../db/repositories/pullRequests.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { type ReviewCommentPayload, reviewCommentEvent } from "../testing/events.ts";

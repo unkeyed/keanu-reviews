@@ -1,3 +1,4 @@
+import { resolveSlackUser } from "#identity";
 import { errMessage } from "#lib";
 import {
   type Delivered,
@@ -10,7 +11,6 @@ import {
   render,
 } from "#slack";
 import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
-import { resolveSlackUser } from "../identity/resolve.ts";
 import type { PrHandlerDeps } from "./pullRequest.ts";
 
 /**

@@ -1,5 +1,5 @@
+import { findByGithubLogin } from "#identity";
 import { errMessage } from "#lib";
-import { findByGithubLogin } from "../db/repositories/identities.ts";
 import { inviteToChannel } from "./invites.ts";
 import type { PrHandlerDeps } from "./pullRequest.ts";
 

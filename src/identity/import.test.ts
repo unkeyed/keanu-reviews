@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../db/client.ts";
-import { findByGithubId } from "../db/repositories/identities.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { importIdentities } from "./link.ts";
+import { findByGithubId } from "./store.ts";
 
 let db: Db;
 let slack: FakeSlackGateway;

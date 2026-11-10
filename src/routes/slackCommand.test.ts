@@ -1,9 +1,9 @@
 import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createGithubLinkConfirmation } from "#identity";
+import { findByGithubId } from "#identity";
 import { createLogger } from "#lib";
 import type { Db } from "../db/client.ts";
-import { createGithubLinkConfirmation } from "../db/repositories/githubLinks.ts";
-import { findByGithubId } from "../db/repositories/identities.ts";
 import { githubLinkConfirmations } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { verifyOAuthState } from "../github/oauth.ts";

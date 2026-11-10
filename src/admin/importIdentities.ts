@@ -1,18 +1,13 @@
 import { readFile, stat } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { type ImportResult, type ImportRow, type LinkDeps, importIdentities } from "#identity";
 import { createSlackGateway } from "#slack";
 import { type Config, ConfigError, loadConfig } from "../config.ts";
 import { createDb } from "../db/client.ts";
 import { createInstallationAuth } from "../github/auth.ts";
 import { octokitMintFn } from "../github/octokitAuth.ts";
 import { createGithubUserFetcher } from "../github/users.ts";
-import {
-  type ImportResult,
-  type ImportRow,
-  type LinkDeps,
-  importIdentities,
-} from "../identity/link.ts";
 
 const MAX_IMPORT_BYTES = 1_048_576;
 const MAX_IMPORT_ROWS = 10_000;

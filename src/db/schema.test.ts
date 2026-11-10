@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { findByGithubId, upsertIdentity } from "#identity";
 import {
   claimNextJob,
   completeJob,
@@ -9,7 +10,6 @@ import {
 } from "#queue";
 import { enqueueTestJob } from "../testing/queue.ts";
 import type { Db } from "./client.ts";
-import { findByGithubId, upsertIdentity } from "./repositories/identities.ts";
 import {
   claimPullRequestLifecycle,
   findAllByRepoHeadSha,

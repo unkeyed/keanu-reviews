@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseEvent } from "#events";
+import { upsertIdentity } from "#identity";
 import { createLogger } from "#lib";
 import type { CiReadiness } from "../ci/status.ts";
 import type { Db } from "../db/client.ts";
-import { upsertIdentity } from "../db/repositories/identities.ts";
 import { setChannel, updateState, upsertPullRequest } from "../db/repositories/pullRequests.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { type CheckRunPayload, checkRunEvent, pullRequestEvent } from "../testing/events.ts";

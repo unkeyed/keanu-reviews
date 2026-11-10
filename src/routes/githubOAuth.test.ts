@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { findByGithubId } from "#identity";
 import { createLogger } from "#lib";
 import type { Db } from "../db/client.ts";
-import { findByGithubId } from "../db/repositories/identities.ts";
 import { githubLinkConfirmations, oauthStateNonces } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createOAuthState } from "../github/oauth.ts";

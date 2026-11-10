@@ -1,7 +1,7 @@
 import { Hono } from "hono";
+import { completeSlackTokenAuthorization } from "#identity";
 import type { Logger } from "#lib";
 import type { Db } from "../db/client.ts";
-import { completeSlackTokenAuthorization } from "../db/repositories/slackUserTokens.ts";
 import { verifyOAuthState } from "../github/oauth.ts";
 import {
   SLACK_LEAVE_USER_SCOPE,

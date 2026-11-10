@@ -1,11 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Db } from "../client.ts";
-import { createTestDb } from "../testDb.ts";
-import {
-  deleteSlackUserToken,
-  getSlackUserTokenRow,
-  upsertSlackUserToken,
-} from "./slackUserTokens.ts";
+import type { Db } from "#db";
+import { createTestDb } from "../db/testDb.ts";
+import { deleteSlackUserToken, getSlackUserTokenRow, upsertSlackUserToken } from "./store.ts";
 
 let db: Db;
 let close: () => Promise<void>;

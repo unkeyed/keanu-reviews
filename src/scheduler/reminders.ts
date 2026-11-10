@@ -1,8 +1,8 @@
 import { isTerminal } from "#events";
+import { findByGithubId } from "#identity";
 import { type Logger, errMessage } from "#lib";
 import { type SlackGateway, channelSink, createLedger, keys } from "#slack";
 import type { Db } from "../db/client.ts";
-import { findByGithubId } from "../db/repositories/identities.ts";
 import { findById } from "../db/repositories/pullRequests.ts";
 import {
   cancelForReviewer,
