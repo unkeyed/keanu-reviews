@@ -1,9 +1,6 @@
 import type { Logger } from "#lib";
-import type { SlackGateway } from "#slack";
+import { type PrView, type SlackGateway, channelSink, createLedger, keys } from "#slack";
 import type { Db } from "../db/client.ts";
-import { findMessageEffect } from "../db/repositories/messages.ts";
-import { sanitizeLinkLabel, sanitizeMrkdwn } from "../slack/blocks.ts";
-import { deliverSlackMessage } from "../slack/deliver.ts";
 
 export interface ShippedDeps {
   db: Db;
@@ -15,11 +12,9 @@ export interface ShippedDeps {
 
 export interface ShippedInput {
   prId: string;
-  repoFullName: string;
-  number: number;
-  title: string;
-  htmlUrl: string;
-  authorMention: string; // plain Slack display name (no @-ping), else the login
+  pr: PrView;
+  /** The author's plain Slack display name, else login. Looked up only when posting. */
+  authorLabel: () => Promise<string>;
 }
 
 /**
@@ -29,8 +24,9 @@ export interface ShippedInput {
  */
 export async function notifyShipped(deps: ShippedDeps, input: ShippedInput): Promise<void> {
   if (!deps.shippedChannel) return;
-  const effect = { prId: input.prId, kind: "shipped", githubEventRef: "shipped" };
-  if ((await findMessageEffect(deps.db, effect))?.status === "sent") return;
+  const ledger = createLedger(deps.db);
+  const key = keys.shipped(input.prId);
+  if (await ledger.sentTs(key)) return;
 
   const channelId = await deps.slack.resolveChannel(deps.shippedChannel);
   if (!channelId) {
@@ -40,18 +36,7 @@ export async function notifyShipped(deps: ShippedDeps, input: ShippedInput): Pro
     return;
   }
 
-  const label = sanitizeLinkLabel(`${input.repoFullName}#${input.number}`);
-  await deliverSlackMessage(deps.db, deps.slack, effect, {
-    channel: channelId,
-    text: sanitizeMrkdwn(`${input.repoFullName}#${input.number} ${input.title} has shipped`),
-    blocks: [
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `🚢 *<${input.htmlUrl}|${label}> ${sanitizeMrkdwn(input.title)}* has shipped — by ${input.authorMention}`,
-        },
-      },
-    ],
-  });
+  await ledger.deliver(key, channelSink(deps.slack, channelId), async () => ({
+    message: { kind: "shipped", pr: input.pr, authorLabel: await input.authorLabel() },
+  }));
 }

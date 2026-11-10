@@ -26,11 +26,14 @@ afterEach(() => close());
 
 const input = () => ({
   prId: prId("unkey/api", 1423),
-  repoFullName: "unkey/api",
-  number: 1423,
-  title: "Add auth",
-  htmlUrl: "https://github.com/unkey/api/pull/1423",
-  authorMention: "<@U100>",
+  pr: {
+    repo: "unkey/api",
+    number: 1423,
+    title: "Add auth",
+    url: "https://github.com/unkey/api/pull/1423",
+    authorLogin: "oz",
+  },
+  authorLabel: async () => "Oz Perkins",
 });
 
 const deps = (shippedChannel?: string) => ({
@@ -48,7 +51,7 @@ describe("notifyShipped (R12)", () => {
     const text = JSON.stringify(msg?.blocks);
     expect(text).toContain("unkey/api#1423");
     expect(text).toContain("has shipped");
-    expect(text).toContain("<@U100>");
+    expect(text).toContain("has shipped — by Oz Perkins");
   });
 
   it("resolves a channel name to its id", async () => {

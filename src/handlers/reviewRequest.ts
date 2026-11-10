@@ -1,14 +1,9 @@
 import { Retry } from "#lib";
+import { channelSink, createLedger, keys } from "#slack";
 import { findReminderForReviewer } from "../db/repositories/reminders.ts";
 import type { PullRequestRow } from "../db/schema.ts";
 import { isTerminal } from "../domain/prState.ts";
-import {
-  type GithubEmailFetcher,
-  resolveSlackUser,
-  reviewerDisplayLabel,
-} from "../identity/resolve.ts";
-import { sanitizeInlineCode, sanitizeMrkdwn } from "../slack/blocks.ts";
-import { deliverSlackMessage } from "../slack/deliver.ts";
+import { type GithubEmailFetcher, displayName, resolveSlackUser } from "../identity/resolve.ts";
 import { inviteToChannel } from "./invites.ts";
 import {
   type PrHandlerDeps,
@@ -312,10 +307,8 @@ async function sendReviewAlert(
 
   // Generation changes only when a new request replaces a cancelled one, so
   // check_run / synchronize / ready_for_review share one Slack message.
-  const effectRef = reminder
-    ? `${reviewer.id}:${reminder.generation}`
-    : `${reviewer.id}:${source.sourceVersion}`;
-  const posted = await inviteReviewer(deps, row.id, channelId, reviewer, effectRef);
+  const round = reminder ? reminder.generation : source.sourceVersion;
+  const posted = await inviteReviewer(deps, row.id, channelId, reviewer, round);
   if (posted) await deps.onReviewAlerted?.(row.id, reviewer.id);
 }
 
@@ -326,61 +319,37 @@ function alertSource(updatedAt: string, sourceVersion: string): AlertSource {
   };
 }
 
-/** Resolve a requested reviewer to Slack and post the invite note. */
+/** Resolve a requested reviewer to Slack and post the invite note. True when it was posted now. */
 async function inviteReviewer(
   deps: ReviewRequestDeps,
   prId: string,
   channelId: string,
   reviewer: ReviewerRef,
-  effectRef: string,
+  round: number | string,
 ): Promise<boolean> {
   const { db, slack, logger } = deps;
-  const slackUserId = await resolveSlackUser(deps, {
-    githubId: reviewer.id,
-    login: reviewer.login,
-  });
-
-  if (slackUserId) {
-    // The reviewer is added to the channel (which notifies them), so we don't
-    // also ping them here — show their Slack display name as plain text.
-    const reviewerLabel = await reviewerDisplayLabel(slack, slackUserId, reviewer.login);
-    const delivered = await deliverSlackMessage(
-      db,
-      slack,
-      { prId, kind: "invite", githubEventRef: effectRef },
-      {
-        channel: channelId,
-        text: sanitizeMrkdwn(`Review requested from ${reviewer.login}`),
-        blocks: [
-          {
-            type: "section",
-            text: { type: "mrkdwn", text: `👀 Review requested from ${reviewerLabel}` },
-          },
-        ],
-      },
-      () => inviteToChannel(deps, channelId, [slackUserId], { prId, role: "reviewer" }),
-    );
-    return delivered.posted;
-  }
-
-  logger.info("reviewer identity unresolved; posting plain login", { login: reviewer.login });
-  const delivered = await deliverSlackMessage(
-    db,
-    slack,
-    { prId, kind: "invite", githubEventRef: effectRef },
-    {
-      channel: channelId,
-      text: sanitizeMrkdwn(`Review requested from ${reviewer.login}`),
-      blocks: [
-        {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: `👀 Review requested from \`${sanitizeInlineCode(reviewer.login)}\` _(no linked Slack user — /link-github to fix)_`,
-          },
+  const delivered = await createLedger(db).deliver(
+    keys.reviewRequest(prId, reviewer.id, round),
+    channelSink(slack, channelId),
+    async () => {
+      const slackUserId = await resolveSlackUser(deps, {
+        githubId: reviewer.id,
+        login: reviewer.login,
+      });
+      if (!slackUserId) {
+        logger.info("reviewer identity unresolved; posting plain login", { login: reviewer.login });
+        return { message: { kind: "review_request", reviewerLogin: reviewer.login } };
+      }
+      return {
+        message: {
+          kind: "review_request",
+          reviewerLogin: reviewer.login,
+          reviewerLabel: await displayName(slack, slackUserId, reviewer.login),
         },
-      ],
+        beforePost: () =>
+          inviteToChannel(deps, channelId, [slackUserId], { prId, role: "reviewer" }),
+      };
     },
   );
-  return delivered.posted;
+  return delivered.status === "posted";
 }

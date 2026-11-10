@@ -4,7 +4,7 @@ import {
   SLACK_SECTION_TEXT_LIMIT,
   type SlackBlock,
   sanitizeLinkLabel,
-} from "./blocks.ts";
+} from "./catalog.ts";
 import { SlackApiError } from "./errors.ts";
 import { Pacer, type SleepFn, withRateLimitRetry } from "./pacer.ts";
 

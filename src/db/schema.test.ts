@@ -11,13 +11,6 @@ import {
   resetFailedJob,
 } from "./repositories/jobs.ts";
 import {
-  claimMessageEffect,
-  completeMessageEffect,
-  findMessageEffect,
-  messageClientMsgId,
-  messageNaturalKey,
-} from "./repositories/messages.ts";
-import {
   claimPullRequestLifecycle,
   findAllByRepoHeadSha,
   findAllByRepoNumbers,
@@ -377,86 +370,5 @@ describe("jobs", () => {
     expect(reset?.raw).toEqual({ secret: "private-repo-diff" });
     expect(reset?.availableAt.getTime()).toBe(now + 2_000);
     expect(await resetFailedJob(db, job.id)).toBe(false);
-  });
-});
-
-describe("messages", () => {
-  const seedPr = () =>
-    upsertPullRequest(db, {
-      repoFullName: "unkey/api",
-      number: 1,
-      githubPrId: 1,
-      currentState: "pr",
-    });
-
-  it("uses a stable natural key and deterministic Slack client_msg_id", async () => {
-    await seedPr();
-    const input = {
-      prId: prId("unkey/api", 1),
-      kind: "lifecycle",
-      githubEventRef: "opened:sha-1",
-    };
-    const claim = await claimMessageEffect(db, input, { now: new Date(1_000) });
-    expect(claim?.naturalKey).toBe(messageNaturalKey(input));
-    expect(claim?.clientMsgId).toBe(messageClientMsgId(messageNaturalKey(input)));
-    expect(claim?.clientMsgId).toMatch(/^[0-9a-f-]{36}$/);
-    expect(claim?.slackTs).toBeNull();
-    expect(claim?.status).toBe("sending");
-  });
-
-  it("reclaims expired sending effects and fences stale completion", async () => {
-    await seedPr();
-    const input = {
-      prId: prId("unkey/api", 1),
-      kind: "review_comment",
-      githubEventRef: "55",
-    };
-    const stale = await claimMessageEffect(db, input, { now: new Date(1_000), leaseMs: 5_000 });
-    expect(stale).toBeDefined();
-    expect(
-      await claimMessageEffect(db, input, { now: new Date(5_999), leaseMs: 5_000 }),
-    ).toBeUndefined();
-    const current = await claimMessageEffect(db, input, {
-      now: new Date(6_000),
-      leaseMs: 5_000,
-    });
-    if (!stale || !current) throw new Error("expected effect claims");
-    expect(current.clientMsgId).toBe(stale.clientMsgId);
-    expect(await completeMessageEffect(db, stale, "stale-ts")).toBe(false);
-    expect(await completeMessageEffect(db, current, "real-ts")).toBe(true);
-    expect((await findMessageEffect(db, input))?.slackTs).toBe("real-ts");
-    expect(await claimMessageEffect(db, input)).toBeUndefined();
-  });
-
-  it("keeps a message effect fenced beyond the worker's default job lease", async () => {
-    await seedPr();
-    const input = {
-      prId: prId("unkey/api", 1),
-      kind: "review",
-      githubEventRef: "77",
-    };
-    const first = await claimMessageEffect(db, input, { now: new Date(1_000) });
-    expect(first).toBeDefined();
-
-    expect(await claimMessageEffect(db, input, { now: new Date(61_000) })).toBeUndefined();
-    expect(await claimMessageEffect(db, input, { now: new Date(121_000) })).toBeDefined();
-  });
-
-  it("keeps primary keys database-safe while natural keys deduplicate effects", async () => {
-    await upsertPullRequest(db, {
-      repoFullName: "unkey/api",
-      number: 1,
-      githubPrId: 1,
-      currentState: "pr",
-    });
-    const input = { prId: prId("unkey/api", 1), kind: "root", githubEventRef: "root" };
-    const claim = await claimMessageEffect(db, input);
-    if (!claim) throw new Error("expected message claim");
-    await completeMessageEffect(db, claim, "1.0");
-
-    const [row] = await db.select().from(messages);
-    expect(row?.id).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-    );
   });
 });

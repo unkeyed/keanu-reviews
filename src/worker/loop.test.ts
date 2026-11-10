@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Retry, createLogger } from "#lib";
 import type { Db } from "../db/client.ts";
 import { claimNextJob, enqueueJob } from "../db/repositories/jobs.ts";
-import { claimMessageEffect } from "../db/repositories/messages.ts";
 import {
   claimPullRequestLifecycle,
   prId,
@@ -12,11 +11,25 @@ import {
 import { jobs } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { type PullRequestPayload, handlePullRequest } from "../handlers/pullRequest.ts";
-import { deliverSlackMessage } from "../slack/deliver.ts";
+import { keys } from "../slack/catalog.ts";
+import { channelSink, claim, createLedger } from "../slack/ledger.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { createWorker, startWorkerLoop } from "./loop.ts";
 
 let db: Db;
+
+const opened = async () => ({
+  message: {
+    kind: "root" as const,
+    pr: {
+      repo: "unkey/api",
+      number: 1,
+      title: "opened",
+      url: "https://github.com/unkey/api/pull/1",
+      authorLogin: "oz",
+    },
+  },
+});
 let close: () => Promise<void>;
 
 beforeEach(async () => {
@@ -154,15 +167,15 @@ describe("worker retry hints", () => {
       githubPrId: 1,
       currentState: "pr",
     });
-    const effect = { prId: prId("unkey/api", 1), kind: "lifecycle", githubEventRef: "opened" };
-    await claimMessageEffect(db, effect);
+    const effect = keys.root(prId("unkey/api", 1));
+    await claim(db, effect, new Date());
     const slack = new FakeSlackGateway();
     const job = await enqueue("effect-held");
     const worker = createWorker({
       db,
       logger: createLogger("error"),
       router: async () => {
-        await deliverSlackMessage(db, slack, effect, { channel: "C1", text: "opened" });
+        await createLedger(db).deliver(effect, channelSink(slack, "C1"), opened);
       },
     });
 
@@ -170,7 +183,7 @@ describe("worker retry hints", () => {
 
     expect(settled?.status).toBe("done");
     expect(Date.now()).toBeGreaterThanOrEqual(start + 2 * 60_000);
-    expect(slack.messages.map((m) => m.text)).toEqual(["opened"]);
+    expect(slack.messages.map((m) => m.text)).toEqual(["PR #1: opened"]);
   });
 
   it("retries within seconds while a live run holds the Slack effect", async () => {
@@ -182,17 +195,14 @@ describe("worker retry hints", () => {
       githubPrId: 1,
       currentState: "pr",
     });
-    const effect = { prId: prId("unkey/api", 1), kind: "lifecycle", githubEventRef: "opened" };
-    await claimMessageEffect(db, effect);
+    const effect = keys.root(prId("unkey/api", 1));
+    await claim(db, effect, new Date());
     const job = await enqueue("effect-live");
     const worker = createWorker({
       db,
       logger: createLogger("error"),
       router: async () => {
-        await deliverSlackMessage(db, new FakeSlackGateway(), effect, {
-          channel: "C1",
-          text: "opened",
-        });
+        await createLedger(db).deliver(effect, channelSink(new FakeSlackGateway(), "C1"), opened);
       },
     });
 

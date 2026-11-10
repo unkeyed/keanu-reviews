@@ -1,9 +1,16 @@
 import { errMessage } from "#lib";
-import { type DeliveredSlackMessage, SlackApiError, deliverSlackMessage } from "#slack";
-import { type MessageEffectInput, findMessageEffect } from "../db/repositories/messages.ts";
+import {
+  type Delivered,
+  type EffectKey,
+  type Message,
+  type Outgoing,
+  SlackApiError,
+  channelSink,
+  createLedger,
+  render,
+} from "#slack";
 import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
 import { resolveSlackUser } from "../identity/resolve.ts";
-import type { SlackMessage } from "../slack/deliver.ts";
 import type { PrHandlerDeps } from "./pullRequest.ts";
 
 /**
@@ -51,41 +58,59 @@ export async function resolveMessageAuthor(
   return { slackUserId, name: profile?.name, iconUrl: profile?.iconUrl, userToken };
 }
 
+const postsAsUser = (deps: PrHandlerDeps, author: MessageAuthor) =>
+  Boolean(author.userToken && author.slackUserId && deps.authorPoster);
+
 /**
  * Deliver a mirrored message, authored as the real user when we hold a usable
- * token. `render(mode)` builds the message body: "user" mode omits the redundant
- * author label (the post IS from them); "bot" mode is today's behavior (name +
- * avatar spoof for comments, or a plain name label for reviews). If the user's
- * token turns out dead at post time, it's dropped and the "bot" render is
- * delivered instead — reusing the same message-effect claim (idempotent retry).
+ * token. `build` runs only if the message was not already sent; it resolves
+ * the author and returns `outgoing(mode)`. "user" mode omits the redundant
+ * author label (the post IS from them); "bot" mode is the bot post, spoofing
+ * the author's name and avatar for comments. If the user's token turns out dead
+ * at post time, it's dropped and the "bot" message is delivered instead under
+ * the same key and client_msg_id.
  */
-export async function deliverAuthoredMessage(
+export async function deliverAuthored(
   deps: PrHandlerDeps,
-  effect: MessageEffectInput,
-  author: MessageAuthor,
-  render: (mode: "user" | "bot") => SlackMessage,
-): Promise<DeliveredSlackMessage> {
-  if (author.userToken && author.slackUserId && deps.authorPoster) {
-    try {
-      return await deliverSlackMessage(deps.db, deps.slack, effect, {
-        ...render("user"),
-        poster: { kind: "user", userId: author.slackUserId, token: author.userToken },
-      });
-    } catch (error) {
-      if (!(error instanceof SlackApiError && error.deadToken)) throw error;
-      // The token was revoked/expired: drop it so we don't retry it, then fall
-      // through to a bot-authored post under the released effect claim.
-      await deps.authorPoster.onInvalidToken(author.slackUserId);
-    }
+  key: EffectKey,
+  channelId: string,
+  build: () => Promise<{
+    author: MessageAuthor;
+    outgoing: (mode: "user" | "bot") => Outgoing | null;
+  }>,
+): Promise<Delivered> {
+  const ledger = createLedger(deps.db);
+  const sink = channelSink(deps.slack, channelId);
+  let built: Awaited<ReturnType<typeof build>> | undefined;
+  const once = async () => {
+    built ??= await build();
+    return built;
+  };
+  let triedUser: string | undefined;
+  try {
+    return await ledger.deliver(key, sink, async () => {
+      const { author, outgoing } = await once();
+      const { slackUserId: userId, userToken: token } = author;
+      if (!deps.authorPoster || !userId || !token) return outgoing("bot");
+      const out = outgoing("user");
+      if (!out) return null;
+      triedUser = userId;
+      return { ...out, poster: { kind: "user", userId, token } };
+    });
+  } catch (error) {
+    if (!triedUser || !deps.authorPoster) throw error;
+    if (!(error instanceof SlackApiError && error.deadToken)) throw error;
+    // The token was revoked/expired: drop it so we don't retry it, then post
+    // as the bot under the released claim.
+    await deps.authorPoster.onInvalidToken(triedUser);
+    return ledger.deliver(key, sink, async () => (await once()).outgoing("bot"));
   }
-  return deliverSlackMessage(deps.db, deps.slack, effect, render("bot"));
 }
 
 /**
  * Sync a GitHub comment edit onto its already-mirrored Slack message via
- * chat.update. Re-resolves authorship the same way the original post did, so a
- * user-authored message is edited with the user's token and a bot-authored one
- * with the bot token (Slack requires the editing token to match the author).
+ * chat.update, with the token that posted it (Slack requires the editing token
+ * to match the author).
  *
  * Best-effort: an edit that can't be applied — authorship changed since the
  * original post, the message was deleted, or a transient Slack failure — must
@@ -96,15 +121,14 @@ export async function updateAuthoredMessage(
   slackTs: string,
   channel: string,
   author: MessageAuthor,
-  render: (mode: "user" | "bot") => SlackMessage,
+  message: (mode: "user" | "bot") => Message,
 ): Promise<void> {
-  const asUser = Boolean(author.userToken && author.slackUserId && deps.authorPoster);
-  const content = render(asUser ? "user" : "bot");
+  const asUser = postsAsUser(deps, author);
   try {
     await deps.slack.update(
       channel,
       slackTs,
-      { text: content.text, blocks: content.blocks, images: content.images },
+      render(message(asUser ? "user" : "bot")),
       asUser ? author.userToken : undefined,
     );
   } catch (error) {
@@ -128,28 +152,26 @@ export async function deleteMirroredComment(
   opts: {
     repoFullName: string;
     number: number;
-    kind: string;
-    commentId: number;
+    key: (prId: string) => EffectKey;
     user: { id: number; login: string };
   },
 ): Promise<void> {
   const row = await findByRepoNumber(deps.db, opts.repoFullName, opts.number);
   if (!row?.channelId) return; // PR never tracked / no channel → nothing mirrored
-  const existing = await findMessageEffect(deps.db, {
-    prId: row.id,
-    kind: opts.kind,
-    githubEventRef: String(opts.commentId),
-  });
-  if (existing?.status !== "sent" || !existing.slackTs) return; // never mirrored (or still in flight)
+  const slackTs = await createLedger(deps.db).sentTs(opts.key(row.id));
+  if (!slackTs) return; // never mirrored (or still in flight)
 
   const author = await resolveMessageAuthor(deps, opts.user);
-  const asUser = Boolean(author.userToken && author.slackUserId && deps.authorPoster);
   try {
-    await deps.slack.remove(row.channelId, existing.slackTs, asUser ? author.userToken : undefined);
+    await deps.slack.remove(
+      row.channelId,
+      slackTs,
+      postsAsUser(deps, author) ? author.userToken : undefined,
+    );
   } catch (error) {
     deps.logger.warn("failed to sync comment deletion to Slack", {
       channel: row.channelId,
-      ts: existing.slackTs,
+      ts: slackTs,
       err: errMessage(error),
     });
   }

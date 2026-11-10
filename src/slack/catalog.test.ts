@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  type Message,
   cleanGithubMarkdown,
   extractEmbeddedImages,
-  reviewCommentBlocks,
+  render,
   sanitizeMrkdwn,
-} from "./blocks.ts";
+} from "./catalog.ts";
 
 describe("cleanGithubMarkdown", () => {
   it("strips a Pullfrog-style body down to the human-readable review", () => {
@@ -134,32 +135,111 @@ describe("sanitizeMrkdwn (KTD11)", () => {
   });
 });
 
-describe("reviewCommentBlocks", () => {
+type Block = { type: string; text?: { text: string }; elements?: { text: string }[] };
+const blocksOf = (message: Message) => render(message).blocks as Block[];
+
+describe("render review_comment", () => {
+  const comment = (over: Partial<Extract<Message, { kind: "review_comment" }>> = {}): Message => ({
+    kind: "review_comment",
+    path: "a.ts",
+    line: 5,
+    body: "look here <!channel>",
+    url: "https://github.com/o/r/blob/sha/a.ts#L5",
+    label: "flo",
+    images: [],
+    ...over,
+  });
+
   it("quotes a sanitized body and adds an Open-at-line context row", () => {
-    const blocks = reviewCommentBlocks({
-      body: "look here <!channel>",
-      permalink: "https://github.com/o/r/blob/sha/a.ts#L5",
-      path: "a.ts",
-      line: 5,
-      authorMention: "<@U1>",
-    }) as { type: string; text?: { text: string }; elements?: { text: string }[] }[];
-    const serialized = JSON.stringify(blocks);
-    expect(serialized).not.toContain("<!channel>");
-    expect(blocks[1]?.elements?.[0]?.text).toContain(
-      "<https://github.com/o/r/blob/sha/a.ts#L5|Open>",
+    const blocks = blocksOf(comment());
+    expect(JSON.stringify(blocks)).not.toContain("<!channel>");
+    expect(blocks[0]?.text?.text).toBe("> look here &lt;!channel&gt;");
+    expect(blocks[1]?.elements?.[0]?.text).toBe(
+      "<https://github.com/o/r/blob/sha/a.ts#L5|Open> · `a.ts:5` · by flo",
     );
-    expect(blocks[1]?.elements?.[0]?.text).toContain("`a.ts:5`");
-    expect(blocks[1]?.elements?.[0]?.text).toContain("<@U1>");
+    expect(render(comment()).text).toBe("New review comment on a.ts:5");
+  });
+
+  it("drops the line when there is none and the label when the post shows the author", () => {
+    const blocks = blocksOf(comment({ line: null, label: undefined }));
+    expect(blocks[1]?.elements?.[0]?.text).toBe(
+      "<https://github.com/o/r/blob/sha/a.ts#L5|Open> · `a.ts`",
+    );
+  });
+
+  it("escapes a hostile label instead of passing markup through", () => {
+    const blocks = blocksOf(comment({ label: "<@U1>" }));
+    expect(blocks[1]?.elements?.[0]?.text).toContain("· by &lt;@U1&gt;");
   });
 
   it("enforces the section limit after quote prefixes are rendered", () => {
-    const blocks = reviewCommentBlocks({
-      body: "x\n".repeat(2_000),
-      permalink: "https://github.com/o/r/pull/1#discussion_r1",
-      path: "a.ts",
-      line: 5,
-      authorMention: "safe-user",
-    }) as { text?: { text?: string } }[];
+    const blocks = blocksOf(comment({ body: "x\n".repeat(2_000), label: "safe-user" }));
     expect(blocks[0]?.text?.text?.length).toBeLessThanOrEqual(3_000);
+  });
+
+  it("carries the images through for the gateway to append", () => {
+    const images = [{ kind: "link" as const, sourceUrl: "https://gh/a", alt: "a" }];
+    expect(render(comment({ images })).images).toEqual(images);
+  });
+});
+
+describe("render", () => {
+  const pr = {
+    repo: "unkey/api",
+    number: 7,
+    title: "Fix <b> & stuff",
+    url: "https://github.com/unkey/api/pull/7",
+    authorLogin: "oz",
+    headRef: "feat`x",
+    baseRef: "main",
+  };
+
+  it("escapes every name and title it shows", () => {
+    expect(blocksOf({ kind: "root", pr })[0]?.text?.text).toBe(
+      "🔀 *<https://github.com/unkey/api/pull/7|PR #7>* — Fix &lt;b&gt; &amp; stuff\noz wants to merge into `main` from `featˋx`",
+    );
+    expect(
+      blocksOf({ kind: "author_invite", authorLogin: "oz", authorLabel: "<!here>" })[0]?.text?.text,
+    ).toBe("👤 Opened by &lt;!here&gt;");
+    expect(
+      blocksOf({ kind: "review_request", reviewerLogin: "dave", reviewerLabel: "Dave <x>" })[0]
+        ?.text?.text,
+    ).toBe("👀 Review requested from Dave &lt;x&gt;");
+    expect(blocksOf({ kind: "shipped", pr, authorLabel: "Oz" })[0]?.text?.text).toBe(
+      "🚢 *<https://github.com/unkey/api/pull/7|unkey/api#7> Fix &lt;b&gt; &amp; stuff* has shipped — by Oz",
+    );
+  });
+
+  it("marks an unlinked reviewer and pings only on reminders", () => {
+    expect(blocksOf({ kind: "review_request", reviewerLogin: "dave" })[0]?.text?.text).toBe(
+      "👀 Review requested from `dave` _(no linked Slack user — /link-github to fix)_",
+    );
+    expect(blocksOf({ kind: "reminder", reviewer: "U9", hours: 12 })[0]?.text?.text).toBe(
+      "⏰ <@U9> — this PR has been waiting ~12h for your review.",
+    );
+    expect(blocksOf({ kind: "reminder", hours: 12 })[0]?.text?.text).toContain(
+      "the requested reviewer",
+    );
+  });
+
+  it("states a lifecycle change and a review verdict", () => {
+    expect(
+      blocksOf({ kind: "lifecycle", pr, action: "closed", state: "merged" })[0]?.text?.text,
+    ).toBe(
+      "*<https://github.com/unkey/api/pull/7|#7 Fix &lt;b&gt; &amp; stuff>* — `merged` · by oz",
+    );
+    const review = render({
+      kind: "review",
+      authorLogin: "flo",
+      state: "approved",
+      body: "",
+      url: "https://r",
+      label: "Flo",
+      images: [],
+    });
+    expect(review.text).toBe("Review approved by flo");
+    expect(review.blocks).toEqual([
+      { type: "section", text: { type: "mrkdwn", text: "<https://r|✅ approved> by Flo" } },
+    ]);
   });
 });

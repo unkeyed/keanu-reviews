@@ -1,18 +1,11 @@
 import { Retry } from "#lib";
-import { findMessageEffect } from "../db/repositories/messages.ts";
+import { type Message, cleanGithubMarkdown, createLedger, keys } from "#slack";
 import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
 import { isBotActor, shouldSkipActor } from "../github/actors.ts";
 import { commentImages } from "../github/attachments.ts";
 import {
-  cleanGithubMarkdown,
-  issueCommentBlocks,
-  reviewSummaryBlocks,
-  sanitizeMrkdwn,
-} from "../slack/blocks.ts";
-import type { SlackMessage } from "../slack/deliver.ts";
-import {
   deleteMirroredComment,
-  deliverAuthoredMessage,
+  deliverAuthored,
   resolveMessageAuthor,
   updateAuthoredMessage,
 } from "./authorship.ts";
@@ -66,37 +59,37 @@ export async function handleReview(
   // Cancels the reminder. A later check_run sees that cancellation and does not
   // send the review-needed alert.
   await deps.onReviewSubmitted?.(row.id, r.user.id, reviewedAt, sourceVersion);
-  const author = await resolveMessageAuthor(deps, r.user);
-  const images = await commentImages(deps, r.body ?? "", r.user);
-  // A "commented" review with no text or images after cleaning is just the wrapper
-  // GitHub emits around inline review comments — the real content arrives as
-  // review_comment events. Posting it would be an empty "💬 commented by …" line,
-  // so skip the message (the reminder is still cancelled above).
-  const isEmptyCommentWrapper =
-    r.state === "commented" && !cleanGithubMarkdown(r.body ?? "") && images.length === 0;
-  if (!isEmptyCommentWrapper) {
-    // Never ping the reviewer for their own review activity (approve, request
-    // changes, comment) — show their Slack display name as plain text instead.
-    const authorLabel = sanitizeMrkdwn(author.name ?? r.user.login);
-    await deliverAuthoredMessage(
-      deps,
-      { prId: row.id, kind: "review", githubEventRef: String(r.id) },
+  await deliverAuthored(deps, keys.review(row.id, r.id), channelId, async () => {
+    const author = await resolveMessageAuthor(deps, r.user);
+    const images = await commentImages(deps, r.body ?? "", r.user);
+    // A "commented" review with no text or images after cleaning is just the
+    // wrapper GitHub emits around inline review comments, which arrive as
+    // review_comment events. Posting it would be an empty "💬 commented by …"
+    // line, so nothing is posted (the reminder is still cancelled above).
+    const isEmptyCommentWrapper =
+      r.state === "commented" && !cleanGithubMarkdown(r.body ?? "") && images.length === 0;
+    return {
       author,
-      (mode) => ({
-        channel: channelId,
-        // Thread bot reviews under the PR root to keep the channel readable.
-        threadTs: isBotActor(r.user) ? (row.rootMessageTs ?? undefined) : undefined,
-        text: sanitizeMrkdwn(`Review ${r.state} by ${r.user.login}`),
-        blocks: reviewSummaryBlocks({
-          state: r.state,
-          body: r.body ?? "",
-          htmlUrl: r.html_url,
-          authorMention: mode === "user" ? undefined : authorLabel,
-        }),
-        images,
-      }),
-    );
-  }
+      outgoing: (mode) =>
+        isEmptyCommentWrapper
+          ? null
+          : {
+              // Thread bot reviews under the PR root to keep the channel readable.
+              threadTs: isBotActor(r.user) ? (row.rootMessageTs ?? undefined) : undefined,
+              message: {
+                kind: "review",
+                authorLogin: r.user.login,
+                state: r.state,
+                body: r.body ?? "",
+                url: r.html_url,
+                // Never ping the reviewer for their own review activity; a bot
+                // post shows their Slack display name as plain text instead.
+                label: mode === "user" ? undefined : (author.name ?? r.user.login),
+                images,
+              },
+            },
+    };
+  });
 
   // Pull anyone @-mentioned in the review body into the channel (best-effort).
   // The PR author is skipped — already a member of their own channel.
@@ -135,8 +128,7 @@ export async function handleIssueComment(
     await deleteMirroredComment(deps, {
       repoFullName: payload.repository.full_name,
       number: payload.issue.number,
-      kind: "issue_comment",
-      commentId: payload.comment.id,
+      key: (prId) => keys.issueComment(prId, payload.comment.id),
       user: payload.comment.user,
     });
     return;
@@ -154,31 +146,40 @@ export async function handleIssueComment(
   // Author as the commenter: their own token when authorized, else the bot
   // spoofing their name/avatar, else the bot with a plain "by <login>" label. PR
   // conversation comments aren't threaded on GitHub, so they post top-level.
-  const author = await resolveMessageAuthor(deps, c.user);
-  const images = await commentImages(deps, c.body, c.user);
-  const effect = { prId: row.id, kind: "issue_comment", githubEventRef: String(c.id) };
-  const render = (mode: "user" | "bot"): SlackMessage => ({
-    channel: channelId,
-    poster:
-      mode === "bot"
-        ? { kind: "bot-as", username: author.name, iconUrl: author.iconUrl }
-        : undefined,
-    text: sanitizeMrkdwn(`Comment by ${c.user.login}`),
-    blocks: issueCommentBlocks({
+  const enrich = async () => {
+    const author = await resolveMessageAuthor(deps, c.user);
+    const images = await commentImages(deps, c.body, c.user);
+    const message: Message = {
+      kind: "issue_comment",
+      authorLogin: c.user.login,
       body: c.body,
-      htmlUrl: c.html_url,
-      authorMention: author.name ? undefined : sanitizeMrkdwn(c.user.login),
-    }),
-    images,
-  });
+      url: c.html_url,
+      label: author.name ? undefined : c.user.login,
+      images,
+    };
+    return { author, message };
+  };
 
   // An edit updates the mirrored message in place; otherwise post it.
-  const existing =
-    payload.action === "edited" ? await findMessageEffect(deps.db, effect) : undefined;
-  if (existing?.status === "sent" && existing.slackTs) {
-    await updateAuthoredMessage(deps, existing.slackTs, channelId, author, render);
+  const key = keys.issueComment(row.id, c.id);
+  const sentTs = payload.action === "edited" ? await createLedger(deps.db).sentTs(key) : undefined;
+  if (sentTs) {
+    const { author, message } = await enrich();
+    await updateAuthoredMessage(deps, sentTs, channelId, author, () => message);
   } else {
-    await deliverAuthoredMessage(deps, effect, author, render);
+    await deliverAuthored(deps, key, channelId, async () => {
+      const { author, message } = await enrich();
+      return {
+        author,
+        outgoing: (mode) => ({
+          message,
+          poster:
+            mode === "bot"
+              ? { kind: "bot-as", username: author.name, iconUrl: author.iconUrl }
+              : undefined,
+        }),
+      };
+    });
   }
 
   // Pull anyone @-mentioned in the comment into the channel (best-effort). Runs

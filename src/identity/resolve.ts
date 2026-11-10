@@ -1,7 +1,6 @@
 import type { SlackGateway } from "#slack";
 import type { Db } from "../db/client.ts";
 import { findByGithubId, upsertIdentity } from "../db/repositories/identities.ts";
-import { sanitizeMrkdwn } from "../slack/blocks.ts";
 
 /** Fetch a GitHub user's public email (read-only; does not cross the one-way boundary). */
 export type GithubEmailFetcher = (login: string) => Promise<string | undefined>;
@@ -43,16 +42,15 @@ export async function resolveSlackUser(
 }
 
 /**
- * A non-pinging, Slack-safe label for a reviewer/commenter: their Slack display
- * name when linked, else their GitHub login. We deliberately never emit an
- * `<@id>` mention for reviewers — pinging someone for their own review activity
- * (or for a review request they're already invited to the channel for) is noise.
+ * A non-pinging label for a reviewer or commenter: their Slack display name
+ * when linked, else their GitHub login. Never an `<@id>`: pinging someone for
+ * their own review activity, or for a request that already invited them, is noise.
  */
-export async function reviewerDisplayLabel(
+export async function displayName(
   slack: SlackGateway,
   slackUserId: string | undefined,
   login: string,
 ): Promise<string> {
   const name = slackUserId ? (await slack.profile(slackUserId))?.name : undefined;
-  return sanitizeMrkdwn(name ?? login);
+  return name ?? login;
 }

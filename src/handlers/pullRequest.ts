@@ -1,5 +1,14 @@
 import { type Logger, Retry, errMessage, leaseWaitMs } from "#lib";
-import { SlackApiError, type SlackBlock, type SlackGateway } from "#slack";
+import {
+  type Ledger,
+  type PrView,
+  SlackApiError,
+  type SlackGateway,
+  channelSink,
+  channelTopic,
+  createLedger,
+  keys,
+} from "#slack";
 import type { Db } from "../db/client.ts";
 import {
   PULL_REQUEST_LIFECYCLE_LEASE_MS,
@@ -19,13 +28,7 @@ import { type PrState, computeTargetState, isTerminal } from "../domain/prState.
 import type { ImageEmbedder } from "../github/attachments.ts";
 import type { PrCommenter } from "../github/comments.ts";
 import type { CiReadinessFetcher } from "../github/users.ts";
-import {
-  type GithubEmailFetcher,
-  resolveSlackUser,
-  reviewerDisplayLabel,
-} from "../identity/resolve.ts";
-import { sanitizeInlineCode, sanitizeLinkLabel, sanitizeMrkdwn } from "../slack/blocks.ts";
-import { deliverSlackMessage } from "../slack/deliver.ts";
+import { type GithubEmailFetcher, displayName, resolveSlackUser } from "../identity/resolve.ts";
 import { slackChannelUrl } from "../slack/links.ts";
 import { CURRENT_CHANNEL_NAME_VERSION, channelName } from "../slack/naming.ts";
 import { inviteToChannel } from "./invites.ts";
@@ -143,8 +146,18 @@ export async function handlePullRequest(
   options: PullRequestHandlingOptions = {},
 ): Promise<PullRequestHandlingResult> {
   const { db, slack, logger } = deps;
+  const ledger = createLedger(db);
   const repoFullName = payload.repository.full_name;
   const pr = payload.pull_request;
+  const view: PrView = {
+    repo: repoFullName,
+    number: pr.number,
+    title: pr.title,
+    url: pr.html_url,
+    authorLogin: pr.user.login,
+    headRef: pr.head.ref,
+    baseRef: pr.base?.ref,
+  };
   const target = computeTargetState(payload.action, {
     draft: pr.draft ?? false,
     merged: pr.merged ?? false,
@@ -246,7 +259,7 @@ export async function handlePullRequest(
 
       // Best-effort: a topic failure (e.g. missing scope) must not block the flow.
       try {
-        await slack.setTopic(channelId, channelTopic(pr));
+        await slack.setTopic(channelId, channelTopic(view));
       } catch (error) {
         logger.warn("failed to set channel topic", {
           prId: row.id,
@@ -272,18 +285,13 @@ export async function handlePullRequest(
 
     if (!current.rootMessageTs && !stayingArchived) {
       rootReconciled = true;
-      const root = await deliverSlackMessage(
-        db,
-        slack,
-        { prId: current.id, kind: "root", githubEventRef: "root" },
-        {
-          channel: channelId,
-          text: sanitizeMrkdwn(`PR #${pr.number}: ${pr.title}`),
-          blocks: rootBlocks(pr),
-        },
+      const root = await ledger.deliver(
+        keys.root(current.id),
+        channelSink(slack, channelId),
+        async () => ({ message: { kind: "root", pr: view } }),
       );
-      await setChannel(db, current.id, channelId, root.slackTs);
-      current = { ...current, rootMessageTs: root.slackTs };
+      await setChannel(db, current.id, channelId, root.ts);
+      current = { ...current, rootMessageTs: root.ts };
     }
 
     // Invite the PR author into their channel. Idempotent per author, and
@@ -294,26 +302,19 @@ export async function handlePullRequest(
       login: pr.user.login,
     });
     if (authorSlackId && !stayingArchived) {
-      // Show the author's name as plain text, never an `<@id>` mention — the
-      // channel invite already notifies them, and pinging them in their own
-      // channel is noise.
-      const authorLabel = await reviewerDisplayLabel(slack, authorSlackId, pr.user.login);
-      await deliverSlackMessage(
-        db,
-        slack,
-        { prId: current.id, kind: "author_invite", githubEventRef: String(pr.user.id) },
-        {
-          channel: channelId,
-          text: sanitizeMrkdwn(`PR opened by ${pr.user.login}`),
-          blocks: [
-            {
-              type: "section",
-              text: { type: "mrkdwn", text: `👤 Opened by ${authorLabel}` },
-            },
-          ],
-        },
-        () =>
-          inviteToChannel(deps, channelId, [authorSlackId], { prId: current.id, role: "author" }),
+      const prId = current.id;
+      await ledger.deliver(
+        keys.authorInvite(prId, pr.user.id),
+        channelSink(slack, channelId),
+        async () => ({
+          message: {
+            kind: "author_invite",
+            authorLogin: pr.user.login,
+            authorLabel: await displayName(slack, authorSlackId, pr.user.login),
+          },
+          beforePost: () =>
+            inviteToChannel(deps, channelId, [authorSlackId], { prId, role: "author" }),
+        }),
       );
     }
 
@@ -356,7 +357,7 @@ export async function handlePullRequest(
       // Terminal channels must still be writable when the lifecycle note is
       // posted. A retry reuses its durable message effect before archiving.
       if (shouldPostLifecycle) {
-        await postLifecycleNote(db, slack, current, payload, desiredState, channelId);
+        await postLifecycleNote(ledger, slack, current, payload, view, desiredState, channelId);
       }
 
       if (isTerminal(desiredState)) {
@@ -395,13 +396,8 @@ export async function handlePullRequest(
               { db, slack, logger, shippedChannel: deps.shippedChannel },
               {
                 prId: current.id,
-                repoFullName: current.repoFullName,
-                number: current.number,
-                title: pr.title,
-                htmlUrl: pr.html_url,
-                // #shipped is a broadcast channel — show the author's Slack
-                // display name as plain text, don't @-ping them on merge.
-                authorMention: await reviewerDisplayLabel(slack, authorSlackId, pr.user.login),
+                pr: { ...view, repo: current.repoFullName, number: current.number },
+                authorLabel: () => displayName(slack, authorSlackId, pr.user.login),
               },
             );
           } catch (err) {
@@ -456,7 +452,7 @@ export async function handlePullRequest(
     // Thread a lifecycle note under the root for notable transitions. Never post
     // to a channel that is (and stays) archived — that throws is_archived.
     if (shouldPostLifecycle && !needsSlackReconciliation && !stayingArchived) {
-      await postLifecycleNote(db, slack, current, payload, desiredState, channelId);
+      await postLifecycleNote(ledger, slack, current, payload, view, desiredState, channelId);
     }
     return { sourceAccepted: true, skippedShipped, skippedMergeComment };
   } finally {
@@ -476,28 +472,20 @@ function createMayHaveSucceeded(error: unknown): boolean {
 }
 
 async function postLifecycleNote(
-  db: Db,
+  ledger: Ledger,
   slack: SlackGateway,
   row: { id: string; rootMessageTs: string | null },
   payload: PullRequestPayload,
+  view: PrView,
   state: PrState,
   channelId: string,
 ): Promise<void> {
   const pr = payload.pull_request;
   if (!row.rootMessageTs) return;
-  await deliverSlackMessage(
-    db,
-    slack,
-    {
-      prId: row.id,
-      kind: "lifecycle",
-      githubEventRef: `${payload.action}:${state}:${pr.head.sha}:${pr.updated_at}`,
-    },
-    {
-      channel: channelId,
-      text: sanitizeMrkdwn(`PR #${pr.number} ${payload.action}`),
-      blocks: lifecycleBlocks(pr, state),
-    },
+  await ledger.deliver(
+    keys.lifecycle(row.id, payload.action, state, pr.head.sha, pr.updated_at),
+    channelSink(slack, channelId),
+    async () => ({ message: { kind: "lifecycle", pr: view, action: payload.action, state } }),
   );
 }
 
@@ -519,42 +507,4 @@ export async function ensurePullRequestChannel(
     throw new Retry(`PR channel is not ready for ${repository.full_name}#${pullRequest.number}`);
   }
   return { ...row, channelId: row.channelId, rootMessageTs: row.rootMessageTs };
-}
-
-function lifecycleBlocks(pr: PullRequestPayload["pull_request"], state: PrState): SlackBlock[] {
-  return [
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `*<${pr.html_url}|#${pr.number} ${sanitizeLinkLabel(pr.title)}>* — \`${state}\` · by ${sanitizeMrkdwn(pr.user.login)}`,
-      },
-    },
-  ];
-}
-
-const SLACK_TOPIC_MAX = 250;
-
-/** Channel topic: `PR 6949: author wants to merge into main from branch`, PR # linked. */
-function channelTopic(pr: PullRequestPayload["pull_request"]): string {
-  const base = pr.base?.ref ?? "the base branch";
-  const head = pr.head.ref ?? "this branch";
-  const topic = `<${pr.html_url}|PR ${pr.number}>: ${sanitizeMrkdwn(pr.user.login)} wants to merge into ${sanitizeMrkdwn(base)} from ${sanitizeMrkdwn(head)}`;
-  // The link is at the start, so trimming the tail (branch name) stays safe.
-  return topic.length > SLACK_TOPIC_MAX ? topic.slice(0, SLACK_TOPIC_MAX) : topic;
-}
-
-/** The channel's opening message: a linked PR number plus the branch flow. */
-function rootBlocks(pr: PullRequestPayload["pull_request"]): SlackBlock[] {
-  const base = pr.base?.ref ?? "the base branch";
-  const head = pr.head.ref ?? "this branch";
-  return [
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `🔀 *<${pr.html_url}|PR #${pr.number}>* — ${sanitizeMrkdwn(pr.title)}\n${sanitizeMrkdwn(pr.user.login)} wants to merge into \`${sanitizeInlineCode(base)}\` from \`${sanitizeInlineCode(head)}\``,
-      },
-    },
-  ];
 }

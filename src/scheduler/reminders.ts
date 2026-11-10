@@ -1,5 +1,5 @@
 import { type Logger, errMessage } from "#lib";
-import type { SlackGateway } from "#slack";
+import { type SlackGateway, channelSink, createLedger, keys } from "#slack";
 import type { Db } from "../db/client.ts";
 import { findByGithubId } from "../db/repositories/identities.ts";
 import { findById } from "../db/repositories/pullRequests.ts";
@@ -20,7 +20,6 @@ import { isTerminal } from "../domain/prState.ts";
 import type { CiReadinessFetcher } from "../github/users.ts";
 import type { ReviewApprovalFetcher } from "../github/users.ts";
 import type { PullRequestFetcher } from "../handlers/mergeability.ts";
-import { deliverSlackMessage } from "../slack/deliver.ts";
 import { type ReminderWindow, isWithinWindow } from "./window.ts";
 
 /** `mergeable_state` values that mean the PR is ready to merge. */
@@ -226,30 +225,14 @@ export function createReminderScheduler(deps: ReminderDeps) {
         }
 
         const mapped = await findByGithubId(deps.db, r.reviewerGithubId);
-        const mention = mapped ? `<@${mapped.slackUserId}>` : "the requested reviewer";
         if (!(await isReminderClaimCurrent(deps.db, claimed))) continue;
 
-        await deliverSlackMessage(
-          deps.db,
-          deps.slack,
-          {
-            prId: r.prId,
-            kind: "reminder",
-            githubEventRef: `${r.reviewerGithubId}:${claimed.generation}`,
-          },
-          {
-            channel: pr.channelId,
-            text: "Reminder: this PR is still waiting for review",
-            blocks: [
-              {
-                type: "section",
-                text: {
-                  type: "mrkdwn",
-                  text: `⏰ ${mention} — this PR has been waiting ~${deps.reminderHours}h for your review.`,
-                },
-              },
-            ],
-          },
+        await createLedger(deps.db).deliver(
+          keys.reminder(r.prId, r.reviewerGithubId, claimed.generation),
+          channelSink(deps.slack, pr.channelId),
+          async () => ({
+            message: { kind: "reminder", reviewer: mapped?.slackUserId, hours: deps.reminderHours },
+          }),
         );
         if (await markReminderSent(deps.db, claimed)) posted += 1;
       } catch (err) {

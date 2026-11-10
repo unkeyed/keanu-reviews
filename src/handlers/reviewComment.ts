@@ -1,11 +1,9 @@
-import { findMessageEffect } from "../db/repositories/messages.ts";
+import { type Message, createLedger, keys } from "#slack";
 import { shouldSkipActor } from "../github/actors.ts";
 import { commentImages } from "../github/attachments.ts";
-import { reviewCommentBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
-import type { SlackMessage } from "../slack/deliver.ts";
 import {
   deleteMirroredComment,
-  deliverAuthoredMessage,
+  deliverAuthored,
   resolveMessageAuthor,
   updateAuthoredMessage,
 } from "./authorship.ts";
@@ -34,8 +32,6 @@ export interface ReviewCommentPayload {
   };
 }
 
-const REVIEW_COMMENT_KIND = "review_comment";
-
 /**
  * Mirror an inline review comment into the PR channel (U6, R4). Handles the
  * out-of-order case (KTD4): if the comment arrives before the PR's `opened`
@@ -59,8 +55,7 @@ export async function handleReviewComment(
     await deleteMirroredComment(deps, {
       repoFullName: payload.repository.full_name,
       number: payload.pull_request.number,
-      kind: REVIEW_COMMENT_KIND,
-      commentId: payload.comment.id,
+      key: (prId) => keys.reviewComment(prId, payload.comment.id),
       user: payload.comment.user,
     });
     return;
@@ -72,57 +67,56 @@ export async function handleReviewComment(
   const channelId = row.channelId;
 
   const c = payload.comment;
-  // Link to the comment in the PR discussion (e.g. .../pull/7006#discussion_r…),
-  // not the file/line blob view. The file:line still shows as text context.
-  const permalink = c.html_url;
-
-  // Author as the commenter: their own token when they've authorized it, else the
-  // bot spoofing their name/avatar, else the bot with a plain "by <login>" label.
-  const author = await resolveMessageAuthor(deps, c.user);
+  const ledger = createLedger(deps.db);
 
   // Thread a reply under the Slack message of the comment it replies to; a
   // thread-starting comment posts top-level. THREAD_COMMENTS=false keeps all
   // comments flat (top-level).
-  let threadTs: string | undefined;
-  if (deps.threadComments !== false && c.in_reply_to_id != null) {
-    const parent = await findMessageEffect(deps.db, {
-      prId: row.id,
-      kind: REVIEW_COMMENT_KIND,
-      githubEventRef: String(c.in_reply_to_id),
-    });
-    threadTs = parent?.slackTs ?? undefined; // parent not mirrored yet -> top-level
-  }
+  const threadTs =
+    deps.threadComments !== false && c.in_reply_to_id != null
+      ? await ledger.sentTs(keys.reviewComment(row.id, c.in_reply_to_id)) // unmirrored -> top-level
+      : undefined;
 
-  const images = await commentImages(deps, c.body, c.user);
-  const effect = { prId: row.id, kind: REVIEW_COMMENT_KIND, githubEventRef: String(c.id) };
-  const render = (mode: "user" | "bot"): SlackMessage => ({
-    channel: channelId,
-    threadTs,
-    // "bot" mode spoofs the linked user's name/avatar (today's behavior); "user"
-    // mode posts natively as them, so no spoof is needed.
-    poster:
-      mode === "bot"
-        ? { kind: "bot-as", username: author.name, iconUrl: author.iconUrl }
-        : undefined,
-    text: sanitizeMrkdwn(`New review comment on ${c.path}${c.line ? `:${c.line}` : ""}`),
-    blocks: reviewCommentBlocks({
-      body: c.body,
-      permalink,
+  // Author as the commenter: their own token when they've authorized it, else the
+  // bot spoofing their name/avatar, else the bot with a plain "by <login>" label.
+  const enrich = async () => {
+    const author = await resolveMessageAuthor(deps, c.user);
+    const images = await commentImages(deps, c.body, c.user);
+    const message: Message = {
+      kind: "review_comment",
       path: c.path,
-      line: c.line ?? undefined,
-      authorMention: author.name ? undefined : sanitizeMrkdwn(c.user.login),
-    }),
-    images,
-  });
+      line: c.line,
+      body: c.body,
+      // The PR discussion permalink, not the file/line blob view.
+      url: c.html_url,
+      label: author.name ? undefined : c.user.login,
+      images,
+    };
+    return { author, message };
+  };
 
   // An edit updates the already-mirrored message in place; otherwise post it (a
   // first-seen comment, or an edit that arrived before we ever mirrored it).
-  const existing =
-    payload.action === "edited" ? await findMessageEffect(deps.db, effect) : undefined;
-  if (existing?.status === "sent" && existing.slackTs) {
-    await updateAuthoredMessage(deps, existing.slackTs, channelId, author, render);
+  const key = keys.reviewComment(row.id, c.id);
+  const sentTs = payload.action === "edited" ? await ledger.sentTs(key) : undefined;
+  if (sentTs) {
+    const { author, message } = await enrich();
+    await updateAuthoredMessage(deps, sentTs, channelId, author, () => message);
   } else {
-    await deliverAuthoredMessage(deps, effect, author, render);
+    await deliverAuthored(deps, key, channelId, async () => {
+      const { author, message } = await enrich();
+      return {
+        author,
+        outgoing: (mode) => ({
+          message,
+          threadTs,
+          poster:
+            mode === "bot"
+              ? { kind: "bot-as", username: author.name, iconUrl: author.iconUrl }
+              : undefined,
+        }),
+      };
+    });
   }
 
   // Pull anyone @-mentioned in the comment into the channel (best-effort). Runs

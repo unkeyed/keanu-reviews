@@ -1,10 +1,10 @@
 import { ErrorCode } from "@slack/web-api";
 import { describe, expect, it, vi } from "vitest";
 import { Retry } from "#lib";
-import type { MessageImage, SlackBlock } from "./blocks.ts";
+import type { MessageImage, SlackBlock } from "./catalog.ts";
 import { BOT, type SlackGateway, type SlackWebApi, createSlackGateway } from "./gateway.ts";
 
-interface LegacyPost {
+interface FlatPost {
   channel: string;
   text: string;
   blocks?: SlackBlock[];
@@ -18,7 +18,7 @@ interface LegacyPost {
 }
 
 /** Post the way a caller does, from one flat description of the message and its poster. */
-async function postMessage(slack: SlackGateway, msg: LegacyPost) {
+async function postMessage(slack: SlackGateway, msg: FlatPost) {
   const poster = msg.authorUserToken
     ? { kind: "user" as const, userId: msg.authorUserId ?? "", token: msg.authorUserToken }
     : msg.username || msg.iconUrl
@@ -34,7 +34,7 @@ async function postMessage(slack: SlackGateway, msg: LegacyPost) {
 
 function updateMessage(
   slack: SlackGateway,
-  u: Omit<LegacyPost, "threadTs" | "clientMsgId"> & { ts: string },
+  u: Omit<FlatPost, "threadTs" | "clientMsgId"> & { ts: string },
 ) {
   return slack.update(
     u.channel,
