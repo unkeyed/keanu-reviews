@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLogger } from "#lib";
-import { applyPullRequestSource, prId } from "#pr";
 import type { Db } from "../db/client.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { notifyShipped } from "./shipped.ts";
+import { applyPullRequestSource, prId } from "./store.ts";
 
 let db: Db;
 let slack: FakeSlackGateway;

@@ -2,10 +2,9 @@ import { type GithubActor, type PullRequestEvent, isTerminal } from "#events";
 import type { GithubEmailFetcher } from "#github";
 import { displayName, resolveSlackUser } from "#identity";
 import { type PrId, Retry } from "#lib";
-import type { PrRow } from "#pr";
+import { type PrRow, inviteToChannel } from "#pr";
 import { findReminderForReviewer } from "#reminders";
 import { channelSink, createLedger, keys } from "#slack";
-import { inviteToChannel } from "./invites.ts";
 import { type PrHandlerDeps, ensurePullRequestChannel } from "./pullRequest.ts";
 
 export interface ReviewRequestDeps extends PrHandlerDeps {

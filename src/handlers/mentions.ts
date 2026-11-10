@@ -1,6 +1,6 @@
 import { findByGithubLogin } from "#identity";
 import { errMessage } from "#lib";
-import { inviteToChannel } from "./invites.ts";
+import { inviteToChannel } from "#pr";
 import type { PrHandlerDeps } from "./pullRequest.ts";
 
 // GitHub logins are 1–39 chars: alphanumerics with single internal hyphens, no

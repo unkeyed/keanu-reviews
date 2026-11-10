@@ -23,7 +23,9 @@ import {
   claimPullRequestLifecycle,
   findByGithubPrId,
   findByRepoNumber,
+  inviteToChannel,
   markSlackStateApplied,
+  notifyShipped,
   pullRequestLifecycleClaimedAt,
   releaseMergeComment,
   releasePullRequestLifecycle,
@@ -43,8 +45,6 @@ import {
   keys,
   slackChannelUrl,
 } from "#slack";
-import { inviteToChannel } from "./invites.ts";
-import { notifyShipped } from "./shipped.ts";
 
 export interface PrHandlerDeps {
   db: Db;
