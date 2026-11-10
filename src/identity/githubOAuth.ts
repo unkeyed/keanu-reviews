@@ -1,9 +1,9 @@
 import { randomBytes as cryptoRandomBytes } from "node:crypto";
 import { Hono } from "hono";
-import { createGithubLinkConfirmation } from "#identity";
+import type { Db } from "#db";
+import { type GithubOAuthClient, GithubOAuthError, verifyOAuthState } from "#github";
 import type { Logger } from "#lib";
-import type { Db } from "../db/client.ts";
-import { type GithubOAuthClient, GithubOAuthError, verifyOAuthState } from "../github/oauth.ts";
+import { createGithubLinkConfirmation } from "./store.ts";
 
 export interface GithubOAuthRouteDeps {
   db: Db;

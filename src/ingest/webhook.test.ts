@@ -4,7 +4,7 @@ import { createLogger } from "#lib";
 import type { Db } from "../db/client.ts";
 import { jobs } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
-import { createGithubWebhookRoute } from "./githubWebhook.ts";
+import { createGithubWebhookRoute } from "./webhook.ts";
 
 const SECRET = "whsec_test";
 const ALLOWED = ["42"];

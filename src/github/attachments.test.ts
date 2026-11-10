@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type AnonymousFetch, commentImages, createGithubAttachmentMirror } from "./attachments.ts";
+import { commentImages } from "../handlers/authorship.ts";
+import { type AnonymousFetch, createGithubAttachmentMirror } from "./attachments.ts";
 
 const id = "1710cd7e-6589-4445-889a-a5666b859fc5";
 const attachment = `https://github.com/user-attachments/assets/${id}`;

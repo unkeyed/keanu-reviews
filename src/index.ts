@@ -1,20 +1,19 @@
 import { serve } from "@hono/node-server";
 import { createDispatcher } from "#app";
-import { createLogger, registerSecrets } from "#lib";
-import { errMessage } from "#lib";
+import { type Config, ConfigError, SECRET_KEYS, loadConfig } from "#config";
+import { createDb, createDbReadyCheck } from "#db";
+import {
+  createGithubOAuthClient,
+  createInstallationAuth,
+  createPullRequestSnapshotFetcher,
+  octokitMintFn,
+} from "#github";
+import { createGithubOAuthRoute, createSlackCommandRoute } from "#identity";
+import { createGithubWebhookRoute } from "#ingest";
+import { createLogger, errMessage, registerSecrets } from "#lib";
 import { pruneJobHistory } from "#queue";
 import { createSlackGateway } from "#slack";
-import { type Config, ConfigError, SECRET_KEYS, loadConfig } from "./config.ts";
-import { createDb } from "./db/client.ts";
-import { createDbReadyCheck } from "./db/readiness.ts";
-import { createInstallationAuth } from "./github/auth.ts";
-import { createGithubOAuthClient } from "./github/oauth.ts";
-import { octokitMintFn } from "./github/octokitAuth.ts";
-import { createPullRequestSnapshotFetcher } from "./github/pullRequestSnapshot.ts";
 import { createServiceHandlers } from "./handlers/deps.ts";
-import { createGithubOAuthRoute } from "./routes/githubOAuth.ts";
-import { createGithubWebhookRoute } from "./routes/githubWebhook.ts";
-import { createSlackCommandRoute } from "./routes/slackCommand.ts";
 import { DAILY_RECONCILE_HOUR_UTC, startDailyLoop } from "./scheduler/dailyLoop.ts";
 import { startReminderLoop } from "./scheduler/loop.ts";
 import { createClosedPullRequestReconciliation } from "./scheduler/reconcileClosedPullRequests.ts";

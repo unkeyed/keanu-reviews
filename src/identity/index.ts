@@ -1,11 +1,10 @@
 export {
-  type GithubUserFetcher,
   type ImportResult,
   type ImportRow,
   type LinkDeps,
   importIdentities,
 } from "./link.ts";
-export { type GithubEmailFetcher, displayName, resolveSlackUser } from "./resolve.ts";
+export { displayName, resolveSlackUser } from "./resolve.ts";
 export {
   completeSlackTokenAuthorization,
   confirmGithubLink,
@@ -17,3 +16,6 @@ export {
   upsertIdentity,
   upsertSlackUserToken,
 } from "./store.ts";
+export { createGithubOAuthRoute } from "./githubOAuth.ts";
+export { createSlackCommandRoute } from "./slackCommand.ts";
+export { createSlackOAuthRoute } from "./slackOAuth.ts";

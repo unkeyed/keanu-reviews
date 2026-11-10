@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ConfigError, SECRET_KEYS, loadConfig } from "./config.ts";
+import { ConfigError, SECRET_KEYS, loadConfig } from "./env.ts";
 
 const validEnv = (): NodeJS.ProcessEnv => ({
   GITHUB_APP_ID: "123456",

@@ -1,7 +1,7 @@
 import type { CheckRunEvent } from "#events";
+import type { PrForShaFetcher } from "#github";
 import { Retry } from "#lib";
 import { findAllByRepoHeadSha, findAllByRepoNumbers } from "#pr";
-import type { PrForShaFetcher } from "../ci/status.ts";
 import {
   type ReviewAlertGate,
   type ReviewRequestDeps,

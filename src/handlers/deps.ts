@@ -1,26 +1,29 @@
 import type { Hono } from "hono";
-import { deleteSlackUserToken, getSlackUserTokenRow } from "#identity";
-import { type Logger, errMessage } from "#lib";
-import type { SlackGateway } from "#slack";
-import type { PrForShaFetcher } from "../ci/status.ts";
-import type { Config } from "../config.ts";
-import type { Db } from "../db/client.ts";
-import { createGithubAttachmentMirror } from "../github/attachments.ts";
-import type { InstallationAuth } from "../github/auth.ts";
-import { createPrCommenter } from "../github/comments.ts";
+import type { Config } from "#config";
+import type { Db } from "#db";
 import {
+  type CiReadinessFetcher,
+  type InstallationAuth,
+  type PrForShaFetcher,
+  type PullRequestFetcher,
+  type ReviewApprovalFetcher,
   createCiReadinessFetcher,
+  createGithubAttachmentMirror,
   createGithubEmailFetcher,
+  createPrCommenter,
   createPrForShaFetcher,
   createPullRequestFetcher,
   createReviewApprovalFetcher,
-} from "../github/users.ts";
-import type { CiReadinessFetcher, ReviewApprovalFetcher } from "../github/users.ts";
-import { createSlackOAuthRoute } from "../routes/slackOAuth.ts";
-import { quietlyRemoveMembers } from "../slack/memberCleanup.ts";
-import { SLACK_POST_USER_SCOPE, createSlackOAuthClient, hasScope } from "../slack/oauth.ts";
-import { createTokenCipher } from "../slack/tokenCipher.ts";
-import type { PullRequestFetcher } from "./mergeability.ts";
+} from "#github";
+import { createSlackOAuthRoute, deleteSlackUserToken, getSlackUserTokenRow } from "#identity";
+import { type Logger, createTokenCipher, errMessage } from "#lib";
+import {
+  SLACK_POST_USER_SCOPE,
+  type SlackGateway,
+  createSlackOAuthClient,
+  hasScope,
+  quietlyRemoveMembers,
+} from "#slack";
 import type { PrHandlerDeps } from "./pullRequest.ts";
 
 export interface ServiceHandlers {

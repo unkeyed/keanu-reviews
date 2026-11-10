@@ -1,5 +1,6 @@
 import { type GithubActor, type PullRequestEvent, isTerminal } from "#events";
-import { type GithubEmailFetcher, displayName, resolveSlackUser } from "#identity";
+import type { GithubEmailFetcher } from "#github";
+import { displayName, resolveSlackUser } from "#identity";
 import { type PrId, Retry } from "#lib";
 import type { PrRow } from "#pr";
 import { findReminderForReviewer } from "#reminders";

@@ -1,4 +1,9 @@
 import { type PrChange, isTerminal, reconcileArrivalKey } from "#events";
+import {
+  GithubRateLimitExhaustedError,
+  type PullRequestSnapshot,
+  type PullRequestSnapshotFetcher,
+} from "#github";
 import { type Logger, errMessage } from "#lib";
 import {
   type PrRow,
@@ -6,11 +11,6 @@ import {
   listOpenPullRequestsForReconciliation,
   listRecentlyClosedPullRequests,
 } from "#pr";
-import {
-  GithubRateLimitExhaustedError,
-  type PullRequestSnapshot,
-  type PullRequestSnapshotFetcher,
-} from "../github/pullRequestSnapshot.ts";
 import {
   type PrHandlerDeps,
   PullRequestLifecycleBusyError,

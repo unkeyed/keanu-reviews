@@ -1,4 +1,6 @@
+import type { Db } from "#db";
 import { isTerminal } from "#events";
+import type { CiReadinessFetcher, PullRequestFetcher, ReviewApprovalFetcher } from "#github";
 import { findByGithubId } from "#identity";
 import { type Logger, type PrId, errMessage } from "#lib";
 import { type PrRow, findById } from "#pr";
@@ -15,10 +17,6 @@ import {
   scheduleReminder,
 } from "#reminders";
 import { type SlackGateway, channelSink, createLedger, keys } from "#slack";
-import type { Db } from "../db/client.ts";
-import type { CiReadinessFetcher } from "../github/users.ts";
-import type { ReviewApprovalFetcher } from "../github/users.ts";
-import type { PullRequestFetcher } from "../handlers/mergeability.ts";
 import { type ReminderWindow, isWithinWindow } from "./window.ts";
 
 /** `mergeable_state` values that mean the PR is ready to merge. */

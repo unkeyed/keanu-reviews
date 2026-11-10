@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import type { Db } from "#db";
+import { verifySignature } from "#github";
 import type { Logger } from "#lib";
 import { enqueueDeliveryJob } from "#queue";
-import type { Db } from "../db/client.ts";
-import { verifySignature } from "../github/verify.ts";
 
 export interface WebhookDeps {
   db: Db;

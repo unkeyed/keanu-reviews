@@ -1,19 +1,39 @@
+import type { InstallationAuth } from "./auth.ts";
 import {
   type CiCheckRun,
   type CiReadiness,
   type PrForShaFetcher,
   classifyCiReadiness,
-} from "../ci/status.ts";
-import type { PullRequestFetcher } from "../handlers/mergeability.ts";
-import type { GithubUserFetcher } from "../identity/link.ts";
-import type { GithubEmailFetcher } from "../identity/resolve.ts";
-import type { InstallationAuth } from "./auth.ts";
+} from "./ci.ts";
 import {
   GithubApiError,
   type GithubRequestOptions,
   encodedRepoPath,
   githubGetJson,
 } from "./http.ts";
+
+/** Fetch a GitHub user's public email (read-only; does not cross the one-way boundary). */
+export type GithubEmailFetcher = (login: string) => Promise<string | undefined>;
+
+/** Resolve a GitHub login to its immutable numeric id (read-only). */
+export type GithubUserFetcher = (
+  login: string,
+) => Promise<{ id: number; login: string } | undefined>;
+
+/** Mergeability facts read from a pull request. Used to stop reminders once a PR is ready to merge. */
+export interface PullRequestMergeability {
+  mergeable: boolean | null;
+  mergeableState: string;
+  draft: boolean;
+  /** Present when the pull-request read included the current requested reviewers. */
+  requestedReviewers?: { id: number; login: string }[];
+}
+
+/** Read a PR's current mergeability (a GitHub read; within the one-way boundary). */
+export type PullRequestFetcher = (
+  repoFullName: string,
+  number: number,
+) => Promise<PullRequestMergeability | undefined>;
 
 export { GithubApiError } from "./http.ts";
 

@@ -1,12 +1,5 @@
+import { normalizeBotName } from "#config";
 import type { GithubActor } from "#events";
-
-/** Normalize a bot login for matching: lowercase and drop GitHub's `[bot]` suffix. */
-export function normalizeBotName(name: string): string {
-  return name
-    .trim()
-    .toLowerCase()
-    .replace(/\[bot\]$/, "");
-}
 
 /**
  * Whether to skip mirroring an actor's comment/review. Humans are never skipped.

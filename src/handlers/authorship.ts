@@ -1,3 +1,4 @@
+import type { ImageEmbedder } from "#github";
 import { resolveSlackUser } from "#identity";
 import { type PrId, errMessage } from "#lib";
 import { findByRepoNumber } from "#pr";
@@ -5,10 +6,12 @@ import {
   type Delivered,
   type EffectKey,
   type Message,
+  type MessageImage,
   type Outgoing,
   SlackApiError,
   channelSink,
   createLedger,
+  extractEmbeddedImages,
   render,
 } from "#slack";
 import type { PrHandlerDeps } from "./pullRequest.ts";
@@ -175,4 +178,14 @@ export async function deleteMirroredComment(
       err: errMessage(error),
     });
   }
+}
+
+/** Images a comment embeds, mirrored when a mirror is wired. Bot comments show none. */
+export async function commentImages(
+  deps: { embedImages?: ImageEmbedder },
+  body: string,
+  author: { isBot: boolean },
+): Promise<MessageImage[]> {
+  if (author.isBot) return [];
+  return deps.embedImages ? deps.embedImages(extractEmbeddedImages(body)) : [];
 }

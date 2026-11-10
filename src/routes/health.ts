@@ -1,5 +1,6 @@
 import { Hono } from "hono";
-import type { ReadyCheck } from "../db/readiness.ts";
+import { serviceVersion } from "#config";
+import type { ReadyCheck } from "#db";
 
 /**
  * Liveness and readiness endpoints (U1). Liveness reports that the process is
@@ -8,19 +9,7 @@ import type { ReadyCheck } from "../db/readiness.ts";
  */
 const startedAt = Date.now();
 
-/**
- * The git commit this build was deployed from, so `/health` can confirm which
- * code is actually live (a redeploy that didn't restart still shows the old
- * SHA). Reads a generic override first, then common platform-provided vars.
- */
-const version =
-  process.env.UNKEY_GIT_COMMIT_SHA ||
-  process.env.GIT_SHA ||
-  process.env.RENDER_GIT_COMMIT ||
-  process.env.RAILWAY_GIT_COMMIT_SHA ||
-  process.env.VERCEL_GIT_COMMIT_SHA ||
-  process.env.SOURCE_VERSION ||
-  "unknown";
+const version = serviceVersion();
 
 export function createHealthRoutes(checkReady: ReadyCheck): Hono {
   const health = new Hono();

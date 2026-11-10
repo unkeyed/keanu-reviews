@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { normalizeBotName, shouldSkipActor } from "./actors.ts";
+import { normalizeBotName } from "#config";
+import { shouldSkipActor } from "./actors.ts";
 
 describe("normalizeBotName", () => {
   it("lowercases and strips the [bot] suffix", () => {

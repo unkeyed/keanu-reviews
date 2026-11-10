@@ -1,11 +1,9 @@
 import { pathToFileURL } from "node:url";
+import { ConfigError, SECRET_KEYS, loadConfig } from "#config";
+import { createDb } from "#db";
+import { createInstallationAuth, createPullRequestSnapshotFetcher, octokitMintFn } from "#github";
 import { createLogger, registerSecrets } from "#lib";
 import { createSlackGateway } from "#slack";
-import { ConfigError, SECRET_KEYS, loadConfig } from "../config.ts";
-import { createDb } from "../db/client.ts";
-import { createInstallationAuth } from "../github/auth.ts";
-import { octokitMintFn } from "../github/octokitAuth.ts";
-import { createPullRequestSnapshotFetcher } from "../github/pullRequestSnapshot.ts";
 import { createServiceHandlers } from "../handlers/deps.ts";
 import { createClosedPullRequestReconciliation } from "../scheduler/reconcileClosedPullRequests.ts";
 

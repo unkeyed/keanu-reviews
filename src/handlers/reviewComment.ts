@@ -1,8 +1,8 @@
 import type { ReviewCommentEvent } from "#events";
+import { shouldSkipActor } from "#github";
 import { type Message, createLedger, keys } from "#slack";
-import { shouldSkipActor } from "../github/actors.ts";
-import { commentImages } from "../github/attachments.ts";
 import {
+  commentImages,
   deleteMirroredComment,
   deliverAuthored,
   resolveMessageAuthor,

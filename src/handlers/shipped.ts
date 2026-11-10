@@ -1,6 +1,6 @@
+import type { Db } from "#db";
 import type { Logger, PrId } from "#lib";
 import { type PrView, type SlackGateway, channelSink, createLedger, keys } from "#slack";
-import type { Db } from "../db/client.ts";
 
 export interface ShippedDeps {
   db: Db;

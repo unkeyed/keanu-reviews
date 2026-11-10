@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type CiCheckRun, classifyCiReadiness } from "./status.ts";
+import { type CiCheckRun, classifyCiReadiness } from "./ci.ts";
 
 const run = (over: Partial<CiCheckRun> & Pick<CiCheckRun, "name" | "status">): CiCheckRun => ({
   conclusion: null,

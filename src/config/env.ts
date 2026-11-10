@@ -1,6 +1,13 @@
 import { z } from "zod";
-import { normalizeBotName } from "./github/actors.ts";
-import { createTokenCipher } from "./slack/tokenCipher.ts";
+import { createTokenCipher } from "#lib";
+
+/** Normalize a bot login for matching: lowercase and drop GitHub's `[bot]` suffix. */
+export function normalizeBotName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/\[bot\]$/, "");
+}
 
 const PublicUrlSchema = z
   .string()
@@ -209,4 +216,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new ConfigError(issues);
   }
   return result.data;
+}
+
+/**
+ * The git commit this build was deployed from, so `/health` can confirm which
+ * code is actually live (a redeploy that didn't restart still shows the old
+ * SHA). Reads a generic override first, then common platform-provided vars.
+ */
+export function serviceVersion(env: NodeJS.ProcessEnv = process.env): string {
+  return (
+    env.UNKEY_GIT_COMMIT_SHA ||
+    env.GIT_SHA ||
+    env.RENDER_GIT_COMMIT ||
+    env.RAILWAY_GIT_COMMIT_SHA ||
+    env.VERCEL_GIT_COMMIT_SHA ||
+    env.SOURCE_VERSION ||
+    "unknown"
+  );
 }

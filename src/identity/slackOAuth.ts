@@ -1,15 +1,9 @@
 import { Hono } from "hono";
-import { completeSlackTokenAuthorization } from "#identity";
-import type { Logger } from "#lib";
-import type { Db } from "../db/client.ts";
-import { verifyOAuthState } from "../github/oauth.ts";
-import {
-  SLACK_LEAVE_USER_SCOPE,
-  type SlackOAuthClient,
-  SlackOAuthError,
-  hasScope,
-} from "../slack/oauth.ts";
-import type { TokenCipher } from "../slack/tokenCipher.ts";
+import type { Db } from "#db";
+import { verifyOAuthState } from "#github";
+import type { Logger, TokenCipher } from "#lib";
+import { SLACK_LEAVE_USER_SCOPE, type SlackOAuthClient, SlackOAuthError, hasScope } from "#slack";
+import { completeSlackTokenAuthorization } from "./store.ts";
 
 export interface SlackOAuthRouteDeps {
   db: Db;

@@ -1,3 +1,4 @@
+import type { Db } from "#db";
 import {
   type PrChange,
   type PrSnapshot,
@@ -6,7 +7,14 @@ import {
   isTerminal,
   nextState,
 } from "#events";
-import { type GithubEmailFetcher, displayName, resolveSlackUser } from "#identity";
+import type {
+  CiReadinessFetcher,
+  GithubEmailFetcher,
+  ImageEmbedder,
+  PrCommenter,
+  PullRequestFetcher,
+} from "#github";
+import { displayName, resolveSlackUser } from "#identity";
 import { type ArrivalKey, type Logger, type PrId, Retry, errMessage, leaseWaitMs } from "#lib";
 import {
   PULL_REQUEST_LIFECYCLE_LEASE_MS,
@@ -23,23 +31,19 @@ import {
 } from "#pr";
 import { cancelForPr } from "#reminders";
 import {
+  CURRENT_CHANNEL_NAME_VERSION,
   type Ledger,
   type PrView,
   SlackApiError,
   type SlackGateway,
+  channelName,
   channelSink,
   channelTopic,
   createLedger,
   keys,
+  slackChannelUrl,
 } from "#slack";
-import type { Db } from "../db/client.ts";
-import type { ImageEmbedder } from "../github/attachments.ts";
-import type { PrCommenter } from "../github/comments.ts";
-import type { CiReadinessFetcher } from "../github/users.ts";
-import { slackChannelUrl } from "../slack/links.ts";
-import { CURRENT_CHANNEL_NAME_VERSION, channelName } from "../slack/naming.ts";
 import { inviteToChannel } from "./invites.ts";
-import type { PullRequestFetcher } from "./mergeability.ts";
 import { notifyShipped } from "./shipped.ts";
 
 export interface PrHandlerDeps {

@@ -1,11 +1,7 @@
+import type { Db } from "#db";
+import type { GithubUserFetcher } from "#github";
 import type { SlackGateway } from "#slack";
-import type { Db } from "../db/client.ts";
 import { upsertIdentity } from "./store.ts";
-
-/** Resolve a GitHub login to its immutable numeric id (read-only). */
-export type GithubUserFetcher = (
-  login: string,
-) => Promise<{ id: number; login: string } | undefined>;
 
 export interface LinkDeps {
   db: Db;

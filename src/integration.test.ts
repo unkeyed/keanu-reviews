@@ -4,7 +4,7 @@ import { createDispatcher } from "#app";
 import { createLogger } from "#lib";
 import type { Db } from "./db/client.ts";
 import { createTestDb } from "./db/testDb.ts";
-import { createGithubWebhookRoute } from "./routes/githubWebhook.ts";
+import { createGithubWebhookRoute } from "./ingest/webhook.ts";
 import { createReminderScheduler } from "./scheduler/reminders.ts";
 import { FakeSlackGateway } from "./testing/fakeSlack.ts";
 import { createWorker } from "./worker/loop.ts";

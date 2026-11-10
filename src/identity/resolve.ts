@@ -1,9 +1,7 @@
+import type { Db } from "#db";
+import type { GithubEmailFetcher } from "#github";
 import type { SlackGateway } from "#slack";
-import type { Db } from "../db/client.ts";
 import { findByGithubId, upsertIdentity } from "./store.ts";
-
-/** Fetch a GitHub user's public email (read-only; does not cross the one-way boundary). */
-export type GithubEmailFetcher = (login: string) => Promise<string | undefined>;
 
 export interface IdentityDeps {
   db: Db;

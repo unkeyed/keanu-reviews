@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { findByGithubId } from "#identity";
 import { createLogger } from "#lib";
 import type { Db } from "../db/client.ts";
 import { githubLinkConfirmations, oauthStateNonces } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createOAuthState } from "../github/oauth.ts";
 import { createGithubOAuthRoute } from "./githubOAuth.ts";
+import { findByGithubId } from "./store.ts";
 
 const STATE_SECRET = "oauth_state_secret_with_at_least_32_bytes";
 const TEAM_ID = "T123";

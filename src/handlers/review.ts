@@ -1,10 +1,10 @@
 import type { IssueCommentEvent, ReviewEvent } from "#events";
+import { shouldSkipActor } from "#github";
 import { type PrId, Retry } from "#lib";
 import { findByRepoNumber } from "#pr";
 import { type Message, cleanGithubMarkdown, createLedger, keys } from "#slack";
-import { shouldSkipActor } from "../github/actors.ts";
-import { commentImages } from "../github/attachments.ts";
 import {
+  commentImages,
   deleteMirroredComment,
   deliverAuthored,
   resolveMessageAuthor,

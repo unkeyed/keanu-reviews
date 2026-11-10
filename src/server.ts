@@ -1,6 +1,6 @@
 import { Hono } from "hono";
+import type { ReadyCheck } from "#db";
 import type { Logger } from "#lib";
-import type { ReadyCheck } from "./db/readiness.ts";
 import { createHealthRoutes } from "./routes/health.ts";
 
 export interface AppDeps {

@@ -1,5 +1,5 @@
+import { createDb } from "#db";
 import { resetFailedJob } from "#queue";
-import { createDb } from "../db/client.ts";
 
 const jobId = process.argv[2];
 const databaseUrl = process.env.DATABASE_URL;

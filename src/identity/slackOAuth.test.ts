@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getSlackUserTokenRow } from "#identity";
 import { createLogger } from "#lib";
 import type { Db } from "../db/client.ts";
 import { oauthStateNonces, slackUserTokens } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createOAuthState } from "../github/oauth.ts";
-import { createTokenCipher } from "../slack/tokenCipher.ts";
+import { createTokenCipher } from "../lib/tokenCipher.ts";
 import { createSlackOAuthRoute } from "./slackOAuth.ts";
+import { getSlackUserTokenRow } from "./store.ts";
 
 const STATE_SECRET = "oauth_state_secret_with_at_least_32_bytes";
 const TEAM_ID = "T123";

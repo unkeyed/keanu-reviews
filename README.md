@@ -114,7 +114,7 @@ For a click-by-click walkthrough of creating the GitHub App and Slack app, see
 
 All configuration comes from environment variables, is **validated at boot**, and
 the process refuses to start if anything required is missing or malformed (see
-[`src/config.ts`](src/config.ts)). Secrets are read from the environment (on a
+[`src/config/env.ts`](src/config/env.ts)). Secrets are read from the environment (on a
 managed host, from its secret store) and are **never written to logs**. See
 [`.env.example`](.env.example) for a copy-paste template.
 
@@ -364,17 +364,25 @@ full webhook → worker → Slack wiring end to end.
 
 ```
 src/
-  config.ts          boot-time config validation
-  index.ts           wiring: routes, worker loop, reminder loop
-  routes/            HTTP: github webhook, slack commands, oauth callbacks, health
-  handlers/          per-event logic (pull request, review, comment, checks)
-  worker/            durable job queue + dispatch
-  scheduler/         reminder scheduling + delivery window
-  slack/             Slack Web API client, block builders, cleanup, oauth
+  lib/               domain-free primitives: errors, clock, logger, token cipher
+  config/            boot-time config validation
+  db/                Drizzle schema, migrations, connection, readiness
+  events/            GitHub webhook payloads parsed into typed domain events
   github/            App auth, OAuth, REST fetchers, webhook verification
-  identity/          GitHub↔Slack identity resolution
-  db/                Drizzle schema, migrations, repositories
+  slack/             Slack Web API gateway, message catalog, delivery ledger
+  identity/          GitHub↔Slack identity, user tokens, linking routes
+  reminders/         per-reviewer reminder state
+  pr/                pull request rows and lifecycle lease
+  queue/             durable job queue
+  ingest/            GitHub webhook route
+  app/               event → handler table
+  handlers/          per-event logic (pull request, review, comment, checks)
+  scheduler/         reminder delivery, daily reconcile
+  index.ts           wiring: routes, worker loop, reminder loop
 ```
+
+Each module is imported through its `#name` barrel, and
+`src/architecture.test.ts` enforces the layer order and table ownership.
 
 ## Deployment
 

@@ -1,12 +1,11 @@
 import type { Buffer } from "node:buffer";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { confirmGithubLink } from "#identity";
+import type { Db } from "#db";
+import { createGithubAuthorizeUrl, createOAuthState } from "#github";
 import type { Logger } from "#lib";
-import type { Db } from "../db/client.ts";
-import { createGithubAuthorizeUrl, createOAuthState } from "../github/oauth.ts";
-import { createSlackAuthorizeUrl } from "../slack/oauth.ts";
-import { verifySlackSignature } from "../slack/verify.ts";
+import { createSlackAuthorizeUrl, verifySlackSignature } from "#slack";
+import { confirmGithubLink } from "./store.ts";
 
 export interface SlackCommandDeps {
   db: Db;

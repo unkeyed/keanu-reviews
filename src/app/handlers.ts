@@ -1,6 +1,6 @@
+import type { JobRow } from "#db";
 import { type DomainEvent, jobArrivalKey, parseEvent } from "#events";
 import type { ArrivalKey } from "#lib";
-import type { JobRow } from "../db/schema.ts";
 import { type ChecksDeps, handleCheckRun } from "../handlers/checks.ts";
 import { handlePullRequest } from "../handlers/pullRequest.ts";
 import { type ReviewDeps, handleIssueComment, handleReview } from "../handlers/review.ts";
