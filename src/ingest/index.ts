@@ -1,1 +1,1 @@
-export { type WebhookDeps, createGithubWebhookRoute } from "./webhook.ts";
+export { createGithubWebhookRoute } from "./webhook.ts";

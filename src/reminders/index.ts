@@ -1,5 +1,4 @@
 export {
-  type ReminderSource,
   cancelForPr,
   cancelForReviewer,
   cancelReminderClaim,

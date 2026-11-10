@@ -11,7 +11,6 @@ export {
   type GithubEmailFetcher,
   type GithubUserFetcher,
   type PullRequestFetcher,
-  type PullRequestMergeability,
   type ReviewApprovalFetcher,
 } from "./users.ts";
 export {
@@ -21,12 +20,7 @@ export {
   type PullRequestSnapshotFetcher,
 } from "./pullRequestSnapshot.ts";
 export { createGithubAttachmentMirror, type ImageEmbedder } from "./attachments.ts";
-export {
-  type CiCheckRun,
-  type CiReadiness,
-  type PrForShaFetcher,
-  classifyCiReadiness,
-} from "./ci.ts";
+export type { CiReadiness, PrForShaFetcher } from "./ci.ts";
 export { createPrCommenter, type PrCommenter } from "./comments.ts";
 export { shouldSkipActor } from "./actors.ts";
 export {

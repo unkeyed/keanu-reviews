@@ -6,9 +6,6 @@ export {
 } from "./link.ts";
 export { displayName, resolveSlackUser } from "./resolve.ts";
 export {
-  completeSlackTokenAuthorization,
-  confirmGithubLink,
-  createGithubLinkConfirmation,
   deleteSlackUserToken,
   findByGithubId,
   findByGithubLogin,

@@ -79,7 +79,7 @@ describe("parseEvent", () => {
     });
   });
 
-  it("reads a team-only review request and a bot actor", () => {
+  it("reads team-only and individual review requests, treating an untyped actor as human", () => {
     const ev = parseEvent("pull_request", {
       action: "review_requested",
       repository,
@@ -91,6 +91,14 @@ describe("parseEvent", () => {
       requestedTeam: "core",
       pr: { author: { isBot: true } },
     });
+
+    const untyped = parseEvent("pull_request", {
+      action: "review_requested",
+      repository,
+      pull_request: pr,
+      requested_reviewer: { id: 7, login: "flo" },
+    });
+    expect(untyped).toMatchObject({ requestedReviewer: { id: 7, login: "flo", isBot: false } });
   });
 
   it("defaults the optional review and comment fields", () => {

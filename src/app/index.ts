@@ -1,7 +1,1 @@
-export {
-  type HandlerDeps,
-  type HandlerTable,
-  type Work,
-  createDispatcher,
-  handlers,
-} from "./handlers.ts";
+export { createDispatcher, handlers } from "./handlers.ts";
