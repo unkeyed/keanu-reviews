@@ -233,11 +233,11 @@ describe("branded ids", () => {
 });
 
 /**
- * Target layering from the rewrite design. Report mode lists what still
- * breaks it; S2 turns ENFORCE on once every module has its index.ts.
+ * Modules are directories under src/ (plus the process entry). A module imports
+ * another only through its `#name` barrel, and at runtime only from a lower
+ * layer. Type-only imports carry no runtime coupling, so they may reach a
+ * module in the same layer.
  */
-const ENFORCE_LAYERS = false;
-
 const LAYERS: readonly (readonly string[])[] = [
   ["lib"],
   ["config", "db"],
@@ -246,7 +246,8 @@ const LAYERS: readonly (readonly string[])[] = [
   ["reminders"],
   ["pr"],
   ["mirror", "reviews"],
-  ["queue", "ingest"],
+  ["queue"],
+  ["ingest"],
   ["app"],
   ["admin", "main.ts"],
 ];
@@ -254,8 +255,10 @@ const LAYERS: readonly (readonly string[])[] = [
 const THIRD_PARTY: Record<string, readonly string[]> = {
   "@slack/web-api": ["slack"],
   "@octokit/auth-app": ["github"],
+  "@hono/node-server": ["main.ts"],
   hono: ["ingest", "app", "identity", "github"],
   "drizzle-orm": ["db", "pr", "slack", "reminders", "identity", "queue"],
+  postgres: ["db"],
   zod: ["config", "events", "github"],
 };
 
@@ -272,11 +275,76 @@ const TABLE_OWNERS: Record<string, string> = {
   processedDeliveries: "queue/store.ts",
 };
 
+/** Files that read tables they do not own, and why. */
+const TABLE_READERS: Record<string, string> = {
+  "db/readiness.ts": "probes every table's columns with a limit-0 select",
+};
+
+/**
+ * Code the later slices replace, with the slice that removes it. Each entry
+ * must still match a violation, so the list can only shrink.
+ */
+const PENDING: readonly { files: string; rule: string; slice: string }[] = [
+  // S3: the PR session replaces handlePullRequest, #shipped and the closed-PR reconcile.
+  { files: "handlers/pullRequest.ts", rule: "not in a layered module", slice: "S3" },
+  { files: "handlers/shipped.ts", rule: "not in a layered module", slice: "S3" },
+  { files: "app/handlers.ts", rule: "(../handlers/pullRequest.ts)", slice: "S3" },
+  { files: "scheduler/reconcileClosedPullRequests.ts", rule: "", slice: "S3" },
+  // S4: mirror/ replaces comment and review mirroring.
+  { files: "handlers/authorship.ts", rule: "not in a layered module", slice: "S4" },
+  { files: "handlers/invites.ts", rule: "not in a layered module", slice: "S4" },
+  { files: "handlers/mentions.ts", rule: "not in a layered module", slice: "S4" },
+  { files: "handlers/review.ts", rule: "not in a layered module", slice: "S4" },
+  { files: "handlers/reviewComment.ts", rule: "not in a layered module", slice: "S4" },
+  { files: "app/handlers.ts", rule: "(../handlers/review.ts)", slice: "S4" },
+  { files: "app/handlers.ts", rule: "(../handlers/reviewComment.ts)", slice: "S4" },
+  // S5: reviews/ replaces review alerts, CI release and the reminder scan.
+  { files: "handlers/reviewRequest.ts", rule: "not in a layered module", slice: "S5" },
+  { files: "handlers/checks.ts", rule: "not in a layered module", slice: "S5" },
+  { files: "app/handlers.ts", rule: "(../handlers/reviewRequest.ts)", slice: "S5" },
+  { files: "app/handlers.ts", rule: "(../handlers/checks.ts)", slice: "S5" },
+  { files: "scheduler/reminders.ts", rule: "not in a layered module", slice: "S5" },
+  { files: "scheduler/window.ts", rule: "not in a layered module", slice: "S5" },
+  // S6: queue worker, app context and HTTP, main.ts and the admin CLIs.
+  { files: "handlers/deps.ts", rule: "not in a layered module", slice: "S6" },
+  { files: "worker/loop.ts", rule: "not in a layered module", slice: "S6" },
+  { files: "scheduler/loop.ts", rule: "not in a layered module", slice: "S6" },
+  { files: "scheduler/dailyLoop.ts", rule: "not in a layered module", slice: "S6" },
+  { files: "routes/health.ts", rule: "", slice: "S6" },
+  { files: "server.ts", rule: "", slice: "S6" },
+  { files: "index.ts", rule: "", slice: "S6" },
+  { files: "admin/", rule: "", slice: "S6" },
+];
+
 const moduleOf = (file: string) => (file.includes("/") ? (file.split("/")[0] ?? file) : file);
 const layerOf = (mod: string) => LAYERS.findIndex((layer) => layer.includes(mod));
 
-function resolveRelative(from: string, spec: string): string {
-  return relative(SRC, join(SRC, from, "..", spec));
+interface ImportRef {
+  spec: string;
+  typeOnly: boolean;
+  names: string[];
+}
+
+function imports(file: string): ImportRef[] {
+  const source = ts.createSourceFile(file, read(file), ts.ScriptTarget.Latest, true);
+  return source.statements.flatMap((s): ImportRef[] => {
+    if (ts.isImportDeclaration(s) && ts.isStringLiteral(s.moduleSpecifier)) {
+      const clause = s.importClause;
+      const named = clause?.namedBindings;
+      const elements = named && ts.isNamedImports(named) ? named.elements : [];
+      return [
+        {
+          spec: s.moduleSpecifier.text,
+          typeOnly: Boolean(clause?.isTypeOnly),
+          names: elements.filter((e) => !e.isTypeOnly).map((e) => (e.propertyName ?? e.name).text),
+        },
+      ];
+    }
+    if (ts.isExportDeclaration(s) && s.moduleSpecifier && ts.isStringLiteral(s.moduleSpecifier)) {
+      return [{ spec: s.moduleSpecifier.text, typeOnly: s.isTypeOnly, names: [] }];
+    }
+    return [];
+  });
 }
 
 function layerViolations(): string[] {
@@ -284,50 +352,57 @@ function layerViolations(): string[] {
   for (const file of sourceFiles) {
     const mod = moduleOf(file);
     const text = read(file);
-    for (const spec of valueImports(file)) {
+    for (const { spec, typeOnly, names } of imports(file)) {
+      let tables: string[] = [];
       if (spec.startsWith(".")) {
-        const target = resolveRelative(file, spec);
-        const targetMod = moduleOf(target);
-        if (targetMod !== mod) out.push(`${file}: relative import across modules (${spec})`);
-        if (targetMod === "db" && target === "db/schema.ts") {
-          const names = new RegExp(`import\\s*\\{([^}]*)\\}\\s*from\\s*"${spec}"`).exec(text);
-          for (const raw of names?.[1]?.split(",") ?? []) {
-            const name = raw.replace(/^\s*type\s+/, "").trim();
-            const owner = TABLE_OWNERS[name];
-            if (owner && owner !== file) out.push(`${file}: uses table ${name} owned by ${owner}`);
-          }
-        }
-        continue;
-      }
-      if (spec.startsWith("#")) {
+        const target = relative(SRC, join(SRC, file, "..", spec));
+        if (moduleOf(target) !== mod) out.push(`${file}: relative import across modules (${spec})`);
+        if (target === "db/schema.ts") tables = names;
+      } else if (spec.startsWith("#")) {
         const targetMod = spec.slice(1);
         const from = layerOf(mod);
         const to = layerOf(targetMod);
-        if (from !== -1 && to !== -1 && to >= from && targetMod !== mod) {
+        if (!typeOnly && from !== -1 && to >= from && targetMod !== mod) {
           out.push(`${file}: ${mod} (L${from}) imports ${spec} (L${to})`);
         }
-        continue;
+        if (spec === "#db") tables = names;
+      } else if (!typeOnly) {
+        const pkg = spec.startsWith("@")
+          ? spec.split("/").slice(0, 2).join("/")
+          : spec.split("/")[0];
+        const allowed = pkg ? THIRD_PARTY[pkg] : undefined;
+        if (allowed && !allowed.includes(mod)) out.push(`${file}: imports ${pkg}`);
       }
-      const pkg = spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0];
-      const allowed = pkg ? THIRD_PARTY[pkg] : undefined;
-      if (allowed && !allowed.includes(mod)) out.push(`${file}: imports ${pkg}`);
+      for (const name of tables) {
+        const owner = TABLE_OWNERS[name];
+        if (owner && owner !== file && !TABLE_READERS[file]) {
+          out.push(`${file}: uses table ${name} owned by ${owner}`);
+        }
+      }
     }
     if (layerOf(mod) === -1) out.push(`${file}: not in a layered module`);
     if (text.includes("process.env") && file !== "config/env.ts") {
       out.push(`${file}: reads process.env`);
     }
-    if (/process\.on\(/.test(text) && file !== "main.ts")
+    if (/process\.on\(/.test(text) && file !== "main.ts") {
       out.push(`${file}: installs process handlers`);
+    }
   }
   return out;
 }
 
+const pendingMatch = (violation: string, entry: (typeof PENDING)[number]) =>
+  violation.startsWith(entry.files) && violation.includes(entry.rule);
+
 describe("module layering", () => {
-  it(ENFORCE_LAYERS ? "has no violations" : "reports violations (report-only until S2)", () => {
-    const violations = layerViolations();
-    if (ENFORCE_LAYERS) expect(violations).toEqual([]);
-    else if (violations.length > 0) {
-      console.info(`architecture: ${violations.length} layer violations\n${violations.join("\n")}`);
-    }
+  const violations = layerViolations();
+
+  it("has no violations outside the pending list", () => {
+    expect(violations.filter((v) => !PENDING.some((entry) => pendingMatch(v, entry)))).toEqual([]);
+  });
+
+  it("lists only pending entries that still match a violation", () => {
+    const stale = PENDING.filter((entry) => !violations.some((v) => pendingMatch(v, entry)));
+    expect(stale).toEqual([]);
   });
 });
