@@ -1,6 +1,6 @@
+import { Retry } from "#lib";
 import type { PrForShaFetcher } from "../ci/status.ts";
 import { findAllByRepoHeadSha, findAllByRepoNumbers } from "../db/repositories/pullRequests.ts";
-import { RetryableError } from "../worker/retryable.ts";
 import {
   type ReviewAlertGate,
   type ReviewRequestDeps,
@@ -57,16 +57,16 @@ export async function handleCheckRun(
   const hasMissingAssociations = associatedNumbers.size > rows.length;
   if (rows.length === 0) {
     if (hasMissingAssociations) {
-      throw new RetryableError(
-        `PR channel is not ready for every CI association in ${repoFullName}`,
-        { sha: headSha, associations: [...associatedNumbers] },
-      );
+      throw new Retry(`PR channel is not ready for every CI association in ${repoFullName}`, {
+        sha: headSha,
+        associations: [...associatedNumbers],
+      });
     }
     deps.logger.debug("CI event maps to no tracked PR", { sha: headSha });
     return;
   }
 
-  let retry: RetryableError | undefined;
+  let retry: Retry | undefined;
   for (const row of rows) {
     if (!row.channelId) continue;
     if (row.headSha && row.headSha !== headSha) {
@@ -80,7 +80,7 @@ export async function handleCheckRun(
     try {
       await releaseReadyReviewAlerts(deps, row, gate);
     } catch (err) {
-      if (err instanceof RetryableError) {
+      if (err instanceof Retry) {
         retry = err;
         continue;
       }
@@ -89,10 +89,10 @@ export async function handleCheckRun(
   }
 
   if (hasMissingAssociations || rows.some((row) => !row.channelId)) {
-    throw new RetryableError(
-      `PR channel is not ready for every CI association in ${repoFullName}`,
-      { sha: headSha, associations: [...associatedNumbers] },
-    );
+    throw new Retry(`PR channel is not ready for every CI association in ${repoFullName}`, {
+      sha: headSha,
+      associations: [...associatedNumbers],
+    });
   }
   if (retry) throw retry;
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Logger } from "../logger.ts";
+import type { Logger } from "#lib";
 import { millisecondsUntilUtcHour, startDailyLoop } from "./dailyLoop.ts";
 
 function captureLogger(): { logger: Logger; warns: string[] } {

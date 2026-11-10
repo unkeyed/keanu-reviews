@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Retry, createLogger } from "#lib";
 import type { Db } from "../db/client.ts";
 import { claimNextJob, enqueueJob } from "../db/repositories/jobs.ts";
 import { claimMessageEffect } from "../db/repositories/messages.ts";
@@ -11,11 +12,9 @@ import {
 import { jobs } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { type PullRequestPayload, handlePullRequest } from "../handlers/pullRequest.ts";
-import { createLogger } from "../logger.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { FakeSlackClient } from "../testing/fakeSlack.ts";
 import { createWorker, startWorkerLoop } from "./loop.ts";
-import { RetryableError } from "./retryable.ts";
 
 let db: Db;
 let close: () => Promise<void>;
@@ -135,7 +134,7 @@ describe("worker retry hints", () => {
       db,
       logger: createLogger("error"),
       router: async (job) => {
-        throw new RetryableError("busy", undefined, job.id === short.id ? 90_000 : 3_600_000);
+        throw new Retry("busy", undefined, job.id === short.id ? 90_000 : 3_600_000);
       },
       now: () => clock,
     });

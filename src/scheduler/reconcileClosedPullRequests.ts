@@ -1,3 +1,4 @@
+import { type Logger, errMessage } from "#lib";
 import {
   findById,
   listOpenPullRequestsForReconciliation,
@@ -16,7 +17,6 @@ import {
   type PullRequestPayload,
   handlePullRequest,
 } from "../handlers/pullRequest.ts";
-import type { Logger } from "../logger.ts";
 
 export interface ReconciliationSummary {
   /** Pull requests whose GitHub state was read, or whose read failed. */
@@ -168,7 +168,7 @@ async function reconcile(
       result.failed += 1;
       logger.error("pull request reconciliation failed", {
         ...fields,
-        err: error instanceof Error ? error.message : String(error),
+        err: errMessage(error),
       });
       continue;
     }
@@ -194,7 +194,7 @@ async function reconcile(
       result.failed += 1;
       logger.error("pull request reconciliation failed", {
         ...fields,
-        err: error instanceof Error ? error.message : String(error),
+        err: errMessage(error),
       });
     }
   }
@@ -236,7 +236,7 @@ async function reArchiveDriftedChannels(
       result.failed += 1;
       logger.error("re-archive sweep failed for a channel", {
         ...fields,
-        err: error instanceof Error ? error.message : String(error),
+        err: errMessage(error),
       });
     }
   }

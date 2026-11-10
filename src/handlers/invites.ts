@@ -1,4 +1,4 @@
-import type { Logger } from "../logger.ts";
+import type { Logger } from "#lib";
 import type { SlackClient } from "../slack/client.ts";
 
 /**

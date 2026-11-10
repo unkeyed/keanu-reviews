@@ -1,3 +1,4 @@
+import { Retry } from "#lib";
 import { findReminderForReviewer } from "../db/repositories/reminders.ts";
 import type { PullRequestRow } from "../db/schema.ts";
 import { isTerminal } from "../domain/prState.ts";
@@ -8,7 +9,6 @@ import {
 } from "../identity/resolve.ts";
 import { sanitizeInlineCode, sanitizeMrkdwn } from "../slack/blocks.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
-import { RetryableError } from "../worker/retryable.ts";
 import { inviteToChannel } from "./invites.ts";
 import {
   type PrHandlerDeps,
@@ -217,7 +217,7 @@ export async function releaseReadyReviewAlerts(
   gate: ReviewAlertGate = {},
 ): Promise<void> {
   if (!row.channelId) {
-    throw new RetryableError(`PR channel is not ready for ${row.repoFullName}#${row.number}`);
+    throw new Retry(`PR channel is not ready for ${row.repoFullName}#${row.number}`);
   }
   if (isTerminal(row.currentState) || row.currentState === "draft") return;
   const ready = await ciAllowsAlert(deps, row, gate);
@@ -226,7 +226,7 @@ export async function releaseReadyReviewAlerts(
 
   const snapshot = await deps.fetchPullRequest(row.repoFullName, row.number);
   if (!snapshot) {
-    throw new RetryableError(`pull request ${row.repoFullName}#${row.number} is not readable yet`);
+    throw new Retry(`pull request ${row.repoFullName}#${row.number} is not readable yet`);
   }
   if (snapshot.draft) return;
 
@@ -260,7 +260,7 @@ async function ciAllowsAlert(
   const attempt = gate.attempt;
   const giveUp = attempt === undefined || attempt >= ABSENT_CI_ATTEMPTS;
   if (!giveUp) {
-    throw new RetryableError(`CI has not reported yet for ${row.repoFullName}#${row.number}`, {
+    throw new Retry(`CI has not reported yet for ${row.repoFullName}#${row.number}`, {
       headSha: row.headSha,
       attempt,
     });

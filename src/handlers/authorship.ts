@@ -1,3 +1,4 @@
+import { errMessage } from "#lib";
 import { type MessageEffectInput, findMessageEffect } from "../db/repositories/messages.ts";
 import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
 import { resolveSlackUser } from "../identity/resolve.ts";
@@ -113,7 +114,7 @@ export async function updateAuthoredMessage(
     deps.logger.warn("failed to sync comment edit to Slack", {
       channel,
       ts: slackTs,
-      err: error instanceof Error ? error.message : String(error),
+      err: errMessage(error),
     });
   }
 }
@@ -156,7 +157,7 @@ export async function deleteMirroredComment(
     deps.logger.warn("failed to sync comment deletion to Slack", {
       channel: row.channelId,
       ts: existing.slackTs,
-      err: error instanceof Error ? error.message : String(error),
+      err: errMessage(error),
     });
   }
 }

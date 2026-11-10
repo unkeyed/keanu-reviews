@@ -1,8 +1,8 @@
 import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createLogger } from "#lib";
 import type { Db } from "./db/client.ts";
 import { createTestDb } from "./db/testDb.ts";
-import { createLogger } from "./logger.ts";
 import { createGithubWebhookRoute } from "./routes/githubWebhook.ts";
 import { createReminderScheduler } from "./scheduler/reminders.ts";
 import { FakeSlackClient } from "./testing/fakeSlack.ts";

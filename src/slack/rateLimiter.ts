@@ -1,4 +1,4 @@
-import { RetryableError } from "../worker/retryable.ts";
+import { Retry } from "#lib";
 
 /**
  * Client-side rate limiting (KTD9). Two concerns:
@@ -8,7 +8,7 @@ import { RetryableError } from "../worker/retryable.ts";
  */
 
 /** Slack HTTP 429. A wait too long to sleep through defers the whole job instead. */
-export class RateLimitedError extends RetryableError {
+export class RateLimitedError extends Retry {
   readonly status = 429;
   readonly retryAfterSeconds: number;
 

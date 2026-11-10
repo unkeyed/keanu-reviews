@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createLogger } from "../logger.ts";
+import { createLogger } from "#lib";
 import { FakeSlackClient } from "../testing/fakeSlack.ts";
 import { quietlyRemoveMembers } from "./memberCleanup.ts";
 

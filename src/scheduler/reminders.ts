@@ -1,3 +1,4 @@
+import { type Logger, errMessage } from "#lib";
 import type { Db } from "../db/client.ts";
 import { findByGithubId } from "../db/repositories/identities.ts";
 import { findById } from "../db/repositories/pullRequests.ts";
@@ -18,7 +19,6 @@ import { isTerminal } from "../domain/prState.ts";
 import type { CiReadinessFetcher } from "../github/users.ts";
 import type { ReviewApprovalFetcher } from "../github/users.ts";
 import type { PullRequestFetcher } from "../handlers/mergeability.ts";
-import type { Logger } from "../logger.ts";
 import type { SlackClient } from "../slack/client.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { type ReminderWindow, isWithinWindow } from "./window.ts";
@@ -84,7 +84,7 @@ async function remindersNoLongerNeeded(
   } catch (err) {
     deps.logger.warn("reminder readiness check failed; delivering anyway", {
       prId: pr.id,
-      err: err instanceof Error ? err.message : String(err),
+      err: errMessage(err),
     });
   }
   return false;
@@ -103,7 +103,7 @@ async function reminderWaitingOnCi(deps: ReminderDeps, pr: PullRequestRow): Prom
     // Fail closed: a lookup error must not ping reviewers while CI might be red.
     deps.logger.warn("reminder CI check failed; holding the reminder", {
       prId: pr.id,
-      err: err instanceof Error ? err.message : String(err),
+      err: errMessage(err),
     });
     return true;
   }
@@ -262,7 +262,7 @@ export function createReminderScheduler(deps: ReminderDeps) {
           reminderId: claimed.id,
           attempts: claimed.attempts,
           outcome,
-          err: err instanceof Error ? err.message : String(err),
+          err: errMessage(err),
         });
       }
     }

@@ -1,11 +1,11 @@
 import { pathToFileURL } from "node:url";
+import { createLogger, registerSecrets } from "#lib";
 import { ConfigError, SECRET_KEYS, loadConfig } from "../config.ts";
 import { createDb } from "../db/client.ts";
 import { createInstallationAuth } from "../github/auth.ts";
 import { octokitMintFn } from "../github/octokitAuth.ts";
 import { createPullRequestSnapshotFetcher } from "../github/pullRequestSnapshot.ts";
 import { createServiceHandlers } from "../handlers/deps.ts";
-import { createLogger, registerSecretValues } from "../logger.ts";
 import { createClosedPullRequestReconciliation } from "../scheduler/reconcileClosedPullRequests.ts";
 import { createWebApiSlackClient } from "../slack/webApiClient.ts";
 
@@ -36,11 +36,7 @@ export async function runReconcileClosedPullRequestsCli(
   let close: (() => Promise<void>) | undefined;
   try {
     const config = loadConfig(env);
-    registerSecretValues(
-      SECRET_KEYS.map((key) => config[key]).filter(
-        (value): value is string => typeof value === "string",
-      ),
-    );
+    registerSecrets({ keys: SECRET_KEYS, values: SECRET_KEYS.map((key) => config[key]) });
     const logger = createLogger(config.LOG_LEVEL, { service: "keanu-reviews" });
     const auth = createInstallationAuth(
       octokitMintFn(config.GITHUB_APP_ID, config.GITHUB_APP_PRIVATE_KEY),

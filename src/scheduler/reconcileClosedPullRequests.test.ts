@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Logger } from "#lib";
 import type { Db } from "../db/client.ts";
 import { findByRepoNumber, prId } from "../db/repositories/pullRequests.ts";
 import { scheduleReminder } from "../db/repositories/reminders.ts";
@@ -17,7 +18,6 @@ import {
   type PullRequestPayload,
   handlePullRequest,
 } from "../handlers/pullRequest.ts";
-import type { Logger } from "../logger.ts";
 import { FakeSlackClient } from "../testing/fakeSlack.ts";
 import { createClosedPullRequestReconciliation } from "./reconcileClosedPullRequests.ts";
 

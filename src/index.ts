@@ -1,4 +1,6 @@
 import { serve } from "@hono/node-server";
+import { createLogger, registerSecrets } from "#lib";
+import { errMessage } from "#lib";
 import { type Config, ConfigError, SECRET_KEYS, loadConfig } from "./config.ts";
 import { createDb } from "./db/client.ts";
 import { createDbReadyCheck } from "./db/readiness.ts";
@@ -8,7 +10,6 @@ import { createGithubOAuthClient } from "./github/oauth.ts";
 import { octokitMintFn } from "./github/octokitAuth.ts";
 import { createPullRequestSnapshotFetcher } from "./github/pullRequestSnapshot.ts";
 import { createServiceHandlers } from "./handlers/deps.ts";
-import { createLogger, registerSecretValues } from "./logger.ts";
 import { createGithubOAuthRoute } from "./routes/githubOAuth.ts";
 import { createGithubWebhookRoute } from "./routes/githubWebhook.ts";
 import { createSlackCommandRoute } from "./routes/slackCommand.ts";
@@ -37,9 +38,7 @@ function boot(): void {
     throw err;
   }
 
-  registerSecretValues(
-    SECRET_KEYS.map((k) => config[k]).filter((v): v is string => typeof v === "string"),
-  );
+  registerSecrets({ keys: SECRET_KEYS, values: SECRET_KEYS.map((k) => config[k]) });
   const logger = createLogger(config.LOG_LEVEL, { service: "keanu-reviews" });
 
   // Infrastructure
@@ -151,7 +150,7 @@ function boot(): void {
     task().catch((err) => {
       logger.error("daily task failed", {
         task: name,
-        err: err instanceof Error ? err.message : String(err),
+        err: errMessage(err),
       });
     });
   const dailyLoop = startDailyLoop(
@@ -196,7 +195,7 @@ function boot(): void {
       await closeDb();
     } catch (err) {
       logger.error("database close failed", {
-        err: err instanceof Error ? err.message : String(err),
+        err: errMessage(err),
       });
     }
     process.exit(0);

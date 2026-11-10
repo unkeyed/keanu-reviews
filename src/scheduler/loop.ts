@@ -1,4 +1,4 @@
-import type { Logger } from "../logger.ts";
+import { type Logger, errMessage } from "#lib";
 
 /**
  * In-process reminder timer (U8). Scans due reminders on an interval. Because it
@@ -19,7 +19,7 @@ export function startReminderLoop(
       .then(() => undefined)
       .catch((err) => {
         logger.error("reminder scan failed", {
-          err: err instanceof Error ? err.message : String(err),
+          err: errMessage(err),
         });
       })
       .finally(() => {

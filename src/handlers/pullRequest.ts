@@ -1,3 +1,4 @@
+import { type Logger, Retry, errMessage, leaseWaitMs } from "#lib";
 import type { Db } from "../db/client.ts";
 import {
   PULL_REQUEST_LIFECYCLE_LEASE_MS,
@@ -22,7 +23,6 @@ import {
   resolveSlackUser,
   reviewerDisplayLabel,
 } from "../identity/resolve.ts";
-import type { Logger } from "../logger.ts";
 import { sanitizeInlineCode, sanitizeLinkLabel, sanitizeMrkdwn } from "../slack/blocks.ts";
 import {
   type SlackBlock,
@@ -33,7 +33,6 @@ import { deliverSlackMessage } from "../slack/deliver.ts";
 import { slackChannelUrl } from "../slack/links.ts";
 import { CURRENT_CHANNEL_NAME_VERSION, channelName } from "../slack/naming.ts";
 import { isRateLimited } from "../slack/rateLimiter.ts";
-import { RetryableError, orphanedClaimWaitMs } from "../worker/retryable.ts";
 import { inviteToChannel } from "./invites.ts";
 import type { PullRequestFetcher } from "./mergeability.ts";
 import { notifyShipped } from "./shipped.ts";
@@ -131,7 +130,7 @@ export interface PullRequestHandlingResult {
 }
 
 /** The holder may have crashed, so a retry waits until its lease can be reclaimed. */
-export class PullRequestLifecycleBusyError extends RetryableError {
+export class PullRequestLifecycleBusyError extends Retry {
   constructor(githubPrId: number, retryAfterMs?: number) {
     super(`GitHub PR ${githubPrId} is already being reconciled`, { githubPrId }, retryAfterMs);
     this.name = "PullRequestLifecycleBusyError";
@@ -168,10 +167,10 @@ export async function handlePullRequest(
   if (!lifecycleClaim) {
     throw new PullRequestLifecycleBusyError(
       pr.id,
-      orphanedClaimWaitMs(
+      leaseWaitMs(
         await pullRequestLifecycleClaimedAt(db, pr.id),
         options.lifecycleLeaseMs ?? PULL_REQUEST_LIFECYCLE_LEASE_MS,
-        (options.now ?? new Date()).getTime(),
+        options.now ?? new Date(),
       ),
     );
   }
@@ -256,7 +255,7 @@ export async function handlePullRequest(
       } catch (error) {
         logger.warn("failed to set channel topic", {
           prId: row.id,
-          err: error instanceof Error ? error.message : String(error),
+          err: errMessage(error),
         });
       }
     }
@@ -421,7 +420,7 @@ export async function handlePullRequest(
           } catch (err) {
             logger.warn("merge announcement to #shipped failed", {
               prId: current.id,
-              err: err instanceof Error ? err.message : String(err),
+              err: errMessage(err),
             });
           }
 
@@ -445,7 +444,7 @@ export async function handlePullRequest(
               await releaseMergeComment(db, current.id);
               logger.warn("merge comment to GitHub failed", {
                 prId: current.id,
-                err: err instanceof Error ? err.message : String(err),
+                err: errMessage(err),
               });
             }
           } else if (desiredState === "merged" && deps.commentOnMerge) {
@@ -533,9 +532,7 @@ export async function ensurePullRequestChannel(
     row = await findByRepoNumber(deps.db, repository.full_name, pullRequest.number);
   }
   if (!row?.channelId || !row.rootMessageTs) {
-    throw new RetryableError(
-      `PR channel is not ready for ${repository.full_name}#${pullRequest.number}`,
-    );
+    throw new Retry(`PR channel is not ready for ${repository.full_name}#${pullRequest.number}`);
   }
   return { ...row, channelId: row.channelId, rootMessageTs: row.rootMessageTs };
 }

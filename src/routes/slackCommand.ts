@@ -1,10 +1,10 @@
 import type { Buffer } from "node:buffer";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import type { Logger } from "#lib";
 import type { Db } from "../db/client.ts";
 import { confirmGithubLink } from "../db/repositories/githubLinks.ts";
 import { createGithubAuthorizeUrl, createOAuthState } from "../github/oauth.ts";
-import type { Logger } from "../logger.ts";
 import { createSlackAuthorizeUrl } from "../slack/oauth.ts";
 import { verifySlackSignature } from "../slack/verify.ts";
 

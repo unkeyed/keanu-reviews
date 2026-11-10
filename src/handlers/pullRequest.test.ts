@@ -1,12 +1,12 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createLogger } from "#lib";
 import type { Db } from "../db/client.ts";
 import { upsertIdentity } from "../db/repositories/identities.ts";
 import { findByRepoNumber, prId } from "../db/repositories/pullRequests.ts";
 import { scheduleReminder } from "../db/repositories/reminders.ts";
 import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
-import { createLogger } from "../logger.ts";
 import { FakeSlackClient } from "../testing/fakeSlack.ts";
 import {
   PullRequestLifecycleBusyError,

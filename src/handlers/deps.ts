@@ -1,4 +1,5 @@
 import type { Hono } from "hono";
+import { type Logger, errMessage } from "#lib";
 import type { PrForShaFetcher } from "../ci/status.ts";
 import type { Config } from "../config.ts";
 import type { Db } from "../db/client.ts";
@@ -14,7 +15,6 @@ import {
   createReviewApprovalFetcher,
 } from "../github/users.ts";
 import type { CiReadinessFetcher, ReviewApprovalFetcher } from "../github/users.ts";
-import type { Logger } from "../logger.ts";
 import { createSlackOAuthRoute } from "../routes/slackOAuth.ts";
 import type { SlackClient } from "../slack/client.ts";
 import { quietlyRemoveMembers } from "../slack/memberCleanup.ts";
@@ -87,7 +87,7 @@ export function createServiceHandlers(input: {
       } catch (error) {
         logger.warn("Slack user token cannot be decrypted; posting as the bot", {
           slackUserId,
-          err: error instanceof Error ? error.message : String(error),
+          err: errMessage(error),
         });
         return undefined;
       }

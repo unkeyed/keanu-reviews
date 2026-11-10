@@ -1,4 +1,4 @@
-import type { Logger } from "../logger.ts";
+import { type Logger, errMessage } from "#lib";
 import type { SlackClient } from "./client.ts";
 
 export interface MemberCleanupDeps {
@@ -47,7 +47,7 @@ export async function quietlyRemoveMembers(
     // If we can't even list members, skip cleanup and let the archive proceed.
     deps.logger.warn("quiet archive: listing members failed; archiving with members present", {
       channelId,
-      err: err instanceof Error ? err.message : String(err),
+      err: errMessage(err),
     });
     return summary;
   }
@@ -61,7 +61,7 @@ export async function quietlyRemoveMembers(
       summary.failed += 1;
       deps.logger.warn("quiet archive: reading a member token failed", {
         channelId,
-        err: err instanceof Error ? err.message : String(err),
+        err: errMessage(err),
       });
       continue;
     }
@@ -82,7 +82,7 @@ export async function quietlyRemoveMembers(
       summary.failed += 1;
       deps.logger.warn("quiet archive: a member leave failed", {
         channelId,
-        err: err instanceof Error ? err.message : String(err),
+        err: errMessage(err),
       });
     }
   }

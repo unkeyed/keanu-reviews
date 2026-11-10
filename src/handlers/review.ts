@@ -1,3 +1,4 @@
+import { Retry } from "#lib";
 import { findMessageEffect } from "../db/repositories/messages.ts";
 import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
 import { isBotActor, shouldSkipActor } from "../github/actors.ts";
@@ -10,7 +11,6 @@ import {
   sanitizeMrkdwn,
 } from "../slack/blocks.ts";
 import type { SlackMessage } from "../slack/client.ts";
-import { RetryableError } from "../worker/retryable.ts";
 import {
   deleteMirroredComment,
   deliverAuthoredMessage,
@@ -145,7 +145,7 @@ export async function handleIssueComment(
 
   const row = await findByRepoNumber(deps.db, payload.repository.full_name, payload.issue.number);
   if (!row?.channelId) {
-    throw new RetryableError(
+    throw new Retry(
       `PR channel is not ready for ${payload.repository.full_name}#${payload.issue.number}`,
     );
   }

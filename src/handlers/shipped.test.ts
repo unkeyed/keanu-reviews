@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createLogger } from "#lib";
 import type { Db } from "../db/client.ts";
 import { prId, upsertPullRequest } from "../db/repositories/pullRequests.ts";
 import { createTestDb } from "../db/testDb.ts";
-import { createLogger } from "../logger.ts";
 import { FakeSlackClient } from "../testing/fakeSlack.ts";
 import { notifyShipped } from "./shipped.ts";
 

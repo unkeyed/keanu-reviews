@@ -1,9 +1,9 @@
 import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createLogger } from "#lib";
 import type { Db } from "../db/client.ts";
 import { jobs } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
-import { createLogger } from "../logger.ts";
 import { createGithubWebhookRoute } from "./githubWebhook.ts";
 
 const SECRET = "whsec_test";

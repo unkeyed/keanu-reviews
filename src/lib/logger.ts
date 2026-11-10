@@ -1,9 +1,7 @@
-import { SECRET_KEYS } from "./config.ts";
-
 /**
  * Minimal structured logger with secret redaction (KTD12).
  *
- * Any field whose key matches a known secret name, or whose string value equals
+ * Any field whose key is a registered secret name, or whose string value equals
  * a registered secret, is replaced with "[redacted]" before serialization. This
  * is the last line of defense against a raw payload or token reaching a log sink.
  */
@@ -12,20 +10,27 @@ type LogLevel = "debug" | "info" | "warn" | "error";
 const LEVEL_ORDER: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 
 const REDACTED = "[redacted]";
-const SECRET_KEY_SET = new Set<string>(SECRET_KEYS);
-const registeredSecretValues = new Set<string>();
+const secretKeys = new Set<string>();
+const secretValues = new Set<string>();
 
-/** Register concrete secret values so they are redacted even when nested in payloads. */
-export function registerSecretValues(values: Iterable<string>): void {
-  for (const v of values) {
-    if (v && v.length >= 8) registeredSecretValues.add(v);
+/**
+ * Register secret field names and concrete secret values. Values are redacted
+ * even when nested under an innocent key. Call once at boot, before logging.
+ */
+export function registerSecrets(secrets: {
+  keys: Iterable<string>;
+  values?: Iterable<string | undefined>;
+}): void {
+  for (const k of secrets.keys) secretKeys.add(k);
+  for (const v of secrets.values ?? []) {
+    if (v && v.length >= 8) secretValues.add(v);
   }
 }
 
 function redact(value: unknown, key?: string): unknown {
-  if (key && SECRET_KEY_SET.has(key)) return REDACTED;
+  if (key && secretKeys.has(key)) return REDACTED;
   if (typeof value === "string") {
-    return registeredSecretValues.has(value) ? REDACTED : value;
+    return secretValues.has(value) ? REDACTED : value;
   }
   if (Array.isArray(value)) return value.map((v) => redact(v));
   if (value && typeof value === "object") {

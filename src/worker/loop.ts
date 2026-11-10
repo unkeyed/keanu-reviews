@@ -1,3 +1,4 @@
+import { type Logger, Retry, errMessage } from "#lib";
 import type { Db } from "../db/client.ts";
 import {
   claimNextJob,
@@ -6,8 +7,6 @@ import {
   rescheduleOrFailJob,
 } from "../db/repositories/jobs.ts";
 import type { JobRow } from "../db/schema.ts";
-import type { Logger } from "../logger.ts";
-import { RetryableError } from "./retryable.ts";
 import type { Router } from "./router.ts";
 
 // Lease errors can ask for the full 5-minute PR lifecycle lease. Nothing waits longer.
@@ -61,7 +60,7 @@ export function createWorker(deps: WorkerDeps) {
         .catch((err) => {
           deps.logger.warn("job lease renewal failed", {
             jobId: job.id,
-            err: err instanceof Error ? err.message : String(err),
+            err: errMessage(err),
           });
         });
     }, leaseMs / 3);
@@ -91,12 +90,12 @@ export function createWorker(deps: WorkerDeps) {
       await completeJob(deps.db, await releaseLease());
     } catch (err) {
       const claim = await releaseLease();
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errMessage(err);
       const willRetry = job.attempts < maxAttempts;
       const backoffMs = retryBaseMs * 2 ** Math.max(0, job.attempts - 1);
-      const retryAfterMs = err instanceof RetryableError ? (err.retryAfterMs ?? 0) : 0;
+      const retryAfterMs = err instanceof Retry ? (err.retryAfterMs ?? 0) : 0;
       const retryDelay = Math.min(MAX_RETRY_DELAY_MS, Math.max(backoffMs, retryAfterMs));
-      if (err instanceof RetryableError) {
+      if (err instanceof Retry) {
         // Expected transient condition (e.g. out-of-order delivery). Retry
         // quietly; only escalate to warn once it stops being transient.
         const fields = {
@@ -151,7 +150,7 @@ export function startWorkerLoop(
     inFlight = drainUntilStopped()
       .catch((err) => {
         logger.error("worker drain failed", {
-          err: err instanceof Error ? err.message : String(err),
+          err: errMessage(err),
         });
       })
       .finally(() => {

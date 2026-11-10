@@ -1,6 +1,6 @@
+import type { Logger } from "#lib";
 import type { Db } from "../db/client.ts";
 import { findMessageEffect } from "../db/repositories/messages.ts";
-import type { Logger } from "../logger.ts";
 import { sanitizeLinkLabel, sanitizeMrkdwn } from "../slack/blocks.ts";
 import type { SlackClient } from "../slack/client.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";

@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createLogger } from "#lib";
 import type { Db } from "../db/client.ts";
 import { getSlackUserTokenRow } from "../db/repositories/slackUserTokens.ts";
 import { oauthStateNonces, slackUserTokens } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createOAuthState } from "../github/oauth.ts";
-import { createLogger } from "../logger.ts";
 import { createTokenCipher } from "../slack/tokenCipher.ts";
 import { createSlackOAuthRoute } from "./slackOAuth.ts";
 

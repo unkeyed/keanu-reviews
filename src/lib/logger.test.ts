@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createLogger, registerSecretValues } from "./logger.ts";
+import { createLogger, registerSecrets } from "./logger.ts";
+
+registerSecrets({ keys: ["GITHUB_APP_PRIVATE_KEY", "SLACK_BOT_TOKEN"] });
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("logger redaction (KTD12)", () => {
-  it("redacts fields whose key is a known secret", () => {
+  it("redacts fields whose key is a registered secret", () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
     createLogger("info").info("test", {
       GITHUB_APP_PRIVATE_KEY: "topsecret",
@@ -15,7 +17,7 @@ describe("logger redaction (KTD12)", () => {
   });
 
   it("redacts a registered secret value even when nested under an innocent key", () => {
-    registerSecretValues(["xoxb-super-secret-token"]);
+    registerSecrets({ keys: [], values: ["xoxb-super-secret-token"] });
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
     createLogger("info").info("test", { payload: { token: "xoxb-super-secret-token" } });
     const out = JSON.parse(String(spy.mock.calls[0]?.[0])) as { payload: { token: string } };

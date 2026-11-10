@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createLogger } from "../logger.ts";
+import { createLogger } from "#lib";
 import { startReminderLoop } from "./loop.ts";
 
 afterEach(() => {

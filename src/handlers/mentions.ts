@@ -1,3 +1,4 @@
+import { errMessage } from "#lib";
 import { findByGithubLogin } from "../db/repositories/identities.ts";
 import { inviteToChannel } from "./invites.ts";
 import type { PrHandlerDeps } from "./pullRequest.ts";
@@ -48,7 +49,7 @@ export async function inviteMentionedUsers(
   } catch (error) {
     deps.logger.warn("failed to invite mentioned users into channel", {
       channelId,
-      err: error instanceof Error ? error.message : String(error),
+      err: errMessage(error),
     });
   }
 }

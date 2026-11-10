@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createLogger } from "#lib";
 import type { CiReadiness } from "../ci/status.ts";
 import type { Db } from "../db/client.ts";
 import { upsertIdentity } from "../db/repositories/identities.ts";
 import { setChannel, updateState, upsertPullRequest } from "../db/repositories/pullRequests.ts";
 import { createTestDb } from "../db/testDb.ts";
-import { createLogger } from "../logger.ts";
 import { FakeSlackClient } from "../testing/fakeSlack.ts";
 import { type CheckRunPayload, type ChecksDeps, handleCheckRun } from "./checks.ts";
 import { handleReviewRequest } from "./reviewRequest.ts";

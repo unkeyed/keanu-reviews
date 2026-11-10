@@ -1,4 +1,4 @@
-import type { Logger } from "../logger.ts";
+import { type Logger, errMessage } from "#lib";
 
 /**
  * Hour (UTC) the closed-PR reconciliation runs. The process has no cron library
@@ -60,7 +60,7 @@ export function startDailyLoop(
     task()
       .catch((err) => {
         logger.error("daily task failed", {
-          err: err instanceof Error ? err.message : String(err),
+          err: errMessage(err),
         });
       })
       .finally(() => {
