@@ -1,3 +1,4 @@
+import { type PrState, claimFromAction, isTerminal, nextState } from "#events";
 import { type Logger, Retry, errMessage, leaseWaitMs } from "#lib";
 import {
   type Ledger,
@@ -24,7 +25,6 @@ import {
   setChannel,
 } from "../db/repositories/pullRequests.ts";
 import { cancelForPr } from "../db/repositories/reminders.ts";
-import { type PrState, computeTargetState, isTerminal } from "../domain/prState.ts";
 import type { ImageEmbedder } from "../github/attachments.ts";
 import type { PrCommenter } from "../github/comments.ts";
 import type { CiReadinessFetcher } from "../github/users.ts";
@@ -158,10 +158,7 @@ export async function handlePullRequest(
     headRef: pr.head.ref,
     baseRef: pr.base?.ref,
   };
-  const target = computeTargetState(payload.action, {
-    draft: pr.draft ?? false,
-    merged: pr.merged ?? false,
-  });
+  const claim = claimFromAction(payload.action, pr.draft ?? false, pr.merged ?? false);
 
   const sourceUpdatedAt = new Date(pr.updated_at);
   if (Number.isNaN(sourceUpdatedAt.getTime())) {
@@ -185,19 +182,7 @@ export async function handlePullRequest(
 
   try {
     const existing = await findByGithubPrId(db, pr.id);
-    // State follows the latest PR facts, not event order (KTD4). A lifecycle
-    // action dictates the state; otherwise (synchronize/edited/…) derive the
-    // open-PR state from the current `draft` fact so a lost or out-of-order
-    // `ready_for_review` still self-heals on the next event — without this, a
-    // channel stays stuck at `draft-` forever. A closed/merged PR is never
-    // revived by a stray non-lifecycle event.
-    const state: PrState = target
-      ? target
-      : existing && isTerminal(existing.currentState)
-        ? existing.currentState
-        : pr.draft
-          ? "draft"
-          : "pr";
+    const state = nextState(existing?.currentState, claim);
 
     const source = await applyPullRequestSource(db, {
       repoFullName,
@@ -332,7 +317,10 @@ export async function handlePullRequest(
     const needsSlackReconciliation =
       current.appliedState !== desiredState || current.appliedChannelName !== desiredChannelName;
     const shouldPostLifecycle =
-      !channelCreated && !rootReconciled && Boolean(target && current.rootMessageTs);
+      !channelCreated &&
+      !rootReconciled &&
+      claim.kind === "asserted" &&
+      Boolean(current.rootMessageTs);
 
     // A closed/merged PR never needs a reminder. Cancel independently of Slack
     // reconciliation so a Slack failure can't leave a reminder live and fire a

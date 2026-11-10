@@ -1,3 +1,4 @@
+import { isTerminal } from "#events";
 import { type Logger, errMessage } from "#lib";
 import {
   findById,
@@ -5,7 +6,6 @@ import {
   listRecentlyClosedPullRequests,
 } from "../db/repositories/pullRequests.ts";
 import type { PullRequestRow } from "../db/schema.ts";
-import { isTerminal } from "../domain/prState.ts";
 import {
   GithubRateLimitExhaustedError,
   type PullRequestSnapshot,

@@ -1,3 +1,4 @@
+import { isTerminal } from "#events";
 import { type Logger, errMessage } from "#lib";
 import { type SlackGateway, channelSink, createLedger, keys } from "#slack";
 import type { Db } from "../db/client.ts";
@@ -16,7 +17,6 @@ import {
   scheduleReminder,
 } from "../db/repositories/reminders.ts";
 import type { PullRequestRow } from "../db/schema.ts";
-import { isTerminal } from "../domain/prState.ts";
 import type { CiReadinessFetcher } from "../github/users.ts";
 import type { ReviewApprovalFetcher } from "../github/users.ts";
 import type { PullRequestFetcher } from "../handlers/mergeability.ts";

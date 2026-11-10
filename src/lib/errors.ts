@@ -17,6 +17,20 @@ export class Retry extends Error {
   }
 }
 
+/**
+ * A job that can never succeed, such as a payload missing a field a handler
+ * reads. The worker fails it at once instead of retrying the same bytes.
+ */
+export class Permanent extends Error {
+  readonly details?: Record<string, unknown>;
+
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(message);
+    this.name = "Permanent";
+    this.details = details;
+  }
+}
+
 // Live holders release a claim within seconds, so backoff finds it free. A
 // claim older than a job lease was most likely orphaned by a crash, and only
 // its own lease expiry frees it.

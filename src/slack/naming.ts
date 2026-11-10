@@ -1,4 +1,4 @@
-import type { PrState } from "../domain/prState.ts";
+import type { PrState } from "#events";
 
 /**
  * Channel naming (KTD7).

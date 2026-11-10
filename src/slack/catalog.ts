@@ -1,5 +1,5 @@
 import type { ChatPostMessageArguments } from "@slack/web-api";
-import type { PrState } from "../domain/prState.ts";
+import type { PrState } from "#events";
 import type { RenderedMessage } from "./gateway.ts";
 
 type ChatPostMessageWithBlocks = Extract<ChatPostMessageArguments, { blocks: unknown[] }>;

@@ -1,8 +1,8 @@
+import { isTerminal } from "#events";
 import { Retry } from "#lib";
 import { channelSink, createLedger, keys } from "#slack";
 import { findReminderForReviewer } from "../db/repositories/reminders.ts";
 import type { PullRequestRow } from "../db/schema.ts";
-import { isTerminal } from "../domain/prState.ts";
 import { type GithubEmailFetcher, displayName, resolveSlackUser } from "../identity/resolve.ts";
 import { inviteToChannel } from "./invites.ts";
 import {

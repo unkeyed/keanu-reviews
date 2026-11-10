@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, or } from "drizzle-orm";
-import type { PrState } from "../../domain/prState.ts";
+import type { PrState } from "#events";
 import type { Db } from "../client.ts";
 import { type PullRequestRow, pullRequestLifecycleClaims, pullRequests } from "../schema.ts";
 
