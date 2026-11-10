@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDispatcher } from "#app";
 import { Retry, createLogger } from "#lib";
 import type { Db } from "../db/client.ts";
 import { claimNextJob, enqueueJob } from "../db/repositories/jobs.ts";
@@ -10,9 +11,10 @@ import {
 } from "../db/repositories/pullRequests.ts";
 import { jobs } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
-import { type PullRequestPayload, handlePullRequest } from "../handlers/pullRequest.ts";
+import { handlePullRequest } from "../handlers/pullRequest.ts";
 import { keys } from "../slack/catalog.ts";
 import { channelSink, claim, createLedger } from "../slack/ledger.ts";
+import { type PullRequestPayload, pullRequestEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { createWorker, startWorkerLoop } from "./loop.ts";
 
@@ -56,7 +58,7 @@ describe("worker retries", () => {
     const worker = createWorker({
       db,
       logger: createLogger("error"),
-      router: async () => {
+      dispatch: async () => {
         throw new Error("Slack unavailable");
       },
       now: () => clock,
@@ -79,6 +81,38 @@ describe("worker retries", () => {
     expect(row?.raw).toEqual({ private: "payload" });
   });
 
+  it("fails a job whose payload can never parse on the first attempt", async () => {
+    const job = await enqueueJob(db, {
+      deliveryId: "malformed",
+      event: "pull_request",
+      action: "opened",
+      raw: { action: "opened", repository: { full_name: "unkey/api" } },
+    });
+    const error = vi.fn();
+    const worker = createWorker({
+      db,
+      logger: { ...createLogger("error"), error },
+      dispatch: createDispatcher({
+        db,
+        slack: new FakeSlackGateway(),
+        logger: createLogger("error"),
+      }),
+      now: () => job.availableAt.getTime(),
+    });
+
+    expect(await worker.tick()).toBe(true);
+    const [row] = await db.select().from(jobs).where(eq(jobs.id, job.id));
+    expect(row).toMatchObject({ status: "failed", attempts: 1, raw: job.raw });
+    expect(error).toHaveBeenCalledWith(
+      "job failed permanently",
+      expect.objectContaining({
+        jobId: job.id,
+        reason: "invalid pull_request payload",
+        issues: [expect.stringMatching(/^pull_request: /)],
+      }),
+    );
+  });
+
   it("does not run a handler beyond the retry budget when reclaiming a crashed attempt", async () => {
     const job = await enqueueJob(db, {
       deliveryId: "crashed-final-attempt",
@@ -88,11 +122,11 @@ describe("worker retries", () => {
     });
     const clock = job.availableAt.getTime();
     await claimNextJob(db, { now: new Date(clock), leaseMs: 1_000 });
-    const router = vi.fn(async () => undefined);
+    const dispatch = vi.fn(async () => undefined);
     const worker = createWorker({
       db,
       logger: createLogger("error"),
-      router,
+      dispatch,
       now: () => clock + 1_000,
       maxAttempts: 1,
       retryBaseMs: 1_000,
@@ -100,7 +134,7 @@ describe("worker retries", () => {
     });
 
     expect(await worker.tick()).toBe(true);
-    expect(router).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
     const [row] = await db.select().from(jobs).where(eq(jobs.id, job.id));
     expect(row?.status).toBe("failed");
     expect(row?.raw).toEqual({ private: "payload" });
@@ -146,7 +180,7 @@ describe("worker retry hints", () => {
     const worker = createWorker({
       db,
       logger: createLogger("error"),
-      router: async (job) => {
+      dispatch: async (job) => {
         throw new Retry("busy", undefined, job.id === short.id ? 90_000 : 3_600_000);
       },
       now: () => clock,
@@ -174,7 +208,7 @@ describe("worker retry hints", () => {
     const worker = createWorker({
       db,
       logger: createLogger("error"),
-      router: async () => {
+      dispatch: async () => {
         await createLedger(db).deliver(effect, channelSink(slack, "C1"), opened);
       },
     });
@@ -201,7 +235,7 @@ describe("worker retry hints", () => {
     const worker = createWorker({
       db,
       logger: createLogger("error"),
-      router: async () => {
+      dispatch: async () => {
         await createLedger(db).deliver(effect, channelSink(new FakeSlackGateway(), "C1"), opened);
       },
     });
@@ -219,8 +253,11 @@ describe("worker retry hints", () => {
     const worker = createWorker({
       db,
       logger: createLogger("error"),
-      router: async () => {
-        await handlePullRequest({ db, slack, logger: createLogger("error") }, openedPayload);
+      dispatch: async () => {
+        await handlePullRequest(
+          { db, slack, logger: createLogger("error") },
+          pullRequestEvent(openedPayload),
+        );
       },
     });
 
@@ -239,10 +276,10 @@ describe("worker retry hints", () => {
     const worker = createWorker({
       db,
       logger: createLogger("error"),
-      router: async () => {
+      dispatch: async () => {
         await handlePullRequest(
           { db, slack: new FakeSlackGateway(), logger: createLogger("error") },
-          openedPayload,
+          pullRequestEvent(openedPayload),
         );
       },
     });
@@ -259,10 +296,10 @@ describe("worker retry hints", () => {
     const worker = createWorker({
       db,
       logger: createLogger("error"),
-      router: async () => {
+      dispatch: async () => {
         await handlePullRequest(
           { db, slack: new FakeSlackGateway(), logger: createLogger("error") },
-          openedPayload,
+          pullRequestEvent(openedPayload),
         );
       },
     });
@@ -292,7 +329,7 @@ describe("worker lease", () => {
     const worker = createWorker({
       db,
       logger: createLogger("error"),
-      router: async () => {
+      dispatch: async () => {
         started();
         await finished;
       },

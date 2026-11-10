@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseEvent } from "#events";
 import { createLogger } from "#lib";
 import type { CiReadiness } from "../ci/status.ts";
 import type { Db } from "../db/client.ts";
 import { upsertIdentity } from "../db/repositories/identities.ts";
 import { setChannel, updateState, upsertPullRequest } from "../db/repositories/pullRequests.ts";
 import { createTestDb } from "../db/testDb.ts";
+import { type CheckRunPayload, checkRunEvent, pullRequestEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
-import { type CheckRunPayload, type ChecksDeps, handleCheckRun } from "./checks.ts";
+import { type ChecksDeps, handleCheckRun } from "./checks.ts";
 import { handleReviewRequest } from "./reviewRequest.ts";
 
 let db: Db;
@@ -64,22 +66,25 @@ const requestReview = async (number = 1) => {
     slackUserId: "U7",
     source: "self-link",
   });
-  await handleReviewRequest(deps(), {
-    action: "review_requested",
-    repository: { full_name: "unkey/api" },
-    pull_request: {
-      number,
-      id: number,
-      draft: false,
-      merged: false,
-      title: "Review me",
-      html_url: "https://github.com/unkey/api/pull/1",
-      user: { login: "oz", id: 100 },
-      head: { sha: "sha-1" },
-      updated_at: "2026-08-11T12:00:00Z",
-    },
-    requested_reviewer: { id: 7, login: "flo" },
-  });
+  await handleReviewRequest(
+    deps(),
+    pullRequestEvent({
+      action: "review_requested",
+      repository: { full_name: "unkey/api" },
+      pull_request: {
+        number,
+        id: number,
+        draft: false,
+        merged: false,
+        title: "Review me",
+        html_url: "https://github.com/unkey/api/pull/1",
+        user: { login: "oz", id: 100 },
+        head: { sha: "sha-1" },
+        updated_at: "2026-08-11T12:00:00Z",
+      },
+      requested_reviewer: { id: 7, login: "flo" },
+    }),
+  );
 };
 
 const payload = (over: Partial<CheckRunPayload["check_run"]> = {}): CheckRunPayload => ({
@@ -108,7 +113,7 @@ describe("CI events release review alerts", () => {
           requestedReviewers: [],
         }),
       }),
-      payload(),
+      checkRunEvent(payload()),
     );
     expect(slack.messages).toHaveLength(0);
     expect(JSON.stringify(slack.messages)).not.toContain("Ready to merge");
@@ -120,7 +125,8 @@ describe("CI events release review alerts", () => {
     ci = "failing";
     await requestReview();
     expect(slack.invites).toHaveLength(0);
-    await handleCheckRun(deps(), payload({ status: "in_progress", conclusion: null }));
+    const ev = parseEvent("check_run", payload({ status: "in_progress", conclusion: null }));
+    expect(ev).toMatchObject({ kind: "ignored", reason: "check run not completed" });
     expect(slack.invites).toHaveLength(0);
   });
 
@@ -132,8 +138,8 @@ describe("CI events release review alerts", () => {
     expect(slack.messages).toHaveLength(0);
 
     ci = "passing";
-    await handleCheckRun(deps(), payload());
-    await handleCheckRun(deps(), payload({ id: 101 }));
+    await handleCheckRun(deps(), checkRunEvent(payload()));
+    await handleCheckRun(deps(), checkRunEvent(payload({ id: 101 })));
     expect(slack.invites).toEqual([{ channelId: "C1", userIds: ["U7"] }]);
     expect(slack.messages).toHaveLength(1);
     expect(JSON.stringify(slack.messages)).not.toContain("Ready to merge");
@@ -149,27 +155,30 @@ describe("CI events release review alerts", () => {
       source: "self-link",
     });
     ci = "failing";
-    await handleReviewRequest(deps(), {
-      action: "review_requested",
-      repository: { full_name: "unkey/api" },
-      pull_request: {
-        number: 1,
-        id: 1,
-        draft: true,
-        title: "Review me",
-        html_url: "https://github.com/unkey/api/pull/1",
-        user: { login: "oz", id: 100 },
-        head: { sha: "sha-1" },
-        updated_at: "2026-08-11T12:00:00Z",
-      },
-      requested_reviewer: { id: 7, login: "flo" },
-    });
+    await handleReviewRequest(
+      deps(),
+      pullRequestEvent({
+        action: "review_requested",
+        repository: { full_name: "unkey/api" },
+        pull_request: {
+          number: 1,
+          id: 1,
+          draft: true,
+          title: "Review me",
+          html_url: "https://github.com/unkey/api/pull/1",
+          user: { login: "oz", id: 100 },
+          head: { sha: "sha-1" },
+          updated_at: "2026-08-11T12:00:00Z",
+        },
+        requested_reviewer: { id: 7, login: "flo" },
+      }),
+    );
     ci = "passing";
-    await handleCheckRun(deps(), payload());
+    await handleCheckRun(deps(), checkRunEvent(payload()));
     expect(slack.invites).toHaveLength(0);
 
     await updateState(db, "unkey/api#1", "pr");
-    await handleCheckRun(deps(), payload({ id: 102 }));
+    await handleCheckRun(deps(), checkRunEvent(payload({ id: 102 })));
     expect(slack.invites).toEqual([{ channelId: "C1", userIds: ["U7"] }]);
   });
 
@@ -184,7 +193,7 @@ describe("CI events release review alerts", () => {
     ci = "failing";
     await handleReviewRequest(
       deps(),
-      {
+      pullRequestEvent({
         action: "review_requested",
         repository: { full_name: "unkey/api" },
         pull_request: {
@@ -198,14 +207,13 @@ describe("CI events release review alerts", () => {
           updated_at: "2026-08-11T12:00:00Z",
         },
         requested_reviewer: { id: 7, login: "flo" },
-      },
-      "delivery-1",
+      }),
       "delivery-1",
     );
     ci = "passing";
-    await handleCheckRun(deps(), payload({ head_sha: "sha-1" }));
+    await handleCheckRun(deps(), checkRunEvent(payload({ head_sha: "sha-1" })));
     expect(slack.invites).toHaveLength(0);
-    await handleCheckRun(deps(), payload({ id: 103, head_sha: "sha-2" }));
+    await handleCheckRun(deps(), checkRunEvent(payload({ id: 103, head_sha: "sha-2" })));
     expect(slack.invites).toHaveLength(1);
   });
 
@@ -221,23 +229,29 @@ describe("CI events release review alerts", () => {
       slackUserId: "U8",
       source: "self-link",
     });
-    await handleReviewRequest(deps(), {
-      action: "review_requested",
-      repository: { full_name: "unkey/api" },
-      pull_request: {
-        number: 2,
-        id: 2,
-        draft: false,
-        title: "Review me",
-        html_url: "https://github.com/unkey/api/pull/2",
-        user: { login: "oz", id: 100 },
-        head: { sha: "sha-1" },
-        updated_at: "2026-08-11T12:00:00Z",
-      },
-      requested_reviewer: { id: 8, login: "ada" },
-    });
+    await handleReviewRequest(
+      deps(),
+      pullRequestEvent({
+        action: "review_requested",
+        repository: { full_name: "unkey/api" },
+        pull_request: {
+          number: 2,
+          id: 2,
+          draft: false,
+          title: "Review me",
+          html_url: "https://github.com/unkey/api/pull/2",
+          user: { login: "oz", id: 100 },
+          head: { sha: "sha-1" },
+          updated_at: "2026-08-11T12:00:00Z",
+        },
+        requested_reviewer: { id: 8, login: "ada" },
+      }),
+    );
     ci = "passing";
-    await handleCheckRun(deps(), payload({ pull_requests: [{ number: 1 }, { number: 2 }] }));
+    await handleCheckRun(
+      deps(),
+      checkRunEvent(payload({ pull_requests: [{ number: 1 }, { number: 2 }] })),
+    );
     expect(slack.invites.map((invite) => invite.channelId).sort()).toEqual(["C1", "C2"]);
   });
 
@@ -249,18 +263,21 @@ describe("CI events release review alerts", () => {
     // that finds PR 1 still must not alert on the stale SHA.
     const fetchPrForSha = vi.fn(async () => [1]);
     ci = "passing";
-    await handleCheckRun(deps({ fetchPrForSha }), payload({ head_sha: "fork-sha" }));
+    await handleCheckRun(deps({ fetchPrForSha }), checkRunEvent(payload({ head_sha: "fork-sha" })));
     expect(fetchPrForSha).toHaveBeenCalled();
     expect(slack.invites).toHaveLength(0);
 
     const misses = vi.fn(async () => []);
-    await handleCheckRun(deps({ fetchPrForSha: misses }), payload({ head_sha: "unknown" }));
+    await handleCheckRun(
+      deps({ fetchPrForSha: misses }),
+      checkRunEvent(payload({ head_sha: "unknown" })),
+    );
     expect(slack.messages).toHaveLength(0);
   });
 
   it("retries when GitHub associates a PR whose local mapping is not ready", async () => {
     await expect(
-      handleCheckRun(deps(), payload({ pull_requests: [{ number: 99 }] })),
+      handleCheckRun(deps(), checkRunEvent(payload({ pull_requests: [{ number: 99 }] }))),
     ).rejects.toThrow("PR channel is not ready");
   });
 
@@ -270,7 +287,9 @@ describe("CI events release review alerts", () => {
     await requestReview();
     ci = "passing";
     const event = payload({ pull_requests: [{ number: 1 }, { number: 2 }] });
-    await expect(handleCheckRun(deps(), event)).rejects.toThrow("PR channel is not ready");
+    await expect(handleCheckRun(deps(), checkRunEvent(event))).rejects.toThrow(
+      "PR channel is not ready",
+    );
     expect(slack.invites.map((invite) => invite.channelId)).toEqual(["C1"]);
   });
 
@@ -278,9 +297,9 @@ describe("CI events release review alerts", () => {
     await seedPr("sha-1");
     ci = "failing";
     await requestReview();
-    await handleCheckRun(deps(), payload({ conclusion: "failure" }));
+    await handleCheckRun(deps(), checkRunEvent(payload({ conclusion: "failure" })));
     ci = "pending";
-    await handleCheckRun(deps(), payload({ id: 101, conclusion: "success" }));
+    await handleCheckRun(deps(), checkRunEvent(payload({ id: 101, conclusion: "success" })));
     expect(slack.invites).toHaveLength(0);
   });
 });

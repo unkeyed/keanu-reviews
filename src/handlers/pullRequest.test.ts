@@ -8,12 +8,9 @@ import { findByRepoNumber, prId } from "../db/repositories/pullRequests.ts";
 import { scheduleReminder } from "../db/repositories/reminders.ts";
 import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
+import { type PullRequestPayload, pullRequestEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
-import {
-  PullRequestLifecycleBusyError,
-  type PullRequestPayload,
-  handlePullRequest,
-} from "./pullRequest.ts";
+import { PullRequestLifecycleBusyError, handlePullRequest } from "./pullRequest.ts";
 
 let db: Db;
 let slack: FakeSlackGateway;
@@ -59,10 +56,10 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       slackUserId: "U100",
       source: "self-link",
     });
-    await handlePullRequest(deps(), payload("opened"));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
     expect(slack.invites).toEqual([{ channelId: "C1", userIds: ["U100"] }]);
     // Idempotent: a second event does not re-invite the author.
-    await handlePullRequest(deps(), payload("synchronize"));
+    await handlePullRequest(deps(), pullRequestEvent(payload("synchronize")));
     expect(slack.invites).toHaveLength(1);
   });
 
@@ -74,7 +71,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       source: "self-link",
     });
     slack.profiles.set("U100", { name: "Oz Perkins" });
-    await handlePullRequest(deps(), payload("opened"));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
     const blocks = JSON.stringify(slack.messages);
     expect(blocks).toContain("👤 Opened by Oz Perkins");
     expect(blocks).not.toContain("<@U100>"); // never tag the author
@@ -91,8 +88,8 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     const warn = vi.fn();
     const d = { ...deps(), logger: { ...createLogger("error"), warn } };
 
-    await handlePullRequest(d, payload("opened"));
-    await handlePullRequest(d, payload("closed", { merged: true }));
+    await handlePullRequest(d, pullRequestEvent(payload("opened")));
+    await handlePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
 
     expect(slack.invites).toHaveLength(0);
     expect(JSON.stringify(slack.messages)).toContain("Opened by");
@@ -106,14 +103,14 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   });
 
   it("does not invite an unlinked author (degrades quietly)", async () => {
-    await handlePullRequest(deps(), payload("opened"));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
     expect(slack.invites).toHaveLength(0);
   });
 
   it("announces a merge in the shipped channel (merged only)", async () => {
     const d = { ...deps(), shippedChannel: "C0SHIPPED" };
-    await handlePullRequest(d, payload("opened"));
-    await handlePullRequest(d, payload("closed", { merged: true }));
+    await handlePullRequest(d, pullRequestEvent(payload("opened")));
+    await handlePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
     const shipped = slack.messages.find((m) => m.channel === "C0SHIPPED");
     expect(JSON.stringify(shipped?.blocks)).toContain("has shipped");
   });
@@ -127,8 +124,8 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     });
     slack.profiles.set("U100", { name: "Oz Perkins" });
     const d = { ...deps(), shippedChannel: "C0SHIPPED" };
-    await handlePullRequest(d, payload("opened"));
-    await handlePullRequest(d, payload("closed", { merged: true }));
+    await handlePullRequest(d, pullRequestEvent(payload("opened")));
+    await handlePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
     const shipped = slack.messages.find((m) => m.channel === "C0SHIPPED");
     const blocks = JSON.stringify(shipped?.blocks);
     expect(blocks).toContain("Oz Perkins");
@@ -137,7 +134,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
 
   it("archives and cancels reminders on merge even if the #shipped post fails", async () => {
     const d = { ...deps(), shippedChannel: "C0SHIPPED" };
-    await handlePullRequest(d, payload("opened")); // creates the PR row + channel C1
+    await handlePullRequest(d, pullRequestEvent(payload("opened"))); // creates the PR row + channel C1
     await scheduleReminder(db, {
       prId: prId("unkey/api", 1423),
       reviewerGithubId: 7,
@@ -149,7 +146,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       return realPost(channel, m, opts);
     };
 
-    await handlePullRequest(d, payload("closed", { merged: true }));
+    await handlePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
 
     expect(slack.channel("C1")?.archived).toBe(true); // archived despite shipped failure
     const [rem] = await db
@@ -161,8 +158,8 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
 
   it("does not announce a plain close (not merged)", async () => {
     const d = { ...deps(), shippedChannel: "C0SHIPPED" };
-    await handlePullRequest(d, payload("opened"));
-    await handlePullRequest(d, payload("closed", { merged: false }));
+    await handlePullRequest(d, pullRequestEvent(payload("opened")));
+    await handlePullRequest(d, pullRequestEvent(payload("closed", { merged: false })));
     expect(slack.messages.some((m) => m.channel === "C0SHIPPED")).toBe(false);
   });
 
@@ -176,8 +173,8 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       postPrComment,
       slackTeamId: "T1",
     };
-    await handlePullRequest(d, payload("opened"));
-    await handlePullRequest(d, payload("closed", { merged: true }));
+    await handlePullRequest(d, pullRequestEvent(payload("opened")));
+    await handlePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
     expect(postPrComment).toHaveBeenCalledTimes(1);
     const call = postPrComment.mock.calls[0];
     expect(call?.[0]).toBe("unkey/api");
@@ -194,8 +191,8 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       postPrComment,
       slackTeamId: "T1",
     };
-    await handlePullRequest(d, payload("opened"));
-    await handlePullRequest(d, payload("closed", { merged: true }));
+    await handlePullRequest(d, pullRequestEvent(payload("opened")));
+    await handlePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
 
     expect(slack.messages.some((message) => message.channel === "C0SHIPPED")).toBe(true);
     expect(postPrComment).toHaveBeenCalledTimes(1);
@@ -211,7 +208,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       postPrComment,
       slackTeamId: "T1",
     };
-    await handlePullRequest(d, payload("opened"));
+    await handlePullRequest(d, pullRequestEvent(payload("opened")));
     await scheduleReminder(db, {
       prId: prId("unkey/api", 1423),
       reviewerGithubId: 7,
@@ -219,7 +216,9 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     });
 
     await expect(
-      handlePullRequest(d, payload("closed", { merged: true }), { announceMerge: false }),
+      handlePullRequest(d, pullRequestEvent(payload("closed", { merged: true })), {
+        announceMerge: false,
+      }),
     ).resolves.toMatchObject({
       sourceAccepted: true,
       skippedShipped: true,
@@ -244,15 +243,17 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   it("does not comment on the PR when the opt-in is off", async () => {
     const postPrComment = vi.fn(async () => {});
     const d = { ...deps(), commentOnMerge: false, postPrComment, slackTeamId: "T1" };
-    await handlePullRequest(d, payload("opened"));
-    await handlePullRequest(d, payload("closed", { merged: true }));
+    await handlePullRequest(d, pullRequestEvent(payload("opened")));
+    await handlePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
     expect(postPrComment).not.toHaveBeenCalled();
   });
 
   it("opens with a description: linked PR number and the branch flow", async () => {
     await handlePullRequest(
       deps(),
-      payload("opened", { base: { ref: "main" }, head: { sha: "sha1", ref: "feat/auth" } }),
+      pullRequestEvent(
+        payload("opened", { base: { ref: "main" }, head: { sha: "sha1", ref: "feat/auth" } }),
+      ),
     );
     const root = JSON.stringify(slack.messages[0]?.blocks);
     expect(root).toContain("https://github.com/unkey/api/pull/1423|PR #1423");
@@ -262,7 +263,9 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   it("sets the channel topic to a linked PR description", async () => {
     await handlePullRequest(
       deps(),
-      payload("opened", { base: { ref: "main" }, head: { sha: "sha1", ref: "fix/gates" } }),
+      pullRequestEvent(
+        payload("opened", { base: { ref: "main" }, head: { sha: "sha1", ref: "fix/gates" } }),
+      ),
     );
     expect(slack.channel("C1")?.topic).toBe(
       "<https://github.com/unkey/api/pull/1423|PR 1423>: oz wants to merge into main from fix/gates",
@@ -270,7 +273,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   });
 
   it("opened draft creates a draft-* channel, stores mapping + root ts", async () => {
-    await handlePullRequest(deps(), payload("opened", { draft: true }));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })));
     expect(slack.channels).toHaveLength(1);
     expect(slack.channels[0]?.name).toBe("draft-oz-unkey-api-1423-add-auth");
     const row = await findByRepoNumber(db, "unkey/api", 1423);
@@ -280,72 +283,82 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   });
 
   it("heals a stuck draft channel when ready_for_review was missed (state follows facts)", async () => {
-    await handlePullRequest(deps(), payload("opened", { draft: true }));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })));
     expect(slack.channel("C1")?.name).toBe("draft-oz-unkey-api-1423-add-auth");
     // ready_for_review never applied; a later synchronize carries draft: false.
     await handlePullRequest(
       deps(),
-      payload("synchronize", { draft: false, updated_at: "2026-08-11T12:01:00Z" }),
+      pullRequestEvent(
+        payload("synchronize", { draft: false, updated_at: "2026-08-11T12:01:00Z" }),
+      ),
     );
     expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
   });
 
   it("keeps a draft channel draft on a synchronize that is still a draft", async () => {
-    await handlePullRequest(deps(), payload("opened", { draft: true }));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })));
     await handlePullRequest(
       deps(),
-      payload("synchronize", { draft: true, updated_at: "2026-08-11T12:01:00Z" }),
+      pullRequestEvent(payload("synchronize", { draft: true, updated_at: "2026-08-11T12:01:00Z" })),
     );
     expect(slack.channel("C1")?.name).toBe("draft-oz-unkey-api-1423-add-auth");
   });
 
   it("does not revive a merged PR from a stray synchronize", async () => {
-    await handlePullRequest(deps(), payload("opened"));
-    await handlePullRequest(deps(), payload("closed", { merged: true }));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await handlePullRequest(deps(), pullRequestEvent(payload("closed", { merged: true })));
     expect(slack.channel("C1")?.name).toBe("merged-oz-unkey-api-1423-add-auth");
     // A late, non-lifecycle event must not flip it back to an open state.
     await handlePullRequest(
       deps(),
-      payload("synchronize", { draft: false, updated_at: "2026-08-11T13:00:00Z" }),
+      pullRequestEvent(
+        payload("synchronize", { draft: false, updated_at: "2026-08-11T13:00:00Z" }),
+      ),
     );
     expect(slack.channel("C1")?.name).toBe("merged-oz-unkey-api-1423-add-auth");
     expect(slack.channel("C1")?.archived).toBe(true);
   });
 
   it("ready_for_review renames draft -> pr; converted_to_draft renames back", async () => {
-    await handlePullRequest(deps(), payload("opened", { draft: true }));
-    await handlePullRequest(deps(), payload("ready_for_review", { draft: false }));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })));
+    await handlePullRequest(
+      deps(),
+      pullRequestEvent(payload("ready_for_review", { draft: false })),
+    );
     expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
-    await handlePullRequest(deps(), payload("converted_to_draft", { draft: true }));
+    await handlePullRequest(
+      deps(),
+      pullRequestEvent(payload("converted_to_draft", { draft: true })),
+    );
     expect(slack.channel("C1")?.name).toBe("draft-oz-unkey-api-1423-add-auth");
   });
 
   it("closed+merged renames to merged then archives (rename precedes archive)", async () => {
-    await handlePullRequest(deps(), payload("opened"));
-    await handlePullRequest(deps(), payload("closed", { merged: true }));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await handlePullRequest(deps(), pullRequestEvent(payload("closed", { merged: true })));
     const ch = slack.channel("C1");
     expect(ch?.name).toBe("merged-oz-unkey-api-1423-add-auth");
     expect(ch?.archived).toBe(true);
   });
 
   it("closed without merge renames to closed then archives", async () => {
-    await handlePullRequest(deps(), payload("opened"));
-    await handlePullRequest(deps(), payload("closed", { merged: false }));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await handlePullRequest(deps(), pullRequestEvent(payload("closed", { merged: false })));
     expect(slack.channel("C1")?.name).toBe("closed-oz-unkey-api-1423-add-auth");
     expect(slack.channel("C1")?.archived).toBe(true);
   });
 
   it("reopened unarchives and renames to pr", async () => {
-    await handlePullRequest(deps(), payload("opened"));
-    await handlePullRequest(deps(), payload("closed", { merged: false }));
-    await handlePullRequest(deps(), payload("reopened"));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await handlePullRequest(deps(), pullRequestEvent(payload("closed", { merged: false })));
+    await handlePullRequest(deps(), pullRequestEvent(payload("reopened")));
     expect(slack.channel("C1")?.archived).toBe(false);
     expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
   });
 
   it("does not write to an archived channel on a later event for a merged PR (no is_archived)", async () => {
-    await handlePullRequest(deps(), payload("opened"));
-    await handlePullRequest(deps(), payload("closed", { merged: true }));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await handlePullRequest(deps(), pullRequestEvent(payload("closed", { merged: true })));
     expect(slack.channel("C1")?.archived).toBe(true);
 
     // The author links their Slack account only AFTER the merge. A subsequent
@@ -360,7 +373,10 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     const before = slack.messages.length;
 
     await expect(
-      handlePullRequest(deps(), payload("edited", { updated_at: "2026-08-11T13:00:00Z" })),
+      handlePullRequest(
+        deps(),
+        pullRequestEvent(payload("edited", { updated_at: "2026-08-11T13:00:00Z" })),
+      ),
     ).resolves.toMatchObject({
       sourceAccepted: true,
       skippedShipped: false,
@@ -371,8 +387,8 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   });
 
   it("unarchives before writing when a merged PR is reopened after the author links late", async () => {
-    await handlePullRequest(deps(), payload("opened"));
-    await handlePullRequest(deps(), payload("closed", { merged: true }));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await handlePullRequest(deps(), pullRequestEvent(payload("closed", { merged: true })));
     // Author links after the archive; reopen must unarchive before the invite.
     await upsertIdentity(db, {
       githubUserId: 100,
@@ -382,7 +398,10 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     });
 
     await expect(
-      handlePullRequest(deps(), payload("reopened", { updated_at: "2026-08-11T13:00:00Z" })),
+      handlePullRequest(
+        deps(),
+        pullRequestEvent(payload("reopened", { updated_at: "2026-08-11T13:00:00Z" })),
+      ),
     ).resolves.toMatchObject({
       sourceAccepted: true,
       skippedShipped: false,
@@ -396,8 +415,8 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   });
 
   it("re-delivered opened event does not create a second channel", async () => {
-    await handlePullRequest(deps(), payload("opened"));
-    await handlePullRequest(deps(), payload("opened"));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
     expect(slack.channels).toHaveLength(1);
     expect(await findByRepoNumber(db, "unkey/api", 1423).then((r) => r?.id)).toBe(
       prId("unkey/api", 1423),
@@ -411,7 +430,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       throw new SlackApiError("conversations.create", "no_response");
     };
 
-    await handlePullRequest(deps(), payload("opened"));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
 
     expect(slack.channels).toHaveLength(1);
     expect((await findByRepoNumber(db, "unkey/api", 1423))?.channelId).toBe("C1");
@@ -420,7 +439,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   it("recovers name_taken by looking up only the exact deterministic channel name", async () => {
     await slack.createChannel("pr-oz-unkey-api-1423-add-auth");
 
-    await handlePullRequest(deps(), payload("opened"));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
 
     expect(slack.channels).toHaveLength(1);
     expect((await findByRepoNumber(db, "unkey/api", 1423))?.channelId).toBe("C1");
@@ -436,7 +455,9 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     };
     const findChannelByName = vi.spyOn(slack, "findChannelByName");
 
-    await expect(handlePullRequest(deps(), payload("opened"))).rejects.toBe(failure);
+    await expect(handlePullRequest(deps(), pullRequestEvent(payload("opened")))).rejects.toBe(
+      failure,
+    );
 
     expect(findChannelByName).not.toHaveBeenCalled();
     expect(slack.channels).toHaveLength(0);
@@ -448,7 +469,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       title: "ship <!channel>",
       user: { login: "<!everyone>", id: 101 },
     });
-    await handlePullRequest(deps(), event);
+    await handlePullRequest(deps(), pullRequestEvent(event));
     expect(JSON.stringify(slack.messages.at(-1))).not.toContain("<!channel>");
     expect(JSON.stringify(slack.messages.at(-1))).not.toContain("<!everyone>");
   });
@@ -464,10 +485,10 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       return post(channel, message, opts);
     };
 
-    await expect(handlePullRequest(deps(), payload("opened"))).rejects.toThrow(
+    await expect(handlePullRequest(deps(), pullRequestEvent(payload("opened")))).rejects.toThrow(
       "transient Slack failure",
     );
-    await handlePullRequest(deps(), payload("opened"));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
 
     expect(slack.channels).toHaveLength(1);
     expect(slack.messages).toHaveLength(1);
@@ -475,7 +496,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   });
 
   it("retries Slack reconciliation after a rename failure without regressing source state", async () => {
-    await handlePullRequest(deps(), payload("opened", { draft: true }));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })));
     const rename = slack.rename.bind(slack);
     let fail = true;
     slack.rename = async (channelId, name) => {
@@ -490,17 +511,19 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       draft: false,
       updated_at: "2026-08-11T12:01:00Z",
     });
-    await expect(handlePullRequest(deps(), ready)).rejects.toThrow("rename failed");
+    await expect(handlePullRequest(deps(), pullRequestEvent(ready))).rejects.toThrow(
+      "rename failed",
+    );
     const pending = await findByRepoNumber(db, "unkey/api", 1423);
     expect(pending?.currentState).toBe("pr");
     expect(pending?.appliedState).toBe("draft");
-    await handlePullRequest(deps(), ready);
+    await handlePullRequest(deps(), pullRequestEvent(ready));
 
     expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
   });
 
   it("retries archive after rename succeeded but archive failed", async () => {
-    await handlePullRequest(deps(), payload("opened"));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
     const archive = slack.archive.bind(slack);
     let fail = true;
     slack.archive = async (channelId) => {
@@ -514,18 +537,20 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     const closed = payload("closed", {
       updated_at: "2026-08-11T12:01:00Z",
     });
-    await expect(handlePullRequest(deps(), closed)).rejects.toThrow("archive failed");
+    await expect(handlePullRequest(deps(), pullRequestEvent(closed))).rejects.toThrow(
+      "archive failed",
+    );
     const pending = await findByRepoNumber(db, "unkey/api", 1423);
     expect(pending?.currentState).toBe("closed");
     expect(pending?.appliedState).toBe("pr");
-    await handlePullRequest(deps(), closed);
+    await handlePullRequest(deps(), pullRequestEvent(closed));
 
     expect(slack.channel("C1")?.name).toBe("closed-oz-unkey-api-1423-add-auth");
     expect(slack.channel("C1")?.archived).toBe(true);
   });
 
   it("posts a terminal lifecycle note after rename and before archive", async () => {
-    await handlePullRequest(deps(), payload("opened"));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
     const operations: string[] = [];
     const rename = slack.rename.bind(slack);
     const post = slack.post.bind(slack);
@@ -543,14 +568,17 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       await archive(channelId);
     };
 
-    await handlePullRequest(deps(), payload("closed", { updated_at: "2026-08-11T12:01:00Z" }));
+    await handlePullRequest(
+      deps(),
+      pullRequestEvent(payload("closed", { updated_at: "2026-08-11T12:01:00Z" })),
+    );
 
     expect(operations).toEqual(["rename", "post", "archive"]);
     expect(slack.channel("C1")?.archived).toBe(true);
   });
 
   it("runs the quiet-archive member cleanup immediately before archiving", async () => {
-    await handlePullRequest(deps(), payload("opened"));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
     const operations: string[] = [];
     const archive = slack.archive.bind(slack);
     slack.archive = async (channelId) => {
@@ -563,7 +591,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
 
     await handlePullRequest(
       { ...deps(), quietArchive },
-      payload("closed", { merged: true, updated_at: "2026-08-11T12:01:00Z" }),
+      pullRequestEvent(payload("closed", { merged: true, updated_at: "2026-08-11T12:01:00Z" })),
     );
 
     expect(operations).toEqual(["quiet:C1", "archive"]);
@@ -571,7 +599,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   });
 
   it("retries a terminal lifecycle note before archiving the channel", async () => {
-    await handlePullRequest(deps(), payload("opened"));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
     const post = slack.post.bind(slack);
     let fail = true;
     slack.post = async (channel, message, opts) => {
@@ -583,9 +611,11 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     };
     const closed = payload("closed", { updated_at: "2026-08-11T12:01:00Z" });
 
-    await expect(handlePullRequest(deps(), closed)).rejects.toThrow("note failed");
+    await expect(handlePullRequest(deps(), pullRequestEvent(closed))).rejects.toThrow(
+      "note failed",
+    );
     expect(slack.channel("C1")?.archived).toBe(false);
-    await handlePullRequest(deps(), closed);
+    await handlePullRequest(deps(), pullRequestEvent(closed));
 
     expect(slack.channel("C1")?.archived).toBe(true);
     expect(slack.messages.filter((message) => message.text.includes("closed"))).toHaveLength(1);
@@ -617,9 +647,11 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       merged: true,
       updated_at: "2026-08-11T12:01:00Z",
     });
-    await expect(handlePullRequest(deps(), closed)).rejects.toThrow("root failed");
+    await expect(handlePullRequest(deps(), pullRequestEvent(closed))).rejects.toThrow(
+      "root failed",
+    );
     expect((await findByRepoNumber(db, "unkey/api", 1423))?.appliedState).toBeNull();
-    await handlePullRequest(deps(), closed);
+    await handlePullRequest(deps(), pullRequestEvent(closed));
 
     expect(slack.channels).toHaveLength(1);
     expect(slack.channel("C1")?.name).toBe("merged-oz-unkey-api-1423-add-auth");
@@ -630,17 +662,21 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   it("ignores an older lifecycle event after a newer terminal state", async () => {
     await handlePullRequest(
       deps(),
-      payload("closed", {
-        merged: true,
-        updated_at: "2026-08-11T12:02:00Z",
-      }),
+      pullRequestEvent(
+        payload("closed", {
+          merged: true,
+          updated_at: "2026-08-11T12:02:00Z",
+        }),
+      ),
     );
     await handlePullRequest(
       deps(),
-      payload("opened", {
-        merged: false,
-        updated_at: "2026-08-11T12:01:00Z",
-      }),
+      pullRequestEvent(
+        payload("opened", {
+          merged: false,
+          updated_at: "2026-08-11T12:01:00Z",
+        }),
+      ),
     );
 
     const row = await findByRepoNumber(db, "unkey/api", 1423);
@@ -653,9 +689,15 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   it("uses the durable job arrival key to order equal GitHub updated_at snapshots", async () => {
     const opened = payload("opened", { draft: true });
     const ready = payload("ready_for_review", { draft: false });
-    await handlePullRequest(deps(), opened, { sourceArrivalKey: "2026-08-11T12:00:01Z:a" });
-    await handlePullRequest(deps(), ready, { sourceArrivalKey: "2026-08-11T12:00:02Z:b" });
-    await handlePullRequest(deps(), opened, { sourceArrivalKey: "2026-08-11T12:00:01Z:a" });
+    await handlePullRequest(deps(), pullRequestEvent(opened), {
+      sourceArrivalKey: "2026-08-11T12:00:01Z:a",
+    });
+    await handlePullRequest(deps(), pullRequestEvent(ready), {
+      sourceArrivalKey: "2026-08-11T12:00:02Z:b",
+    });
+    await handlePullRequest(deps(), pullRequestEvent(opened), {
+      sourceArrivalKey: "2026-08-11T12:00:01Z:a",
+    });
 
     const row = await findByRepoNumber(db, "unkey/api", 1423);
     expect(row?.currentState).toBe("pr");
@@ -678,16 +720,18 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       return create(name);
     };
 
-    const older = handlePullRequest(deps(), payload("opened", { draft: true }), {
+    const older = handlePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })), {
       sourceArrivalKey: "2026-08-11T12:00:01Z:old",
     });
     await createStarted;
     await expect(
       handlePullRequest(
         deps(),
-        payload("ready_for_review", {
-          updated_at: "2026-08-11T12:01:00Z",
-        }),
+        pullRequestEvent(
+          payload("ready_for_review", {
+            updated_at: "2026-08-11T12:01:00Z",
+          }),
+        ),
         { sourceArrivalKey: "2026-08-11T12:01:01Z:new" },
       ),
     ).rejects.toBeInstanceOf(PullRequestLifecycleBusyError);
@@ -696,19 +740,19 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
 
     await handlePullRequest(
       deps(),
-      payload("ready_for_review", { updated_at: "2026-08-11T12:01:00Z" }),
+      pullRequestEvent(payload("ready_for_review", { updated_at: "2026-08-11T12:01:00Z" })),
       { sourceArrivalKey: "2026-08-11T12:01:01Z:new" },
     );
     expect((await findByRepoNumber(db, "unkey/api", 1423))?.currentState).toBe("pr");
   });
 
   it("reuses the PR row and channel after a repository rename", async () => {
-    await handlePullRequest(deps(), payload("opened"));
+    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
     const original = await findByRepoNumber(db, "unkey/api", 1423);
 
     await handlePullRequest(
       deps(),
-      payload("edited", { updated_at: "2026-08-11T12:01:00Z" }, "unkey/platform"),
+      pullRequestEvent(payload("edited", { updated_at: "2026-08-11T12:01:00Z" }, "unkey/platform")),
     );
 
     const renamed = await findByRepoNumber(db, "unkey/platform", 1423);
@@ -742,14 +786,18 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     // name must stay in the v1 scheme — no author injected.
     await handlePullRequest(
       deps(),
-      payload("edited", { title: "Add better auth", updated_at: "2026-08-11T12:00:00Z" }),
+      pullRequestEvent(
+        payload("edited", { title: "Add better auth", updated_at: "2026-08-11T12:00:00Z" }),
+      ),
     );
     expect(slack.channel("C-LEGACY")?.name).toBe("pr-unkey-api-1423-add-better-auth");
     expect(slack.channel("C-LEGACY")?.name).not.toContain("oz");
 
     await handlePullRequest(
       deps(),
-      payload("closed", { title: "Add better auth", updated_at: "2026-08-11T13:00:00Z" }),
+      pullRequestEvent(
+        payload("closed", { title: "Add better auth", updated_at: "2026-08-11T13:00:00Z" }),
+      ),
     );
     expect(slack.channel("C-LEGACY")?.name).toBe("closed-unkey-api-1423-add-better-auth");
     expect((await findByRepoNumber(db, "unkey/api", 1423))?.channelNameVersion).toBe(1);

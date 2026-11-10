@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseEvent } from "#events";
 import { createLogger } from "#lib";
 import type { Db } from "../db/client.ts";
 import { upsertIdentity } from "../db/repositories/identities.ts";
@@ -7,14 +8,17 @@ import { setChannel, upsertPullRequest } from "../db/repositories/pullRequests.t
 import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createReminderScheduler } from "../scheduler/reminders.ts";
-import { FakeSlackGateway } from "../testing/fakeSlack.ts";
-import { handleCheckRun } from "./checks.ts";
 import {
   type IssueCommentPayload,
   type ReviewPayload,
-  handleIssueComment,
-  handleReview,
-} from "./review.ts";
+  checkRunEvent,
+  issueCommentEvent,
+  pullRequestEvent,
+  reviewEvent,
+} from "../testing/events.ts";
+import { FakeSlackGateway } from "../testing/fakeSlack.ts";
+import { handleCheckRun } from "./checks.ts";
+import { handleIssueComment, handleReview } from "./review.ts";
 import { handleReviewRequest } from "./reviewRequest.ts";
 
 let db: Db;
@@ -63,13 +67,16 @@ const review = (state: string): ReviewPayload => ({
 
 describe("handleReview (U6, R5)", () => {
   it("posts a distinct summary for changes_requested vs approved", async () => {
-    await handleReview(deps(), review("approved"));
+    await handleReview(deps(), reviewEvent(review("approved")));
     const approved = JSON.stringify(slack.messages.at(-1)?.blocks);
     slack.messages.length = 0;
-    await handleReview(deps(), {
-      ...review("changes_requested"),
-      review: { ...review("changes_requested").review, id: 2 },
-    });
+    await handleReview(
+      deps(),
+      reviewEvent({
+        ...review("changes_requested"),
+        review: { ...review("changes_requested").review, id: 2 },
+      }),
+    );
     const changes = JSON.stringify(slack.messages.at(-1)?.blocks);
     expect(approved).toContain("approved");
     expect(changes).toContain("requested changes");
@@ -87,7 +94,7 @@ describe("handleReview (U6, R5)", () => {
       });
       slack.profiles.set("U7", { name: "James Perkins" });
 
-      await handleReview(deps(), review(state));
+      await handleReview(deps(), reviewEvent(review(state)));
       const blocks = JSON.stringify(slack.messages.at(-1)?.blocks);
       expect(blocks).toContain("James Perkins");
       expect(blocks).not.toContain("<@U7>"); // never a mention = never a notification
@@ -96,7 +103,7 @@ describe("handleReview (U6, R5)", () => {
 
   it("falls back to the GitHub login when the reviewer has no Slack name", async () => {
     // No identity mapping and no display name available.
-    await handleReview(deps(), review("approved"));
+    await handleReview(deps(), reviewEvent(review("approved")));
     const blocks = JSON.stringify(slack.messages.at(-1)?.blocks);
     expect(blocks).toContain("flo");
     expect(blocks).not.toContain("<@");
@@ -114,7 +121,7 @@ describe("handleReview (U6, R5)", () => {
       getUserToken: async (id: string) => (id === "U7" ? "xoxp-flo" : undefined),
       onInvalidToken: async () => {},
     };
-    await handleReview(deps({ authorPoster }), review("approved"));
+    await handleReview(deps({ authorPoster }), reviewEvent(review("approved")));
     const msg = slack.messages.at(-1);
     expect(msg?.authorUserToken).toBe("xoxp-flo"); // posted as the reviewer
     const blocks = JSON.stringify(msg?.blocks);
@@ -126,13 +133,13 @@ describe("handleReview (U6, R5)", () => {
   it("ignores a review submitted by a bot", async () => {
     const botReview = review("approved");
     botReview.review.user.type = "Bot";
-    await handleReview(deps(), botReview);
+    await handleReview(deps(), reviewEvent(botReview));
     expect(slack.messages).toHaveLength(0);
   });
 
   it("fires the reminder-cancel hook for the reviewer", async () => {
     const onReviewSubmitted = vi.fn(async () => {});
-    await handleReview(deps({ onReviewSubmitted }), review("approved"));
+    await handleReview(deps({ onReviewSubmitted }), reviewEvent(review("approved")));
     expect(onReviewSubmitted).toHaveBeenCalledWith(
       "unkey/api#1",
       7,
@@ -155,7 +162,10 @@ describe("handleReview (U6, R5)", () => {
     };
 
     await expect(
-      handleReview(deps({ onReviewSubmitted: scheduler.onReviewSubmitted }), review("approved")),
+      handleReview(
+        deps({ onReviewSubmitted: scheduler.onReviewSubmitted }),
+        reviewEvent(review("approved")),
+      ),
     ).rejects.toThrow("Slack unavailable");
     const [reminder] = await db.select().from(reminders).where(eq(reminders.prId, "unkey/api#1"));
     expect(reminder?.status).toBe("cancelled");
@@ -163,7 +173,7 @@ describe("handleReview (U6, R5)", () => {
 
   it("reconciles the parent channel when a review arrives before opened", async () => {
     await db.delete(pullRequests);
-    await handleReview(deps(), review("approved"));
+    await handleReview(deps(), reviewEvent(review("approved")));
     expect(slack.channels).toHaveLength(1);
     expect(slack.messages.at(-1)?.channel).toBeDefined();
   });
@@ -172,7 +182,7 @@ describe("handleReview (U6, R5)", () => {
     const onReviewSubmitted = vi.fn(async () => {});
     const emptyCommented = review("commented");
     emptyCommented.review.body = null; // inline-comments-only review, no summary text
-    await handleReview(deps({ onReviewSubmitted }), emptyCommented);
+    await handleReview(deps({ onReviewSubmitted }), reviewEvent(emptyCommented));
     expect(slack.messages).toHaveLength(0); // no "💬 commented by …" noise
     expect(onReviewSubmitted).toHaveBeenCalled(); // reminder still cancelled
   });
@@ -184,7 +194,7 @@ describe("handleReview (U6, R5)", () => {
     const imageOnly = review("commented");
     imageOnly.review.body = `<img width="1512" height="982" alt="Broken layout" src="${src}" />`;
 
-    await handleReview(deps({ embedImages }), imageOnly);
+    await handleReview(deps({ embedImages }), reviewEvent(imageOnly));
 
     expect(slack.messages).toHaveLength(1);
     expect(slack.messages[0]?.images).toEqual([
@@ -193,7 +203,7 @@ describe("handleReview (U6, R5)", () => {
   });
 
   it("still posts a 'commented' review that has body text", async () => {
-    await handleReview(deps(), review("commented")); // body "looks good"
+    await handleReview(deps(), reviewEvent(review("commented"))); // body "looks good"
     expect(JSON.stringify(slack.messages.at(-1)?.blocks)).toContain("commented");
   });
 
@@ -201,7 +211,7 @@ describe("handleReview (U6, R5)", () => {
     const botReview = review("changes_requested");
     botReview.review.user.type = "Bot";
     botReview.review.user.login = "pullfrog[bot]";
-    await handleReview(deps({ allowedBots: new Set(["pullfrog"]) }), botReview);
+    await handleReview(deps({ allowedBots: new Set(["pullfrog"]) }), reviewEvent(botReview));
     expect(slack.messages).toHaveLength(1);
   });
 
@@ -211,7 +221,7 @@ describe("handleReview (U6, R5)", () => {
     botReview.review.user.login = "pullfrog[bot]";
     botReview.review.body =
       "Looks good overall.\n<!-- pullfrog meta -->\n<sup>marketing footer</sup>";
-    await handleReview(deps({ allowedBots: new Set(["pullfrog"]) }), botReview);
+    await handleReview(deps({ allowedBots: new Set(["pullfrog"]) }), reviewEvent(botReview));
     const msg = slack.messages.at(-1);
     expect(msg?.threadTs).toBe("ts-root"); // threaded, not a top-level post
     const blocks = JSON.stringify(msg?.blocks);
@@ -221,7 +231,7 @@ describe("handleReview (U6, R5)", () => {
   });
 
   it("does not include CI or merge status in the review message", async () => {
-    await handleReview(deps(), review("approved"));
+    await handleReview(deps(), reviewEvent(review("approved")));
     const rendered = JSON.stringify(slack.messages);
     expect(rendered).toContain("approved");
     expect(rendered).toContain("looks good");
@@ -249,13 +259,12 @@ describe("handleReview (U6, R5)", () => {
         fetchCiReadiness: async () => "failing",
         onReviewRequested: scheduler.onReviewRequested,
       }),
-      {
+      pullRequestEvent({
         action: "review_requested",
         repository: { full_name: "unkey/api" },
         pull_request: review("approved").pull_request,
         requested_reviewer: { id: 7, login: "flo" },
-      },
-      "delivery-request",
+      }),
       "delivery-request",
     );
     expect(slack.invites).toHaveLength(0);
@@ -264,7 +273,7 @@ describe("handleReview (U6, R5)", () => {
     submitted.review.submitted_at = "2026-08-11T12:30:00Z";
     await handleReview(
       deps({ onReviewSubmitted: scheduler.onReviewSubmitted }),
-      submitted,
+      reviewEvent(submitted),
       "delivery-review",
     );
     const afterReview = slack.messages.length;
@@ -279,7 +288,7 @@ describe("handleReview (U6, R5)", () => {
           requestedReviewers: [{ id: 7, login: "flo" }],
         }),
       }),
-      {
+      checkRunEvent({
         action: "completed",
         repository: { full_name: "unkey/api" },
         check_run: {
@@ -291,14 +300,14 @@ describe("handleReview (U6, R5)", () => {
           name: "test",
           pull_requests: [{ number: 1 }],
         },
-      },
+      }),
     );
     expect(slack.invites).toHaveLength(0);
     expect(slack.messages).toHaveLength(afterReview);
   });
 
   it("does not thread a human review", async () => {
-    await handleReview(deps(), review("approved"));
+    await handleReview(deps(), reviewEvent(review("approved")));
     expect(slack.messages.at(-1)?.threadTs).toBeUndefined();
   });
 });
@@ -317,12 +326,12 @@ describe("handleIssueComment (U6)", () => {
   });
 
   it("mirrors a PR conversation comment", async () => {
-    await handleIssueComment(deps(), issueComment(true));
+    await handleIssueComment(deps(), issueCommentEvent(issueComment(true)));
     expect(slack.messages.at(-1)?.text).toContain("flo");
   });
 
   it("posts a conversation comment top-level, never threaded (GitHub has no threads here)", async () => {
-    await handleIssueComment(deps(), issueComment(true));
+    await handleIssueComment(deps(), issueCommentEvent(issueComment(true)));
     expect(slack.messages.at(-1)?.threadTs).toBeUndefined();
   });
 
@@ -334,7 +343,7 @@ describe("handleIssueComment (U6)", () => {
       source: "self-link",
     });
     slack.profiles.set("U7", { name: "Flo Rider", iconUrl: "https://slack/a.png" });
-    await handleIssueComment(deps(), issueComment(true));
+    await handleIssueComment(deps(), issueCommentEvent(issueComment(true)));
     const msg = slack.messages.at(-1);
     expect(msg?.username).toBe("Flo Rider");
     expect(msg?.iconUrl).toBe("https://slack/a.png");
@@ -342,18 +351,21 @@ describe("handleIssueComment (U6)", () => {
   });
 
   it("ignores a comment on a non-PR issue", async () => {
-    await handleIssueComment(deps(), issueComment(false));
+    expect(parseEvent("issue_comment", issueComment(false))).toMatchObject({
+      kind: "ignored",
+      reason: "not a PR",
+    });
     expect(slack.messages).toHaveLength(0);
   });
 
   it("removes the mirrored message when a conversation comment is deleted", async () => {
-    await handleIssueComment(deps(), issueComment(true));
+    await handleIssueComment(deps(), issueCommentEvent(issueComment(true)));
     const original = slack.messages.at(-1);
     expect(original).toBeDefined();
 
     const deleted = issueComment(true);
     deleted.action = "deleted";
-    await handleIssueComment(deps(), deleted);
+    await handleIssueComment(deps(), issueCommentEvent(deleted));
 
     expect(slack.deletes).toEqual([
       { channel: "C1", ts: original?.ts, authorUserToken: undefined },
@@ -364,14 +376,14 @@ describe("handleIssueComment (U6)", () => {
   it("syncs an edit onto the existing Slack message in place", async () => {
     const created = issueComment(true);
     created.comment.body = "first draft";
-    await handleIssueComment(deps(), created);
+    await handleIssueComment(deps(), issueCommentEvent(created));
     const original = slack.messages.at(-1);
     const count = slack.messages.length;
 
     const edited = issueComment(true);
     edited.action = "edited";
     edited.comment.body = "second draft";
-    await handleIssueComment(deps(), edited);
+    await handleIssueComment(deps(), issueCommentEvent(edited));
 
     expect(slack.messages).toHaveLength(count); // no new message
     expect(slack.updates).toHaveLength(1);
@@ -383,13 +395,13 @@ describe("handleIssueComment (U6)", () => {
   it("ignores comments from bots (Vercel/Mintlify, and our own bot)", async () => {
     const bot = issueComment(true);
     bot.comment.user.type = "Bot";
-    await handleIssueComment(deps(), bot);
+    await handleIssueComment(deps(), issueCommentEvent(bot));
     expect(slack.messages).toHaveLength(0);
   });
 
   it("throws for a PR comment whose parent mapping is not ready", async () => {
     await db.delete(pullRequests);
-    await expect(handleIssueComment(deps(), issueComment(true))).rejects.toThrow(
+    await expect(handleIssueComment(deps(), issueCommentEvent(issueComment(true)))).rejects.toThrow(
       "PR channel is not ready",
     );
   });
@@ -398,7 +410,7 @@ describe("handleIssueComment (U6)", () => {
     const input = issueComment(true);
     input.comment.body = `${"x\n".repeat(2_000)}<!channel>`;
     input.comment.user.login = "<!everyone>";
-    await handleIssueComment(deps(), input);
+    await handleIssueComment(deps(), issueCommentEvent(input));
     const block = slack.messages.at(-1)?.blocks?.[0] as { text?: { text?: string } };
     expect(block.text?.text?.length).toBeLessThanOrEqual(3_000);
     expect(JSON.stringify(slack.messages.at(-1))).not.toContain("<!channel>");

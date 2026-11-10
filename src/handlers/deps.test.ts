@@ -8,6 +8,7 @@ import { getSlackUserTokenRow, upsertSlackUserToken } from "../db/repositories/s
 import { createTestDb } from "../db/testDb.ts";
 import { SLACK_POST_USER_SCOPE } from "../slack/oauth.ts";
 import { createTokenCipher } from "../slack/tokenCipher.ts";
+import { reviewCommentEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { createServiceHandlers } from "./deps.ts";
 import { handleReviewComment } from "./reviewComment.ts";
@@ -76,30 +77,33 @@ describe("createServiceHandlers post-as-user", () => {
       auth: { getToken: async () => "ghs_unused", invalidate: () => {} },
     });
 
-    await handleReviewComment(handler, {
-      action: "created",
-      repository: { full_name: "unkey/api" },
-      pull_request: {
-        number: 1423,
-        id: 999,
-        draft: false,
-        merged: false,
-        title: "Add auth",
-        html_url: "https://github.com/unkey/api/pull/1423",
-        user: { login: "oz", id: 100 },
-        head: { sha: "sha1" },
-        updated_at: "2026-08-11T12:00:00Z",
-      },
-      comment: {
-        id: 55,
-        commit_id: "abc123",
-        path: "src/handlers/auth.ts",
-        line: 42,
-        body: "simplify this",
-        html_url: "https://github.com/unkey/api/pull/1423#discussion_r55",
-        user: { id: 7, login: "flo" },
-      },
-    });
+    await handleReviewComment(
+      handler,
+      reviewCommentEvent({
+        action: "created",
+        repository: { full_name: "unkey/api" },
+        pull_request: {
+          number: 1423,
+          id: 999,
+          draft: false,
+          merged: false,
+          title: "Add auth",
+          html_url: "https://github.com/unkey/api/pull/1423",
+          user: { login: "oz", id: 100 },
+          head: { sha: "sha1" },
+          updated_at: "2026-08-11T12:00:00Z",
+        },
+        comment: {
+          id: 55,
+          commit_id: "abc123",
+          path: "src/handlers/auth.ts",
+          line: 42,
+          body: "simplify this",
+          html_url: "https://github.com/unkey/api/pull/1423#discussion_r55",
+          user: { id: 7, login: "flo" },
+        },
+      }),
+    );
 
     expect(slack.messages).toHaveLength(1);
     expect(slack.messages[0]?.authorUserToken).toBeUndefined();

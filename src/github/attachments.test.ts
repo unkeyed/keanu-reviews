@@ -270,13 +270,13 @@ describe("commentImages", () => {
 
   it("shows no images from a bot", async () => {
     const embedImages = vi.fn();
-    expect(await commentImages({ embedImages }, body, { type: "Bot" })).toEqual([]);
+    expect(await commentImages({ embedImages }, body, { isBot: true })).toEqual([]);
     expect(embedImages).not.toHaveBeenCalled();
   });
 
   it("asks the mirror about every image in a human's comment", async () => {
     const mirror = createGithubAttachmentMirror({ publicUrl, secret, fetch: served("image/png") });
-    expect(await commentImages(mirror, body, { type: "User" })).toEqual([
+    expect(await commentImages(mirror, body, { isBot: false })).toEqual([
       {
         kind: "embed",
         imageUrl: `${publicUrl}${await mintedPath()}`,
@@ -293,6 +293,6 @@ describe("commentImages", () => {
   });
 
   it("shows no images when no mirror is wired", async () => {
-    expect(await commentImages({}, body, { type: "User" })).toEqual([]);
+    expect(await commentImages({}, body, { isBot: false })).toEqual([]);
   });
 });

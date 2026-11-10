@@ -1,7 +1,8 @@
+import type { IssueCommentEvent, ReviewEvent } from "#events";
 import { Retry } from "#lib";
 import { type Message, cleanGithubMarkdown, createLedger, keys } from "#slack";
 import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
-import { isBotActor, shouldSkipActor } from "../github/actors.ts";
+import { shouldSkipActor } from "../github/actors.ts";
 import { commentImages } from "../github/attachments.ts";
 import {
   deleteMirroredComment,
@@ -10,11 +11,7 @@ import {
   updateAuthoredMessage,
 } from "./authorship.ts";
 import { inviteMentionedUsers } from "./mentions.ts";
-import {
-  type PrHandlerDeps,
-  type PullRequestPayload,
-  ensurePullRequestChannel,
-} from "./pullRequest.ts";
+import { type PrHandlerDeps, ensurePullRequestChannel } from "./pullRequest.ts";
 import { sourceDate } from "./reviewRequest.ts";
 
 export interface ReviewDeps extends PrHandlerDeps {
@@ -27,47 +24,32 @@ export interface ReviewDeps extends PrHandlerDeps {
   ) => Promise<void>;
 }
 
-export interface ReviewPayload {
-  action: string;
-  repository: { full_name: string };
-  pull_request: PullRequestPayload["pull_request"];
-  review: {
-    id: number;
-    state: string; // approved | changes_requested | commented
-    body: string | null;
-    html_url: string;
-    submitted_at?: string;
-    user: { id: number; login: string; type?: string };
-  };
-}
-
 /** Mirror a review submission (U6, R5) and cancel the reviewer's reminder (U8 hook). */
 export async function handleReview(
   deps: ReviewDeps,
-  payload: ReviewPayload,
-  sourceVersion = String(payload.review.id),
+  ev: ReviewEvent,
+  sourceVersion = String(ev.review.id),
 ): Promise<void> {
-  if (payload.action !== "submitted") return;
-  if (shouldSkipActor(payload.review.user, deps.allowedBots)) return; // skip non-allowed bots
-  const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
+  if (shouldSkipActor(ev.review.author, deps.allowedBots)) return; // skip non-allowed bots
+  const row = await ensurePullRequestChannel(deps, ev.pr);
   const channelId = row.channelId;
 
-  const r = payload.review;
+  const r = ev.review;
   // GitHub is the source of truth: cancel before enrichment or Slack delivery,
   // so a downstream failure cannot leave an obsolete reminder live.
-  const reviewedAt = sourceDate(r.submitted_at ?? payload.pull_request.updated_at);
+  const reviewedAt = sourceDate(r.submittedAt ?? ev.pr.updatedAt);
   // Cancels the reminder. A later check_run sees that cancellation and does not
   // send the review-needed alert.
-  await deps.onReviewSubmitted?.(row.id, r.user.id, reviewedAt, sourceVersion);
+  await deps.onReviewSubmitted?.(row.id, r.author.id, reviewedAt, sourceVersion);
   await deliverAuthored(deps, keys.review(row.id, r.id), channelId, async () => {
-    const author = await resolveMessageAuthor(deps, r.user);
-    const images = await commentImages(deps, r.body ?? "", r.user);
+    const author = await resolveMessageAuthor(deps, r.author);
+    const images = await commentImages(deps, r.body, r.author);
     // A "commented" review with no text or images after cleaning is just the
     // wrapper GitHub emits around inline review comments, which arrive as
     // review_comment events. Posting it would be an empty "💬 commented by …"
     // line, so nothing is posted (the reminder is still cancelled above).
     const isEmptyCommentWrapper =
-      r.state === "commented" && !cleanGithubMarkdown(r.body ?? "") && images.length === 0;
+      r.state === "commented" && !cleanGithubMarkdown(r.body) && images.length === 0;
     return {
       author,
       outgoing: (mode) =>
@@ -75,16 +57,16 @@ export async function handleReview(
           ? null
           : {
               // Thread bot reviews under the PR root to keep the channel readable.
-              threadTs: isBotActor(r.user) ? (row.rootMessageTs ?? undefined) : undefined,
+              threadTs: r.author.isBot ? (row.rootMessageTs ?? undefined) : undefined,
               message: {
                 kind: "review",
-                authorLogin: r.user.login,
+                authorLogin: r.author.login,
                 state: r.state,
-                body: r.body ?? "",
-                url: r.html_url,
+                body: r.body,
+                url: r.url,
                 // Never ping the reviewer for their own review activity; a bot
                 // post shows their Slack display name as plain text instead.
-                label: mode === "user" ? undefined : (author.name ?? r.user.login),
+                label: mode === "user" ? undefined : (author.name ?? r.author.login),
                 images,
               },
             },
@@ -93,68 +75,49 @@ export async function handleReview(
 
   // Pull anyone @-mentioned in the review body into the channel (best-effort).
   // The PR author is skipped — already a member of their own channel.
-  await inviteMentionedUsers(deps, channelId, r.body ?? "", payload.pull_request.user.login);
+  await inviteMentionedUsers(deps, channelId, r.body, ev.pr.author.login);
 }
 
-export interface IssueCommentPayload {
-  action: string;
-  repository: { full_name: string };
-  // `issue.user` is the PR opener (issues and PRs share the same payload shape).
-  issue: { number: number; pull_request?: unknown; user?: { login: string } };
-  comment: {
-    id: number;
-    body: string;
-    html_url: string;
-    user: { id: number; login: string; type?: string };
-  };
-}
-
-/** Mirror a PR conversation comment (U6). Ignored for non-PR issues. */
-export async function handleIssueComment(
-  deps: ReviewDeps,
-  payload: IssueCommentPayload,
-): Promise<void> {
-  // `created` mirrors, `edited` syncs the body, `deleted` removes the mirror;
-  // other actions are ignored.
-  if (!["created", "edited", "deleted"].includes(payload.action)) return;
-  if (!payload.issue.pull_request) return; // not a PR — ignore
+/**
+ * Mirror a PR conversation comment (U6): `created` mirrors, `edited` syncs the
+ * body, `deleted` removes the mirror.
+ */
+export async function handleIssueComment(deps: ReviewDeps, ev: IssueCommentEvent): Promise<void> {
   // Skip bot comments (Vercel/Mintlify deploy previews, our own merge comment, …)
   // unless allow-listed. `type: "Bot"` covers our App's bot, so this also guards
   // against echoing our own merge comment (never allow-list our App's login).
-  if (shouldSkipActor(payload.comment.user, deps.allowedBots)) return;
+  if (shouldSkipActor(ev.comment.author, deps.allowedBots)) return;
 
   // A deletion removes the mirror without ever creating a channel.
-  if (payload.action === "deleted") {
+  if (ev.action === "deleted") {
     await deleteMirroredComment(deps, {
-      repoFullName: payload.repository.full_name,
-      number: payload.issue.number,
-      key: (prId) => keys.issueComment(prId, payload.comment.id),
-      user: payload.comment.user,
+      repoFullName: ev.repo,
+      number: ev.number,
+      key: (prId) => keys.issueComment(prId, ev.comment.id),
+      user: ev.comment.author,
     });
     return;
   }
 
-  const row = await findByRepoNumber(deps.db, payload.repository.full_name, payload.issue.number);
+  const row = await findByRepoNumber(deps.db, ev.repo, ev.number);
   if (!row?.channelId) {
-    throw new Retry(
-      `PR channel is not ready for ${payload.repository.full_name}#${payload.issue.number}`,
-    );
+    throw new Retry(`PR channel is not ready for ${ev.repo}#${ev.number}`);
   }
   const channelId = row.channelId;
 
-  const c = payload.comment;
+  const c = ev.comment;
   // Author as the commenter: their own token when authorized, else the bot
   // spoofing their name/avatar, else the bot with a plain "by <login>" label. PR
   // conversation comments aren't threaded on GitHub, so they post top-level.
   const enrich = async () => {
-    const author = await resolveMessageAuthor(deps, c.user);
-    const images = await commentImages(deps, c.body, c.user);
+    const author = await resolveMessageAuthor(deps, c.author);
+    const images = await commentImages(deps, c.body, c.author);
     const message: Message = {
       kind: "issue_comment",
-      authorLogin: c.user.login,
+      authorLogin: c.author.login,
       body: c.body,
-      url: c.html_url,
-      label: author.name ? undefined : c.user.login,
+      url: c.url,
+      label: author.name ? undefined : c.author.login,
       images,
     };
     return { author, message };
@@ -162,7 +125,7 @@ export async function handleIssueComment(
 
   // An edit updates the mirrored message in place; otherwise post it.
   const key = keys.issueComment(row.id, c.id);
-  const sentTs = payload.action === "edited" ? await createLedger(deps.db).sentTs(key) : undefined;
+  const sentTs = ev.action === "edited" ? await createLedger(deps.db).sentTs(key) : undefined;
   if (sentTs) {
     const { author, message } = await enrich();
     await updateAuthoredMessage(deps, sentTs, channelId, author, () => message);
@@ -185,5 +148,5 @@ export async function handleIssueComment(
   // Pull anyone @-mentioned in the comment into the channel (best-effort). Runs
   // on edits too, so a newly added mention still pulls that person in. The PR
   // author is skipped — already a member of their own channel.
-  await inviteMentionedUsers(deps, channelId, c.body, payload.issue.user?.login);
+  await inviteMentionedUsers(deps, channelId, c.body, ev.prAuthorLogin);
 }

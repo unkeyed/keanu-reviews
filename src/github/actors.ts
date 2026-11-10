@@ -1,13 +1,4 @@
-/**
- * GitHub marks automation accounts (Vercel, Mintlify, Dependabot, our own App's
- * bot, …) with `type: "Bot"` on the user object. By default we skip mirroring
- * their comments/reviews — they're noisy (often raw markdown deploy previews).
- * A workspace can opt specific bots back in by login via ALLOWED_BOTS (e.g. a
- * review bot like Pullfrog); see {@link shouldSkipActor}.
- */
-export function isBotActor(user: { type?: string } | undefined | null): boolean {
-  return user?.type === "Bot";
-}
+import type { GithubActor } from "#events";
 
 /** Normalize a bot login for matching: lowercase and drop GitHub's `[bot]` suffix. */
 export function normalizeBotName(name: string): string {
@@ -19,14 +10,15 @@ export function normalizeBotName(name: string): string {
 
 /**
  * Whether to skip mirroring an actor's comment/review. Humans are never skipped.
- * A bot is skipped unless its (normalized) login is in `allowedBots`, letting a
- * workspace surface a chosen review bot while still filtering deploy-preview noise.
+ * Bots (Vercel, Mintlify, Dependabot, our own App) are noisy, often raw markdown
+ * deploy previews, so a bot is skipped unless its normalized login is in
+ * `allowedBots` (ALLOWED_BOTS), letting a workspace surface a chosen review bot.
  */
 export function shouldSkipActor(
-  user: { type?: string; login?: string } | undefined | null,
+  actor: Pick<GithubActor, "isBot" | "login">,
   allowedBots: ReadonlySet<string> = new Set(),
 ): boolean {
-  if (!isBotActor(user)) return false;
-  const login = user?.login ? normalizeBotName(user.login) : "";
+  if (!actor.isBot) return false;
+  const login = normalizeBotName(actor.login);
   return !(login && allowedBots.has(login));
 }

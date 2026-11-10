@@ -1,3 +1,4 @@
+import type { GithubActor } from "#events";
 import type { Logger } from "#lib";
 import type { InstallationAuth } from "./auth.ts";
 import {
@@ -30,7 +31,7 @@ export interface PullRequestSnapshot {
   title: string;
   htmlUrl: string;
   updatedAt: string;
-  user: { id: number; login: string };
+  user: GithubActor;
   headSha: string;
   headRef?: string;
   baseRef?: string;
@@ -119,7 +120,7 @@ function parseSnapshot(body: unknown, path: string, expectedNumber: number): Pul
     title?: unknown;
     html_url?: unknown;
     updated_at?: unknown;
-    user?: { id?: unknown; login?: unknown };
+    user?: { id?: unknown; login?: unknown; type?: unknown };
     head?: { sha?: unknown; ref?: unknown };
     base?: { ref?: unknown };
   };
@@ -144,7 +145,7 @@ function parseSnapshot(body: unknown, path: string, expectedNumber: number): Pul
     title: pr.title,
     htmlUrl: pr.html_url,
     updatedAt: pr.updated_at,
-    user: { id: pr.user.id as number, login: pr.user.login },
+    user: { id: pr.user.id as number, login: pr.user.login, isBot: pr.user.type === "Bot" },
     headSha: pr.head.sha,
     headRef: typeof pr.head.ref === "string" ? pr.head.ref : undefined,
     baseRef: typeof pr.base?.ref === "string" ? pr.base.ref : undefined,

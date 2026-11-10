@@ -4,8 +4,9 @@ import type { Db } from "../db/client.ts";
 import { upsertIdentity } from "../db/repositories/identities.ts";
 import { setChannel, upsertPullRequest } from "../db/repositories/pullRequests.ts";
 import { createTestDb } from "../db/testDb.ts";
+import { type ReviewCommentPayload, reviewCommentEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
-import { type ReviewCommentPayload, handleReviewComment } from "./reviewComment.ts";
+import { handleReviewComment } from "./reviewComment.ts";
 
 let db: Db;
 let slack: FakeSlackGateway;
@@ -67,7 +68,7 @@ const seedChannel = async () => {
 describe("handleReviewComment (U6)", () => {
   it("links Open to the PR discussion, with file:line shown as text", async () => {
     await seedChannel();
-    await handleReviewComment(deps(), payload());
+    await handleReviewComment(deps(), reviewCommentEvent(payload()));
     const msg = slack.messages.at(-1);
     const text = JSON.stringify(msg?.blocks);
     expect(text).toContain("https://github.com/unkey/api/pull/1423#discussion_r55|Open");
@@ -84,7 +85,7 @@ describe("handleReviewComment (U6)", () => {
       source: "self-link",
     });
     slack.profiles.set("U7", { name: "Flo Rider", iconUrl: "https://slack/avatar.png" });
-    await handleReviewComment(deps(), payload());
+    await handleReviewComment(deps(), reviewCommentEvent(payload()));
     const msg = slack.messages.at(-1);
     expect(msg?.username).toBe("Flo Rider"); // posted AS the Slack user
     expect(msg?.iconUrl).toBe("https://slack/avatar.png");
@@ -106,7 +107,7 @@ describe("handleReviewComment (U6)", () => {
       getUserToken: async (id: string) => (id === "U7" ? "xoxp-flo" : undefined),
       onInvalidToken: async () => {},
     };
-    await handleReviewComment({ ...deps(), authorPoster }, payload());
+    await handleReviewComment({ ...deps(), authorPoster }, reviewCommentEvent(payload()));
     const msg = slack.messages.at(-1);
     expect(msg?.authorUserToken).toBe("xoxp-flo"); // authored with the user's own token
     expect(msg?.authorUserId).toBe("U7");
@@ -135,7 +136,7 @@ describe("handleReviewComment (U6)", () => {
         dropped.push(id);
       },
     };
-    await handleReviewComment({ ...deps(), authorPoster }, payload());
+    await handleReviewComment({ ...deps(), authorPoster }, reviewCommentEvent(payload()));
     expect(dropped).toEqual(["U7"]); // revoked token dropped
     const msg = slack.messages.at(-1);
     expect(msg?.authorUserToken).toBeUndefined(); // fell back off the user token
@@ -145,7 +146,10 @@ describe("handleReviewComment (U6)", () => {
 
   it("posts as the bot with a plain login label when the author is unlinked", async () => {
     await seedChannel();
-    await handleReviewComment(deps(), payload({ user: { id: 100, login: "oz" } }));
+    await handleReviewComment(
+      deps(),
+      reviewCommentEvent(payload({ user: { id: 100, login: "oz" } })),
+    );
     const msg = slack.messages.at(-1);
     expect(msg?.username).toBeUndefined(); // falls back to bot authorship
     expect(JSON.stringify(msg?.blocks)).toContain("by oz");
@@ -161,7 +165,7 @@ describe("handleReviewComment (U6)", () => {
     });
     await handleReviewComment(
       deps(),
-      payload({ body: "Hey @dave-hawkins I need some guidance here" }),
+      reviewCommentEvent(payload({ body: "Hey @dave-hawkins I need some guidance here" })),
     );
     expect(slack.invites).toContainEqual({ channelId: "C1", userIds: ["Udave"] });
   });
@@ -175,7 +179,7 @@ describe("handleReviewComment (U6)", () => {
       slackUserId: "Uoz",
       source: "self-link",
     });
-    await handleReviewComment(deps(), payload({ body: "thanks @oz!" }));
+    await handleReviewComment(deps(), reviewCommentEvent(payload({ body: "thanks @oz!" })));
     expect(slack.invites).toHaveLength(0); // author already a channel member
   });
 
@@ -193,7 +197,10 @@ describe("handleReviewComment (U6)", () => {
       slackUserId: "Udave",
       source: "self-link",
     });
-    await handleReviewComment(deps(), payload({ body: "@oz @dave-hawkins please look" }));
+    await handleReviewComment(
+      deps(),
+      reviewCommentEvent(payload({ body: "@oz @dave-hawkins please look" })),
+    );
     expect(slack.invites).toEqual([{ channelId: "C1", userIds: ["Udave"] }]);
   });
 
@@ -201,19 +208,22 @@ describe("handleReviewComment (U6)", () => {
     await seedChannel();
     await handleReviewComment(
       deps(),
-      payload({ body: "cc @not-linked and @unkey/api for review" }),
+      reviewCommentEvent(payload({ body: "cc @not-linked and @unkey/api for review" })),
     );
     expect(slack.invites).toHaveLength(0);
   });
 
   it("syncs a comment edit onto the existing Slack message (chat.update, no new post)", async () => {
     await seedChannel();
-    await handleReviewComment(deps(), payload({ body: "original body" }));
+    await handleReviewComment(deps(), reviewCommentEvent(payload({ body: "original body" })));
     const original = slack.messages.at(-1);
     expect(JSON.stringify(original?.blocks)).toContain("original body");
     const count = slack.messages.length;
 
-    await handleReviewComment(deps(), { ...payload({ body: "edited body" }), action: "edited" });
+    await handleReviewComment(
+      deps(),
+      reviewCommentEvent({ ...payload({ body: "edited body" }), action: "edited" }),
+    );
 
     expect(slack.messages).toHaveLength(count); // updated in place, not re-posted
     expect(slack.updates).toHaveLength(1);
@@ -224,7 +234,10 @@ describe("handleReviewComment (U6)", () => {
 
   it("posts an edit as a new message when the comment was never mirrored", async () => {
     await seedChannel();
-    await handleReviewComment(deps(), { ...payload({ body: "late body" }), action: "edited" });
+    await handleReviewComment(
+      deps(),
+      reviewCommentEvent({ ...payload({ body: "late body" }), action: "edited" }),
+    );
     expect(slack.messages).toHaveLength(1);
     expect(slack.updates).toHaveLength(0);
     expect(JSON.stringify(slack.messages.at(-1)?.blocks)).toContain("late body");
@@ -243,10 +256,13 @@ describe("handleReviewComment (U6)", () => {
       getUserToken: async () => "xoxp-flo",
       onInvalidToken: async () => {},
     };
-    await handleReviewComment({ ...deps(), authorPoster }, payload({ body: "v1" }));
     await handleReviewComment(
       { ...deps(), authorPoster },
-      { ...payload({ body: "v2" }), action: "edited" },
+      reviewCommentEvent(payload({ body: "v1" })),
+    );
+    await handleReviewComment(
+      { ...deps(), authorPoster },
+      reviewCommentEvent({ ...payload({ body: "v2" }), action: "edited" }),
     );
     expect(slack.updates).toHaveLength(1);
     expect(slack.updates[0]?.authorUserToken).toBe("xoxp-flo"); // edited as the user
@@ -254,11 +270,11 @@ describe("handleReviewComment (U6)", () => {
 
   it("removes the mirrored Slack message when the comment is deleted", async () => {
     await seedChannel();
-    await handleReviewComment(deps(), payload());
+    await handleReviewComment(deps(), reviewCommentEvent(payload()));
     const original = slack.messages.at(-1);
     expect(original).toBeDefined();
 
-    await handleReviewComment(deps(), { ...payload(), action: "deleted" });
+    await handleReviewComment(deps(), reviewCommentEvent({ ...payload(), action: "deleted" }));
 
     expect(slack.deletes).toEqual([
       { channel: "C1", ts: original?.ts, authorUserToken: undefined },
@@ -268,14 +284,14 @@ describe("handleReviewComment (U6)", () => {
 
   it("does nothing when deleting a comment that was never mirrored", async () => {
     await seedChannel();
-    await handleReviewComment(deps(), { ...payload(), action: "deleted" });
+    await handleReviewComment(deps(), reviewCommentEvent({ ...payload(), action: "deleted" }));
     expect(slack.deletes).toHaveLength(0);
     expect(slack.messages).toHaveLength(0);
   });
 
   it("does not create a channel when a comment is deleted for an untracked PR", async () => {
     // No seedChannel: the PR was never tracked.
-    await handleReviewComment(deps(), { ...payload(), action: "deleted" });
+    await handleReviewComment(deps(), reviewCommentEvent({ ...payload(), action: "deleted" }));
     expect(slack.channels).toHaveLength(0);
     expect(slack.deletes).toHaveLength(0);
   });
@@ -290,8 +306,11 @@ describe("handleReviewComment (U6)", () => {
     });
     slack.profiles.set("U7", { name: "Flo Rider" });
     const authorPoster = { getUserToken: async () => "xoxp-flo", onInvalidToken: async () => {} };
-    await handleReviewComment({ ...deps(), authorPoster }, payload());
-    await handleReviewComment({ ...deps(), authorPoster }, { ...payload(), action: "deleted" });
+    await handleReviewComment({ ...deps(), authorPoster }, reviewCommentEvent(payload()));
+    await handleReviewComment(
+      { ...deps(), authorPoster },
+      reviewCommentEvent({ ...payload(), action: "deleted" }),
+    );
     expect(slack.deletes).toHaveLength(1);
     expect(slack.deletes[0]?.authorUserToken).toBe("xoxp-flo");
   });
@@ -313,7 +332,9 @@ describe("handleReviewComment (U6)", () => {
       );
     await handleReviewComment(
       { ...deps(), embedImages },
-      payload({ body: `here ![shot](${attachment}) and ![old](https://img.example.com/x.png)` }),
+      reviewCommentEvent(
+        payload({ body: `here ![shot](${attachment}) and ![old](https://img.example.com/x.png)` }),
+      ),
     );
     const msg = slack.messages.at(-1);
     expect(msg?.images).toEqual([
@@ -326,13 +347,13 @@ describe("handleReviewComment (U6)", () => {
 
   it("carries the images into an edit", async () => {
     await seedChannel();
-    await handleReviewComment({ ...deps(), embedImages: embedAll }, payload());
+    await handleReviewComment({ ...deps(), embedImages: embedAll }, reviewCommentEvent(payload()));
     await handleReviewComment(
       { ...deps(), embedImages: embedAll },
-      {
+      reviewCommentEvent({
         ...payload({ body: "now with ![shot](https://img.example.com/x.png)" }),
         action: "edited",
-      },
+      }),
     );
     expect(slack.updates.at(-1)?.images).toEqual([
       {
@@ -349,11 +370,13 @@ describe("handleReviewComment (U6)", () => {
     const allowed = { ...deps(), embedImages: embedAll, allowedBots: new Set(["pullfrog"]) };
     await handleReviewComment(
       allowed,
-      payload({
-        id: 88,
-        user: { id: 20, login: "pullfrog[bot]", type: "Bot" },
-        body: "preview ![p](https://img.example.com/y.png)",
-      }),
+      reviewCommentEvent(
+        payload({
+          id: 88,
+          user: { id: 20, login: "pullfrog[bot]", type: "Bot" },
+          body: "preview ![p](https://img.example.com/y.png)",
+        }),
+      ),
     );
     expect(slack.messages).toHaveLength(1); // mirrored (allow-listed)
     expect(slack.messages.at(-1)?.images).toEqual([]);
@@ -365,54 +388,62 @@ describe("handleReviewComment (U6)", () => {
     // Pullfrog is allow-listed (matches "pullfrog[bot]" after normalization).
     await handleReviewComment(
       allowed,
-      payload({ id: 71, user: { id: 20, login: "pullfrog[bot]", type: "Bot" } }),
+      reviewCommentEvent(
+        payload({ id: 71, user: { id: 20, login: "pullfrog[bot]", type: "Bot" } }),
+      ),
     );
     expect(slack.messages).toHaveLength(1);
     expect(slack.messages.at(-1)?.threadTs).toBeUndefined(); // top-level, not threaded
     // A different bot is still filtered even with an allowlist present.
     await handleReviewComment(
       allowed,
-      payload({ id: 72, user: { id: 21, login: "vercel[bot]", type: "Bot" } }),
+      reviewCommentEvent(payload({ id: 72, user: { id: 21, login: "vercel[bot]", type: "Bot" } })),
     );
     expect(slack.messages).toHaveLength(1);
   });
 
   it("posts a thread-starting review comment top-level (not under the PR root)", async () => {
     await seedChannel();
-    await handleReviewComment(deps(), payload());
+    await handleReviewComment(deps(), reviewCommentEvent(payload()));
     expect(slack.messages.at(-1)?.threadTs).toBeUndefined();
   });
 
   it("threads a reply under the Slack message of the comment it replies to", async () => {
     await seedChannel();
     // The original comment (id 55) posts top-level and gets a Slack ts.
-    await handleReviewComment(deps(), payload({ id: 55 }));
+    await handleReviewComment(deps(), reviewCommentEvent(payload({ id: 55 })));
     const parentTs = slack.messages.at(-1)?.ts;
     expect(parentTs).toBeTruthy();
     // A reply to it (in_reply_to_id: 55) threads under that message.
-    await handleReviewComment(deps(), payload({ id: 56, in_reply_to_id: 55, body: "agreed" }));
+    await handleReviewComment(
+      deps(),
+      reviewCommentEvent(payload({ id: 56, in_reply_to_id: 55, body: "agreed" })),
+    );
     expect(slack.messages.at(-1)?.threadTs).toBe(parentTs);
   });
 
   it("posts a reply top-level when THREAD_COMMENTS is disabled", async () => {
     await seedChannel();
-    await handleReviewComment({ ...deps(), threadComments: false }, payload({ id: 55 }));
     await handleReviewComment(
       { ...deps(), threadComments: false },
-      payload({ id: 56, in_reply_to_id: 55 }),
+      reviewCommentEvent(payload({ id: 55 })),
+    );
+    await handleReviewComment(
+      { ...deps(), threadComments: false },
+      reviewCommentEvent(payload({ id: 56, in_reply_to_id: 55 })),
     );
     expect(slack.messages.at(-1)?.threadTs).toBeUndefined();
   });
 
   it("posts a reply top-level when its parent comment was never mirrored", async () => {
     await seedChannel();
-    await handleReviewComment(deps(), payload({ id: 56, in_reply_to_id: 999 }));
+    await handleReviewComment(deps(), reviewCommentEvent(payload({ id: 56, in_reply_to_id: 999 })));
     expect(slack.messages.at(-1)?.threadTs).toBeUndefined();
   });
 
   it("reconciles the channel from the payload when the comment arrives first (out-of-order)", async () => {
     // No channel seeded — the opened event hasn't been processed.
-    await handleReviewComment(deps(), payload());
+    await handleReviewComment(deps(), reviewCommentEvent(payload()));
     expect(slack.channels).toHaveLength(1); // lazily created
     // The last message is the threaded comment, not a null-target post.
     expect(slack.messages.at(-1)?.channel).toBeDefined();
@@ -422,16 +453,16 @@ describe("handleReviewComment (U6)", () => {
     await seedChannel();
     await handleReviewComment(
       deps(),
-      payload({ user: { id: 9, login: "vercel[bot]", type: "Bot" } }),
+      reviewCommentEvent(payload({ user: { id: 9, login: "vercel[bot]", type: "Bot" } })),
     );
     expect(slack.messages).toHaveLength(0);
   });
 
   it("does not double-post a re-delivered comment", async () => {
     await seedChannel();
-    await handleReviewComment(deps(), payload());
+    await handleReviewComment(deps(), reviewCommentEvent(payload()));
     const count = slack.messages.length;
-    await handleReviewComment(deps(), payload());
+    await handleReviewComment(deps(), reviewCommentEvent(payload()));
     expect(slack.messages.length).toBe(count);
   });
 
@@ -447,8 +478,10 @@ describe("handleReviewComment (U6)", () => {
       return post(channel, message, opts);
     };
 
-    await expect(handleReviewComment(deps(), payload())).rejects.toThrow("transient Slack failure");
-    await handleReviewComment(deps(), payload());
+    await expect(handleReviewComment(deps(), reviewCommentEvent(payload()))).rejects.toThrow(
+      "transient Slack failure",
+    );
+    await handleReviewComment(deps(), reviewCommentEvent(payload()));
 
     expect(slack.messages).toHaveLength(1);
     expect(slack.messages[0]?.clientMsgId).toMatch(/^[0-9a-f-]{36}$/);
@@ -467,16 +500,16 @@ describe("handleReviewComment (U6)", () => {
       return response;
     };
 
-    await expect(handleReviewComment(deps(), payload())).rejects.toThrow(
+    await expect(handleReviewComment(deps(), reviewCommentEvent(payload()))).rejects.toThrow(
       "connection closed after send",
     );
-    await handleReviewComment(deps(), payload());
+    await handleReviewComment(deps(), reviewCommentEvent(payload()));
     expect(slack.messages).toHaveLength(1);
   });
 
   it("uses the canonical comment URL when GitHub supplies no current line", async () => {
     await seedChannel();
-    await handleReviewComment(deps(), payload({ line: null, start_line: null }));
+    await handleReviewComment(deps(), reviewCommentEvent(payload({ line: null })));
     const rendered = JSON.stringify(slack.messages.at(-1)?.blocks);
     expect(rendered).toContain("https://github.com/unkey/api/pull/1423#discussion_r55|Open");
     expect(rendered).not.toContain(":1`");
@@ -486,7 +519,9 @@ describe("handleReviewComment (U6)", () => {
     await seedChannel();
     await handleReviewComment(
       deps(),
-      payload({ path: "src/` <!channel>.ts", user: { id: 8, login: "<!everyone>" } }),
+      reviewCommentEvent(
+        payload({ path: "src/` <!channel>.ts", user: { id: 8, login: "<!everyone>" } }),
+      ),
     );
     const message = slack.messages.at(-1);
     expect(JSON.stringify(message)).not.toContain("<!channel>");
@@ -495,7 +530,7 @@ describe("handleReviewComment (U6)", () => {
 
   it("sets a top-level text fallback on every message", async () => {
     await seedChannel();
-    await handleReviewComment(deps(), payload());
+    await handleReviewComment(deps(), reviewCommentEvent(payload()));
     expect(slack.messages.at(-1)?.text).toBeTruthy();
   });
 });

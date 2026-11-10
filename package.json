@@ -63,6 +63,7 @@
   "imports": {
     "#lib": "./src/lib/index.ts",
     "#events": "./src/events/index.ts",
-    "#slack": "./src/slack/index.ts"
+    "#slack": "./src/slack/index.ts",
+    "#app": "./src/app/index.ts"
   }
 }

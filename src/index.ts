@@ -1,4 +1,5 @@
 import { serve } from "@hono/node-server";
+import { createDispatcher } from "#app";
 import { createLogger, registerSecrets } from "#lib";
 import { errMessage } from "#lib";
 import { createSlackGateway } from "#slack";
@@ -20,7 +21,6 @@ import { createClosedPullRequestReconciliation } from "./scheduler/reconcileClos
 import { createReminderScheduler } from "./scheduler/reminders.ts";
 import { createApp } from "./server.ts";
 import { createWorker, startWorkerLoop } from "./worker/loop.ts";
-import { createRouter } from "./worker/router.ts";
 
 // Most platforms send SIGKILL 30s after SIGTERM. Finish inside that window.
 const SHUTDOWN_DEADLINE_MS = 20_000;
@@ -53,7 +53,7 @@ function boot(): void {
   const installationId = config.GITHUB_INSTALLATION_ID;
   const services = createServiceHandlers({ config, db, slack, logger, auth });
 
-  // Scheduler + router + worker
+  // Scheduler + dispatcher + worker
   const scheduler = createReminderScheduler({
     db,
     slack,
@@ -72,7 +72,7 @@ function boot(): void {
     // Hold the 12h ping while CI is failing or still running.
     fetchCiReadiness: services.fetchCiReadiness,
   });
-  const router = createRouter({
+  const dispatch = createDispatcher({
     ...services.handler,
     fetchPrForSha: services.fetchPrForSha,
     onReviewRequested: scheduler.onReviewRequested,
@@ -80,7 +80,7 @@ function boot(): void {
     onReviewRequestRemoved: scheduler.onReviewRequestRemoved,
     onReviewAlerted: scheduler.onReviewAlerted,
   });
-  const worker = createWorker({ db, logger, router });
+  const worker = createWorker({ db, logger, dispatch });
 
   // Routes
   const githubOauthCallbackUrl = `${config.PUBLIC_URL}/oauth/github/callback`;

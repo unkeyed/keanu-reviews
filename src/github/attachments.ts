@@ -1,7 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import { type EmbeddedImage, type MessageImage, extractEmbeddedImages } from "#slack";
-import { isBotActor } from "./actors.ts";
 
 // GitHub serves a pasted image at `github.com/user-attachments/assets/<uuid>`,
 // which 302s to an S3 URL signed for 300 s. Older pastes use
@@ -120,9 +119,9 @@ export function createGithubAttachmentMirror(opts: {
 export async function commentImages(
   deps: { embedImages?: ImageEmbedder },
   body: string,
-  author: { type?: string },
+  author: { isBot: boolean },
 ): Promise<MessageImage[]> {
-  if (isBotActor(author)) return [];
+  if (author.isBot) return [];
   return deps.embedImages ? deps.embedImages(extractEmbeddedImages(body)) : [];
 }
 

@@ -1,4 +1,11 @@
-import { type PrState, claimFromAction, isTerminal, nextState } from "#events";
+import {
+  type PrChange,
+  type PrSnapshot,
+  type PrState,
+  claimFromAction,
+  isTerminal,
+  nextState,
+} from "#events";
 import { type Logger, Retry, errMessage, leaseWaitMs } from "#lib";
 import {
   type Ledger,
@@ -34,26 +41,6 @@ import { CURRENT_CHANNEL_NAME_VERSION, channelName } from "../slack/naming.ts";
 import { inviteToChannel } from "./invites.ts";
 import type { PullRequestFetcher } from "./mergeability.ts";
 import { notifyShipped } from "./shipped.ts";
-
-export interface PullRequestPayload {
-  action: string;
-  pull_request: {
-    number: number;
-    id: number;
-    draft?: boolean;
-    merged?: boolean;
-    title: string;
-    html_url: string;
-    user: { login: string; id: number };
-    head: { sha: string; ref?: string };
-    base?: { ref: string };
-    updated_at: string;
-    // Current individual reviewers on the PR; present on lifecycle payloads such
-    // as `ready_for_review`, used to invite reviewers deferred while it was draft.
-    requested_reviewers?: { id: number; login: string }[];
-  };
-  repository: { full_name: string };
-}
 
 export interface PrHandlerDeps {
   db: Db;
@@ -142,38 +129,34 @@ export class PullRequestLifecycleBusyError extends Retry {
  */
 export async function handlePullRequest(
   deps: PrHandlerDeps,
-  payload: PullRequestPayload,
+  change: PrChange,
   options: PullRequestHandlingOptions = {},
 ): Promise<PullRequestHandlingResult> {
   const { db, slack, logger } = deps;
   const ledger = createLedger(db);
-  const repoFullName = payload.repository.full_name;
-  const pr = payload.pull_request;
+  const { pr } = change;
+  const repoFullName = pr.repo;
   const view: PrView = {
     repo: repoFullName,
     number: pr.number,
     title: pr.title,
-    url: pr.html_url,
-    authorLogin: pr.user.login,
-    headRef: pr.head.ref,
-    baseRef: pr.base?.ref,
+    url: pr.url,
+    authorLogin: pr.author.login,
+    headRef: pr.headRef,
+    baseRef: pr.baseRef,
   };
-  const claim = claimFromAction(payload.action, pr.draft ?? false, pr.merged ?? false);
+  const claim = claimFromAction(change.action, pr.draft, change.merged);
+  const sourceUpdatedAt = new Date(pr.updatedAt);
 
-  const sourceUpdatedAt = new Date(pr.updated_at);
-  if (Number.isNaN(sourceUpdatedAt.getTime())) {
-    throw new Error(`Invalid pull_request.updated_at for GitHub PR ${pr.id}`);
-  }
-
-  const lifecycleClaim = await claimPullRequestLifecycle(db, pr.id, {
+  const lifecycleClaim = await claimPullRequestLifecycle(db, pr.githubPrId, {
     now: options.now,
     leaseMs: options.lifecycleLeaseMs,
   });
   if (!lifecycleClaim) {
     throw new PullRequestLifecycleBusyError(
-      pr.id,
+      pr.githubPrId,
       leaseWaitMs(
-        await pullRequestLifecycleClaimedAt(db, pr.id),
+        await pullRequestLifecycleClaimedAt(db, pr.githubPrId),
         options.lifecycleLeaseMs ?? PULL_REQUEST_LIFECYCLE_LEASE_MS,
         options.now ?? new Date(),
       ),
@@ -181,22 +164,22 @@ export async function handlePullRequest(
   }
 
   try {
-    const existing = await findByGithubPrId(db, pr.id);
+    const existing = await findByGithubPrId(db, pr.githubPrId);
     const state = nextState(existing?.currentState, claim);
 
     const source = await applyPullRequestSource(db, {
       repoFullName,
       number: pr.number,
-      githubPrId: pr.id,
+      githubPrId: pr.githubPrId,
       currentState: state,
-      headSha: pr.head.sha, // refreshed on opened/synchronize (U7 mapping)
+      headSha: pr.headSha, // refreshed on opened/synchronize (U7 mapping)
       sourceUpdatedAt,
       sourceArrivalKey: options.sourceArrivalKey,
     });
     if (!source.sourceAccepted) {
       logger.info("stale PR lifecycle event ignored", {
-        githubPrId: pr.id,
-        incomingUpdatedAt: pr.updated_at,
+        githubPrId: pr.githubPrId,
+        incomingUpdatedAt: pr.updatedAt,
         incomingArrivalKey: options.sourceArrivalKey,
         storedUpdatedAt: source.row.sourceUpdatedAt?.toISOString(),
         storedArrivalKey: source.row.sourceArrivalKey,
@@ -216,7 +199,7 @@ export async function handlePullRequest(
         repoFullName: row.repoFullName,
         number: row.number,
         title: pr.title,
-        author: pr.user.login,
+        author: pr.author.login,
       });
       let channelId: string;
       try {
@@ -283,19 +266,19 @@ export async function handlePullRequest(
     // retryable across events, so an author who links their account after
     // opening still gets pulled in on the next PR event.
     const authorSlackId = await resolveSlackUser(deps, {
-      githubId: pr.user.id,
-      login: pr.user.login,
+      githubId: pr.author.id,
+      login: pr.author.login,
     });
     if (authorSlackId && !stayingArchived) {
       const prId = current.id;
       await ledger.deliver(
-        keys.authorInvite(prId, pr.user.id),
+        keys.authorInvite(prId, pr.author.id),
         channelSink(slack, channelId),
         async () => ({
           message: {
             kind: "author_invite",
-            authorLogin: pr.user.login,
-            authorLabel: await displayName(slack, authorSlackId, pr.user.login),
+            authorLogin: pr.author.login,
+            authorLabel: await displayName(slack, authorSlackId, pr.author.login),
           },
           beforePost: () =>
             inviteToChannel(deps, channelId, [authorSlackId], { prId, role: "author" }),
@@ -312,7 +295,7 @@ export async function handlePullRequest(
       repoFullName: current.repoFullName,
       number: current.number,
       title: pr.title,
-      author: pr.user.login,
+      author: pr.author.login,
     });
     const needsSlackReconciliation =
       current.appliedState !== desiredState || current.appliedChannelName !== desiredChannelName;
@@ -345,7 +328,7 @@ export async function handlePullRequest(
       // Terminal channels must still be writable when the lifecycle note is
       // posted. A retry reuses its durable message effect before archiving.
       if (shouldPostLifecycle) {
-        await postLifecycleNote(ledger, slack, current, payload, view, desiredState, channelId);
+        await postLifecycleNote(ledger, slack, current, change, view, desiredState, channelId);
       }
 
       if (isTerminal(desiredState)) {
@@ -385,7 +368,7 @@ export async function handlePullRequest(
               {
                 prId: current.id,
                 pr: { ...view, repo: current.repoFullName, number: current.number },
-                authorLabel: () => displayName(slack, authorSlackId, pr.user.login),
+                authorLabel: () => displayName(slack, authorSlackId, pr.author.login),
               },
             );
           } catch (err) {
@@ -440,12 +423,12 @@ export async function handlePullRequest(
     // Thread a lifecycle note under the root for notable transitions. Never post
     // to a channel that is (and stays) archived — that throws is_archived.
     if (shouldPostLifecycle && !needsSlackReconciliation && !stayingArchived) {
-      await postLifecycleNote(ledger, slack, current, payload, view, desiredState, channelId);
+      await postLifecycleNote(ledger, slack, current, change, view, desiredState, channelId);
     }
     return { sourceAccepted: true, skippedShipped, skippedMergeComment };
   } finally {
     if (!(await releasePullRequestLifecycle(db, lifecycleClaim))) {
-      logger.error("PR lifecycle lease was lost before release", { githubPrId: pr.id });
+      logger.error("PR lifecycle lease was lost before release", { githubPrId: pr.githubPrId });
     }
   }
 }
@@ -463,36 +446,27 @@ async function postLifecycleNote(
   ledger: Ledger,
   slack: SlackGateway,
   row: { id: string; rootMessageTs: string | null },
-  payload: PullRequestPayload,
+  change: PrChange,
   view: PrView,
   state: PrState,
   channelId: string,
 ): Promise<void> {
-  const pr = payload.pull_request;
   if (!row.rootMessageTs) return;
   await ledger.deliver(
-    keys.lifecycle(row.id, payload.action, state, pr.head.sha, pr.updated_at),
+    keys.lifecycle(row.id, change.action, state, change.pr.headSha, change.pr.updatedAt),
     channelSink(slack, channelId),
-    async () => ({ message: { kind: "lifecycle", pr: view, action: payload.action, state } }),
+    async () => ({ message: { kind: "lifecycle", pr: view, action: change.action, state } }),
   );
 }
 
-export async function ensurePullRequestChannel(
-  deps: PrHandlerDeps,
-  repository: { full_name: string },
-  pullRequest: PullRequestPayload["pull_request"],
-) {
-  let row = await findByRepoNumber(deps.db, repository.full_name, pullRequest.number);
+export async function ensurePullRequestChannel(deps: PrHandlerDeps, pr: PrSnapshot) {
+  let row = await findByRepoNumber(deps.db, pr.repo, pr.number);
   if (!row?.channelId || !row.rootMessageTs) {
-    await handlePullRequest(deps, {
-      action: "synchronize",
-      repository,
-      pull_request: pullRequest,
-    });
-    row = await findByRepoNumber(deps.db, repository.full_name, pullRequest.number);
+    await handlePullRequest(deps, { action: "synchronize", pr, merged: false });
+    row = await findByRepoNumber(deps.db, pr.repo, pr.number);
   }
   if (!row?.channelId || !row.rootMessageTs) {
-    throw new Retry(`PR channel is not ready for ${repository.full_name}#${pullRequest.number}`);
+    throw new Retry(`PR channel is not ready for ${pr.repo}#${pr.number}`);
   }
   return { ...row, channelId: row.channelId, rootMessageTs: row.rootMessageTs };
 }

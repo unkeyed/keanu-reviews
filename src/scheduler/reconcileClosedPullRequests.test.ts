@@ -13,11 +13,8 @@ import {
   type PullRequestSnapshotFetcher,
   createPullRequestSnapshotFetcher,
 } from "../github/pullRequestSnapshot.ts";
-import {
-  type PrHandlerDeps,
-  type PullRequestPayload,
-  handlePullRequest,
-} from "../handlers/pullRequest.ts";
+import { type PrHandlerDeps, handlePullRequest } from "../handlers/pullRequest.ts";
+import { type PullRequestPayload, pullRequestEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { createClosedPullRequestReconciliation } from "./reconcileClosedPullRequests.ts";
 
@@ -87,7 +84,7 @@ function snapshot(
     title: `Change ${number}`,
     htmlUrl: `https://github.com/unkey/api/pull/${number}`,
     updatedAt: "2026-08-12T15:00:00Z",
-    user: { id: 100, login: "oz" },
+    user: { id: 100, login: "oz", isBot: false },
     headSha: `sha${number}`,
     headRef: "feature",
     baseRef: "main",
@@ -96,7 +93,7 @@ function snapshot(
 }
 
 async function openPr(number: number, githubId: number, deps = handler()): Promise<void> {
-  await handlePullRequest(deps, opened(number, githubId));
+  await handlePullRequest(deps, pullRequestEvent(opened(number, githubId)));
 }
 
 function finished() {
@@ -244,7 +241,7 @@ describe("closed pull request reconciliation", () => {
   it("re-archives a terminal channel that drifted open after a late write", async () => {
     const deps = handler();
     await openPr(1, 101, deps);
-    await handlePullRequest(deps, merge(1, 101));
+    await handlePullRequest(deps, pullRequestEvent(merge(1, 101)));
     expect(slack.channel("C1")?.archived).toBe(true);
     // A late CI/comment/review write would unarchive the channel to deliver.
     await slack.unarchive("C1");
@@ -270,7 +267,7 @@ describe("closed pull request reconciliation", () => {
   it("leaves an already-archived terminal channel alone", async () => {
     const deps = handler();
     await openPr(1, 101, deps);
-    await handlePullRequest(deps, merge(1, 101)); // archives C1 and leaves it archived
+    await handlePullRequest(deps, pullRequestEvent(merge(1, 101))); // archives C1 and leaves it archived
 
     const run = createClosedPullRequestReconciliation({
       handler: deps,
@@ -313,15 +310,18 @@ describe("closed pull request reconciliation", () => {
   it("does nothing when the channel is already archived", async () => {
     const deps = handler();
     await openPr(4, 104, deps);
-    await handlePullRequest(deps, {
-      ...opened(4, 104),
-      action: "closed",
-      pull_request: {
-        ...opened(4, 104).pull_request,
-        merged: true,
-        updated_at: "2026-08-12T00:00:00Z",
-      },
-    });
+    await handlePullRequest(
+      deps,
+      pullRequestEvent({
+        ...opened(4, 104),
+        action: "closed",
+        pull_request: {
+          ...opened(4, 104).pull_request,
+          merged: true,
+          updated_at: "2026-08-12T00:00:00Z",
+        },
+      }),
+    );
     const fetchSnapshot = vi.fn<PullRequestSnapshotFetcher>(async () => {
       throw new Error("GitHub should not be consulted");
     });

@@ -1,4 +1,4 @@
-import { isTerminal } from "#events";
+import { type PrChange, isTerminal } from "#events";
 import { type Logger, errMessage } from "#lib";
 import {
   findById,
@@ -14,7 +14,6 @@ import {
 import {
   type PrHandlerDeps,
   PullRequestLifecycleBusyError,
-  type PullRequestPayload,
   handlePullRequest,
 } from "../handlers/pullRequest.ts";
 
@@ -84,21 +83,23 @@ function outcomeOf(snapshot: PullRequestSnapshot): "merged" | "closed" | undefin
   return undefined;
 }
 
-function closedPayload(row: PullRequestRow, snapshot: PullRequestSnapshot): PullRequestPayload {
+function closedChange(row: PullRequestRow, snapshot: PullRequestSnapshot): PrChange {
   return {
     action: "closed",
-    repository: { full_name: row.repoFullName },
-    pull_request: {
+    merged: snapshot.merged,
+    pr: {
+      repo: row.repoFullName,
       number: snapshot.number,
-      id: snapshot.id,
-      draft: snapshot.draft,
-      merged: snapshot.merged,
+      githubPrId: snapshot.id,
       title: snapshot.title,
-      html_url: snapshot.htmlUrl,
-      user: snapshot.user,
-      head: { sha: snapshot.headSha, ref: snapshot.headRef },
-      base: snapshot.baseRef ? { ref: snapshot.baseRef } : undefined,
-      updated_at: snapshot.updatedAt,
+      url: snapshot.htmlUrl,
+      author: snapshot.user,
+      draft: snapshot.draft,
+      headSha: snapshot.headSha,
+      headRef: snapshot.headRef,
+      baseRef: snapshot.baseRef,
+      updatedAt: snapshot.updatedAt,
+      requestedReviewers: [],
     },
   };
 }
@@ -294,7 +295,7 @@ async function applySnapshot(
   // `~` sorts after the webhook arrival keys (`${createdAt}:${jobId}`), so a
   // snapshot with the same updated_at is still accepted. A newer stored
   // snapshot is left alone (sourceAccepted false).
-  const handled = await handlePullRequest(deps.handler, closedPayload(fresh, snapshot), {
+  const handled = await handlePullRequest(deps.handler, closedChange(fresh, snapshot), {
     sourceArrivalKey: `~reconcile:${new Date().toISOString()}`,
     announceMerge: false,
   });

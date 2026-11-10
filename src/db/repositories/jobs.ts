@@ -105,18 +105,22 @@ export async function completeJob(db: Db, job: JobRow): Promise<boolean> {
   return rows.length > 0;
 }
 
+export async function failJob(db: Db, job: JobRow): Promise<void> {
+  await db
+    .update(jobs)
+    // Retain terminal failures for an explicit, targeted admin replay.
+    // Successful completion remains the raw-payload purge boundary.
+    .set({ status: "failed", claimedAt: null })
+    .where(currentClaim(job));
+}
+
 export async function rescheduleOrFailJob(
   db: Db,
   job: JobRow,
   options: { maxAttempts: number; retryAt: Date },
 ): Promise<"pending" | "failed"> {
   if (job.attempts >= options.maxAttempts) {
-    await db
-      .update(jobs)
-      // Retain terminal failures for an explicit, targeted admin replay.
-      // Successful completion remains the raw-payload purge boundary.
-      .set({ status: "failed", claimedAt: null })
-      .where(currentClaim(job));
+    await failJob(db, job);
     return "failed";
   }
 

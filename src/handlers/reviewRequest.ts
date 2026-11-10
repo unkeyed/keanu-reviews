@@ -1,23 +1,11 @@
-import { isTerminal } from "#events";
+import { type GithubActor, type PullRequestEvent, isTerminal } from "#events";
 import { Retry } from "#lib";
 import { channelSink, createLedger, keys } from "#slack";
 import { findReminderForReviewer } from "../db/repositories/reminders.ts";
 import type { PullRequestRow } from "../db/schema.ts";
 import { type GithubEmailFetcher, displayName, resolveSlackUser } from "../identity/resolve.ts";
 import { inviteToChannel } from "./invites.ts";
-import {
-  type PrHandlerDeps,
-  type PullRequestPayload,
-  ensurePullRequestChannel,
-} from "./pullRequest.ts";
-
-export interface ReviewRequestPayload {
-  action: "review_requested" | "review_request_removed" | string;
-  repository: { full_name: string };
-  pull_request: PullRequestPayload["pull_request"];
-  requested_reviewer?: { id: number; login: string };
-  requested_team?: { id: number; slug: string };
-}
+import { type PrHandlerDeps, ensurePullRequestChannel } from "./pullRequest.ts";
 
 export interface ReviewRequestDeps extends PrHandlerDeps {
   fetchGithubEmail?: GithubEmailFetcher;
@@ -63,11 +51,6 @@ export interface ReviewAlertGate {
   absentMeansReady?: boolean;
 }
 
-interface ReviewerRef {
-  id: number;
-  login: string;
-}
-
 interface AlertSource {
   sourceUpdatedAt: Date;
   sourceVersion: string;
@@ -81,24 +64,23 @@ interface AlertSource {
  */
 export async function handleReviewRequest(
   deps: ReviewRequestDeps,
-  payload: ReviewRequestPayload,
-  eventRef = payload.pull_request.updated_at,
-  sourceVersion = eventRef,
+  ev: PullRequestEvent,
+  sourceVersion = ev.pr.updatedAt,
   gate: ReviewAlertGate = {},
 ): Promise<void> {
   const { logger } = deps;
-  const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
+  const row = await ensurePullRequestChannel(deps, ev.pr);
 
-  if (payload.requested_team && !payload.requested_reviewer) {
-    logger.info("team review requested; no per-user invite", { team: payload.requested_team.slug });
+  if (ev.requestedTeam && !ev.requestedReviewer) {
+    logger.info("team review requested; no per-user invite", { team: ev.requestedTeam });
     return;
   }
 
-  const reviewer = payload.requested_reviewer;
+  const reviewer = ev.requestedReviewer;
   if (!reviewer) return;
 
-  const source = alertSource(payload.pull_request.updated_at, sourceVersion);
-  if (payload.action === "review_request_removed") {
+  const source = alertSource(ev.pr.updatedAt, sourceVersion);
+  if (ev.action === "review_request_removed") {
     await deps.onReviewRequestRemoved?.(
       row.id,
       reviewer.id,
@@ -120,7 +102,7 @@ export async function handleReviewRequest(
   // Defer the alert on a draft. ready_for_review (or a later check_run, once
   // the PR is not a draft) sends it. Requesting review before marking ready is
   // common; pulling the reviewer in then is premature.
-  if (payload.pull_request.draft || row.currentState === "draft") {
+  if (ev.pr.draft || row.currentState === "draft") {
     logger.info("review alert held: PR is still a draft", {
       prId: row.id,
       reviewer: reviewer.login,
@@ -130,7 +112,7 @@ export async function handleReviewRequest(
 
   const ready = await ciAllowsAlert(
     deps,
-    { ...row, headSha: payload.pull_request.head.sha },
+    { ...row, headSha: ev.pr.headSha },
     { ...gate, absentMeansReady: true },
   );
   if (!ready) {
@@ -150,18 +132,17 @@ export async function handleReviewRequest(
  */
 export async function handleReadyForReview(
   deps: ReviewRequestDeps,
-  payload: PullRequestPayload,
-  eventRef = payload.pull_request.updated_at,
-  sourceVersion = eventRef,
+  ev: PullRequestEvent,
+  sourceVersion = ev.pr.updatedAt,
   gate: ReviewAlertGate = {},
 ): Promise<void> {
-  const reviewers = payload.pull_request.requested_reviewers ?? [];
+  const reviewers = ev.pr.requestedReviewers;
   if (reviewers.length === 0) return;
-  const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
+  const row = await ensurePullRequestChannel(deps, ev.pr);
   if (isTerminal(row.currentState) || row.currentState === "draft") return;
 
-  const source = alertSource(payload.pull_request.updated_at, sourceVersion);
-  const viewed = { ...row, headSha: payload.pull_request.head.sha };
+  const source = alertSource(ev.pr.updatedAt, sourceVersion);
+  const viewed = { ...row, headSha: ev.pr.headSha };
   const ready = await ciAllowsAlert(deps, viewed, { ...gate, absentMeansReady: true });
   for (const reviewer of reviewers) {
     if (!ready) {
@@ -179,19 +160,18 @@ export async function handleReadyForReview(
  */
 export async function handleSynchronizedReviewAlerts(
   deps: ReviewRequestDeps,
-  payload: PullRequestPayload,
-  eventRef = payload.pull_request.updated_at,
-  sourceVersion = eventRef,
+  ev: PullRequestEvent,
+  sourceVersion = ev.pr.updatedAt,
   gate: ReviewAlertGate = {},
 ): Promise<void> {
-  if (payload.pull_request.draft) return;
-  const reviewers = payload.pull_request.requested_reviewers ?? [];
+  if (ev.pr.draft) return;
+  const reviewers = ev.pr.requestedReviewers;
   if (reviewers.length === 0) return;
-  const row = await ensurePullRequestChannel(deps, payload.repository, payload.pull_request);
+  const row = await ensurePullRequestChannel(deps, ev.pr);
   if (isTerminal(row.currentState) || row.currentState === "draft") return;
 
-  const source = alertSource(payload.pull_request.updated_at, sourceVersion);
-  const viewed = { ...row, headSha: payload.pull_request.head.sha };
+  const source = alertSource(ev.pr.updatedAt, sourceVersion);
+  const viewed = { ...row, headSha: ev.pr.headSha };
   const ready = await ciAllowsAlert(deps, viewed, { ...gate, absentMeansReady: true });
   if (!ready) return;
   for (const reviewer of reviewers) {
@@ -272,7 +252,7 @@ async function ciAllowsAlert(
 async function recordReviewRequest(
   deps: ReviewRequestDeps,
   prId: string,
-  reviewer: ReviewerRef,
+  reviewer: Pick<GithubActor, "id" | "login">,
   source: AlertSource,
 ): Promise<void> {
   const existing = await findReminderForReviewer(deps.db, prId, reviewer.id);
@@ -285,7 +265,7 @@ async function sendReviewAlert(
   deps: ReviewRequestDeps,
   row: PullRequestRow,
   channelId: string,
-  reviewer: ReviewerRef,
+  reviewer: Pick<GithubActor, "id" | "login">,
   source: AlertSource,
   revive: boolean,
 ): Promise<void> {
@@ -324,7 +304,7 @@ async function inviteReviewer(
   deps: ReviewRequestDeps,
   prId: string,
   channelId: string,
-  reviewer: ReviewerRef,
+  reviewer: Pick<GithubActor, "id" | "login">,
   round: number | string,
 ): Promise<boolean> {
   const { db, slack, logger } = deps;

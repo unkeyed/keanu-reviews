@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createDispatcher } from "#app";
 import { createLogger } from "#lib";
 import type { Db } from "./db/client.ts";
 import { createTestDb } from "./db/testDb.ts";
@@ -7,7 +8,6 @@ import { createGithubWebhookRoute } from "./routes/githubWebhook.ts";
 import { createReminderScheduler } from "./scheduler/reminders.ts";
 import { FakeSlackGateway } from "./testing/fakeSlack.ts";
 import { createWorker } from "./worker/loop.ts";
-import { createRouter } from "./worker/router.ts";
 
 /**
  * Offline end-to-end smoke (Verification Contract). Replays signed webhook
@@ -31,7 +31,7 @@ beforeEach(async () => {
   slack = new FakeSlackGateway();
   const logger = createLogger("error");
   const scheduler = createReminderScheduler({ db, slack, logger, reminderHours: 12 });
-  const router = createRouter({
+  const dispatch = createDispatcher({
     db,
     slack,
     logger,
@@ -40,7 +40,7 @@ beforeEach(async () => {
     onReviewSubmitted: scheduler.onReviewSubmitted,
     onReviewRequestRemoved: scheduler.onReviewRequestRemoved,
   });
-  worker = createWorker({ db, logger, router });
+  worker = createWorker({ db, logger, dispatch });
   route = createGithubWebhookRoute({
     db,
     logger,

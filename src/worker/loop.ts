@@ -1,13 +1,13 @@
-import { type Logger, Retry, errMessage } from "#lib";
+import { type Logger, Permanent, Retry, errMessage } from "#lib";
 import type { Db } from "../db/client.ts";
 import {
   claimNextJob,
   completeJob,
+  failJob,
   renewJobLease,
   rescheduleOrFailJob,
 } from "../db/repositories/jobs.ts";
 import type { JobRow } from "../db/schema.ts";
-import type { Router } from "./router.ts";
 
 // Lease errors can ask for the full 5-minute PR lifecycle lease. Nothing waits longer.
 const MAX_RETRY_DELAY_MS = 5 * 60_000;
@@ -15,7 +15,7 @@ const MAX_RETRY_DELAY_MS = 5 * 60_000;
 export interface WorkerDeps {
   db: Db;
   logger: Logger;
-  router: Router;
+  dispatch: (job: JobRow) => Promise<void>;
   now?: () => number;
   maxAttempts?: number;
   retryBaseMs?: number;
@@ -23,7 +23,7 @@ export interface WorkerDeps {
 }
 
 /**
- * Async job worker (KTD3). Claims one leased job at a time (KTD10) and routes it;
+ * Async job worker (KTD3). Claims one leased job at a time (KTD10) and dispatches it;
  * on success the raw payload is purged (KTD13); failures are retried with
  * exponential backoff before becoming terminal. Returns true if a job was
  * processed, false when the queue is empty.
@@ -86,11 +86,22 @@ export function createWorker(deps: WorkerDeps) {
     }
     const releaseLease = holdLease(job);
     try {
-      await deps.router(job);
+      await deps.dispatch(job);
       await completeJob(deps.db, await releaseLease());
     } catch (err) {
       const claim = await releaseLease();
       const message = errMessage(err);
+      if (err instanceof Permanent) {
+        deps.logger.error("job failed permanently", {
+          jobId: job.id,
+          event: job.event,
+          attempt: job.attempts,
+          reason: message,
+          ...err.details,
+        });
+        await failJob(deps.db, claim);
+        return true;
+      }
       const willRetry = job.attempts < maxAttempts;
       const backoffMs = retryBaseMs * 2 ** Math.max(0, job.attempts - 1);
       const retryAfterMs = err instanceof Retry ? (err.retryAfterMs ?? 0) : 0;

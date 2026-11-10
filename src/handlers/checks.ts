@@ -1,3 +1,4 @@
+import type { CheckRunEvent } from "#events";
 import { Retry } from "#lib";
 import type { PrForShaFetcher } from "../ci/status.ts";
 import { findAllByRepoHeadSha, findAllByRepoNumbers } from "../db/repositories/pullRequests.ts";
@@ -7,20 +8,6 @@ import {
   releaseReadyReviewAlerts,
 } from "./reviewRequest.ts";
 
-export interface CheckRunPayload {
-  action: string;
-  repository: { full_name: string };
-  check_run: {
-    id: number;
-    status: string; // queued | in_progress | completed
-    conclusion: string | null;
-    html_url: string;
-    head_sha: string;
-    name: string;
-    pull_requests?: { number: number }[];
-  };
-}
-
 export interface ChecksDeps extends ReviewRequestDeps {
   /** Fallback PR resolution for a head_sha not stored locally (e.g. fork checks). */
   fetchPrForSha?: PrForShaFetcher;
@@ -28,20 +15,16 @@ export interface ChecksDeps extends ReviewRequestDeps {
 
 /**
  * A completed check run re-reads check runs for the PR head. The alert fires
- * only when that list is passing and the PR is not a draft. In-progress runs
- * are ignored; their completion event is the trigger.
+ * only when that list is passing and the PR is not a draft.
  */
 export async function handleCheckRun(
   deps: ChecksDeps,
-  payload: CheckRunPayload,
+  ev: CheckRunEvent,
   gate: ReviewAlertGate = {},
 ): Promise<void> {
-  const run = payload.check_run;
-  if (run.status !== "completed") return;
-
-  const repoFullName = payload.repository.full_name;
-  const headSha = run.head_sha;
-  const associatedNumbers = new Set(run.pull_requests?.map((pr) => pr.number) ?? []);
+  const repoFullName = ev.repo;
+  const headSha = ev.headSha;
+  const associatedNumbers = new Set(ev.prNumbers);
   let rows =
     associatedNumbers.size > 0
       ? await findAllByRepoNumbers(deps.db, repoFullName, [...associatedNumbers])
