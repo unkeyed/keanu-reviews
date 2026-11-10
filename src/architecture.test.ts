@@ -190,6 +190,48 @@ describe("GitHub surface", () => {
   });
 });
 
+/** Each brand is minted in one file, so a branded value always came from its minter. */
+const BRAND_MINTERS: Record<string, string> = {
+  PrId: "pr/store.ts",
+  ClientMsgId: "slack/ledger.ts",
+  ArrivalKey: "events/arrival.ts",
+};
+
+/** `file: Brand` for every `x as Brand` or `<Brand>x` cast. */
+function brandCasts(): string[] {
+  const out: string[] = [];
+  for (const file of sourceFiles) {
+    const source = ts.createSourceFile(file, read(file), ts.ScriptTarget.Latest, true);
+    const visit = (node: ts.Node): void => {
+      if (
+        (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) &&
+        ts.isTypeReferenceNode(node.type) &&
+        ts.isIdentifier(node.type.typeName) &&
+        Object.hasOwn(BRAND_MINTERS, node.type.typeName.text)
+      ) {
+        out.push(`${file}: ${node.type.typeName.text}`);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+  }
+  return out;
+}
+
+describe("branded ids", () => {
+  it("casts to a brand only in its minting file", () => {
+    const casts = brandCasts();
+    const stray = casts.filter((cast) => {
+      const [file, brand] = cast.split(": ");
+      return BRAND_MINTERS[brand as string] !== file;
+    });
+    expect(stray).toEqual([]);
+    for (const [brand, minter] of Object.entries(BRAND_MINTERS)) {
+      expect(casts, `${minter} mints ${brand}`).toContain(`${minter}: ${brand}`);
+    }
+  });
+});
+
 /**
  * Target layering from the rewrite design. Report mode lists what still
  * breaks it; S2 turns ENFORCE on once every module has its index.ts.

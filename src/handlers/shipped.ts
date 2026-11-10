@@ -1,4 +1,4 @@
-import type { Logger } from "#lib";
+import type { Logger, PrId } from "#lib";
 import { type PrView, type SlackGateway, channelSink, createLedger, keys } from "#slack";
 import type { Db } from "../db/client.ts";
 
@@ -11,7 +11,7 @@ export interface ShippedDeps {
 }
 
 export interface ShippedInput {
-  prId: string;
+  prId: PrId;
   pr: PrView;
   /** The author's plain Slack display name, else login. Looked up only when posting. */
   authorLabel: () => Promise<string>;

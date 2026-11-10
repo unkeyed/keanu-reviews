@@ -1,11 +1,11 @@
-import { type PrChange, isTerminal } from "#events";
+import { type PrChange, isTerminal, reconcileArrivalKey } from "#events";
 import { type Logger, errMessage } from "#lib";
 import {
+  type PrRow,
   findById,
   listOpenPullRequestsForReconciliation,
   listRecentlyClosedPullRequests,
 } from "#pr";
-import type { PullRequestRow } from "../db/schema.ts";
 import {
   GithubRateLimitExhaustedError,
   type PullRequestSnapshot,
@@ -73,7 +73,7 @@ function summary(overrides: Partial<ReconciliationSummary> = {}): Reconciliation
   return { ...ZERO, ...overrides };
 }
 
-function channelArchived(row: PullRequestRow): boolean {
+function channelArchived(row: PrRow): boolean {
   return row.appliedState !== null && isTerminal(row.appliedState);
 }
 
@@ -83,7 +83,7 @@ function outcomeOf(snapshot: PullRequestSnapshot): "merged" | "closed" | undefin
   return undefined;
 }
 
-function closedChange(row: PullRequestRow, snapshot: PullRequestSnapshot): PrChange {
+function closedChange(row: PrRow, snapshot: PullRequestSnapshot): PrChange {
   return {
     action: "closed",
     merged: snapshot.merged,
@@ -246,7 +246,7 @@ async function reArchiveDriftedChannels(
 /** Apply one GitHub snapshot. Rate-limit exhaustion is decided by the caller. */
 async function applySnapshot(
   deps: ClosedPullRequestReconciliationDeps,
-  row: PullRequestRow,
+  row: PrRow,
   fetched: Awaited<ReturnType<PullRequestSnapshotFetcher>>,
   result: ReconciliationSummary,
 ): Promise<void> {
@@ -292,11 +292,10 @@ async function applySnapshot(
     return;
   }
 
-  // `~` sorts after the webhook arrival keys (`${createdAt}:${jobId}`), so a
-  // snapshot with the same updated_at is still accepted. A newer stored
-  // snapshot is left alone (sourceAccepted false).
+  // The reconcile arrival key wins an updated_at tie with any webhook. A newer
+  // stored snapshot is left alone (sourceAccepted false).
   const handled = await handlePullRequest(deps.handler, closedChange(fresh, snapshot), {
-    sourceArrivalKey: `~reconcile:${new Date().toISOString()}`,
+    sourceArrivalKey: reconcileArrivalKey(new Date()),
     announceMerge: false,
   });
   if (!handled.sourceAccepted) {

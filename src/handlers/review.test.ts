@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseEvent } from "#events";
 import { upsertIdentity } from "#identity";
 import { createLogger } from "#lib";
-import { applyPullRequestSource, setChannel } from "#pr";
+import { applyPullRequestSource, prId, setChannel } from "#pr";
 import type { Db } from "../db/client.ts";
 import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
@@ -158,7 +158,7 @@ describe("handleReview (U6, R5)", () => {
       reminderHours: 12,
       now: () => Date.parse("2026-08-11T11:00:00Z"),
     });
-    await scheduler.onReviewRequested("unkey/api#1", 7, new Date("2026-08-11T11:00:00Z"));
+    await scheduler.onReviewRequested(prId("unkey/api", 1), 7, new Date("2026-08-11T11:00:00Z"));
     slack.post = async () => {
       throw new Error("Slack unavailable");
     };

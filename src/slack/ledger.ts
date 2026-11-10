@@ -1,8 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { and, eq, isNull, lte, or } from "drizzle-orm";
-import { type Clock, Retry, leaseWaitMs, systemClock } from "#lib";
-import type { Db } from "../db/client.ts";
-import { type MessageRow, messages } from "../db/schema.ts";
+import { type Db, type MessageRow, messages } from "#db";
+import { type ClientMsgId, type Clock, Retry, leaseWaitMs, systemClock } from "#lib";
 import { type EffectKey, type Message, render } from "./catalog.ts";
 import { BOT, type Poster, type RenderedMessage, type SlackGateway } from "./gateway.ts";
 
@@ -16,12 +15,12 @@ export function naturalKey(key: EffectKey): string {
 }
 
 /** Slack requires a UUID-shaped client_msg_id. Derive one from the natural key. */
-export function clientMsgId(natural: string): string {
+export function clientMsgId(natural: string): ClientMsgId {
   const bytes = Buffer.from(createHash("sha256").update(natural).digest().subarray(0, 16));
   bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x50;
   bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
   const hex = bytes.toString("hex");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}` as ClientMsgId;
 }
 
 /**
@@ -118,7 +117,7 @@ export interface ChannelSink {
   readonly channel: string;
   post(
     msg: RenderedMessage,
-    opts: { poster: Poster; threadTs?: string; clientMsgId: string },
+    opts: { poster: Poster; threadTs?: string; clientMsgId: ClientMsgId },
   ): Promise<string>;
 }
 
@@ -197,7 +196,8 @@ export function createLedger(db: Db, clock: Clock = systemClock): Ledger {
       const ts = await sink.post(render(out.message), {
         poster: out.poster ?? BOT,
         threadTs: out.threadTs,
-        clientMsgId: row.clientMsgId,
+        // The column only ever holds clientMsgId(naturalKey) from the insert above.
+        clientMsgId: row.clientMsgId as ClientMsgId,
       });
       if (!(await complete(db, row, ts, opts.onSentTx))) {
         throw new Error(`Slack effect lease was lost before completion: ${key.kind}`);

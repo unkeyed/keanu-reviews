@@ -1,6 +1,7 @@
 import { ErrorCode } from "@slack/web-api";
 import { describe, expect, it, vi } from "vitest";
 import { Retry } from "#lib";
+import type { ClientMsgId } from "#lib";
 import type { MessageImage, SlackBlock } from "./catalog.ts";
 import { BOT, type SlackGateway, type SlackWebApi, createSlackGateway } from "./gateway.ts";
 
@@ -27,7 +28,7 @@ async function postMessage(slack: SlackGateway, msg: FlatPost) {
   const ts = await slack.post(
     msg.channel,
     { text: msg.text, blocks: msg.blocks, images: msg.images },
-    { poster, threadTs: msg.threadTs, clientMsgId: msg.clientMsgId as string },
+    { poster, threadTs: msg.threadTs, clientMsgId: msg.clientMsgId as ClientMsgId },
   );
   return { ts };
 }

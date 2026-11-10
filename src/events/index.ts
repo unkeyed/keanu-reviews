@@ -1,3 +1,4 @@
+export { jobArrivalKey, reconcileArrivalKey } from "./arrival.ts";
 export { parseEvent } from "./schemas.ts";
 export { type StateClaim, claimFromAction, isTerminal, nextState } from "./state.ts";
 export type {

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { afterEach, describe, expect, it } from "vitest";
+import type { PrId } from "#lib";
 import type { LedgerKind } from "../slack/catalog.ts";
 import { claim } from "../slack/ledger.ts";
 import type { Db } from "./client.ts";
@@ -228,7 +229,11 @@ describe("incremental legacy-schema upgrade", () => {
 
     const db = drizzle(client, { schema }) as unknown as Db;
     await expect(
-      claim(db, { prId: "legacy-canonical", kind: "ci" as LedgerKind, ref: "check-1" }, new Date()),
+      claim(
+        db,
+        { prId: "legacy-canonical" as PrId, kind: "ci" as LedgerKind, ref: "check-1" },
+        new Date(),
+      ),
     ).resolves.toBeUndefined();
 
     await expect(

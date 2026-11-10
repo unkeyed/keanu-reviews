@@ -7,7 +7,7 @@ import {
   nextState,
 } from "#events";
 import { type GithubEmailFetcher, displayName, resolveSlackUser } from "#identity";
-import { type Logger, Retry, errMessage, leaseWaitMs } from "#lib";
+import { type ArrivalKey, type Logger, type PrId, Retry, errMessage, leaseWaitMs } from "#lib";
 import {
   PULL_REQUEST_LIFECYCLE_LEASE_MS,
   applyPullRequestSource,
@@ -94,7 +94,7 @@ export interface PrHandlerDeps {
 }
 
 export interface PullRequestHandlingOptions {
-  sourceArrivalKey?: string;
+  sourceArrivalKey?: ArrivalKey;
   now?: Date;
   lifecycleLeaseMs?: number;
   /**
@@ -445,7 +445,7 @@ function createMayHaveSucceeded(error: unknown): boolean {
 async function postLifecycleNote(
   ledger: Ledger,
   slack: SlackGateway,
-  row: { id: string; rootMessageTs: string | null },
+  row: { id: PrId; rootMessageTs: string | null },
   change: PrChange,
   view: PrView,
   state: PrState,

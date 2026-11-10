@@ -2,8 +2,13 @@ import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, or } from "drizzle-orm";
 import { type Db, type PullRequestRow, pullRequestLifecycleClaims, pullRequests } from "#db";
 import type { PrState } from "#events";
+import type { ArrivalKey, PrId } from "#lib";
 
-export const prId = (repoFullName: string, number: number): string => `${repoFullName}#${number}`;
+export const prId = (repoFullName: string, number: number): PrId =>
+  `${repoFullName}#${number}` as PrId;
+
+/** A pull_requests row whose id is known to be a PrId. */
+export type PrRow = Omit<PullRequestRow, "id"> & { id: PrId };
 
 export interface PrSourceInput {
   repoFullName: string;
@@ -14,11 +19,11 @@ export interface PrSourceInput {
   channelId?: string | null;
   rootMessageTs?: string | null;
   sourceUpdatedAt?: Date | null;
-  sourceArrivalKey?: string | null;
+  sourceArrivalKey?: ArrivalKey | null;
 }
 
 interface SourceResult {
-  row: PullRequestRow;
+  row: PrRow;
   sourceAccepted: boolean;
 }
 
@@ -80,7 +85,7 @@ export async function applyPullRequestSource(db: Db, input: PrSourceInput): Prom
       ...(sourceGuard ? { setWhere: sourceGuard } : {}),
     })
     .returning();
-  if (row) return { row: row as PullRequestRow, sourceAccepted: true };
+  if (row) return { row: row as PrRow, sourceAccepted: true };
 
   const existing = await findByGithubPrId(db, input.githubPrId);
   if (!existing) throw new Error(`PR upsert returned no row for GitHub PR ${input.githubPrId}`);
@@ -160,7 +165,7 @@ export async function releasePullRequestLifecycle(
 
 export async function setChannel(
   db: Db,
-  id: string,
+  id: PrId,
   channelId: string,
   rootMessageTs: string | null,
   channelNameVersion?: number,
@@ -183,7 +188,7 @@ export async function setChannel(
  * Returns true for exactly one caller; the loser skips. Release on failure so a
  * retry can re-attempt.
  */
-export async function claimMergeComment(db: Db, id: string, now: Date): Promise<boolean> {
+export async function claimMergeComment(db: Db, id: PrId, now: Date): Promise<boolean> {
   const rows = await db
     .update(pullRequests)
     .set({ mergeCommentPostedAt: now })
@@ -192,13 +197,13 @@ export async function claimMergeComment(db: Db, id: string, now: Date): Promise<
   return rows.length > 0;
 }
 
-export async function releaseMergeComment(db: Db, id: string): Promise<void> {
+export async function releaseMergeComment(db: Db, id: PrId): Promise<void> {
   await db.update(pullRequests).set({ mergeCommentPostedAt: null }).where(eq(pullRequests.id, id));
 }
 
 export async function markSlackStateApplied(
   db: Db,
-  id: string,
+  id: PrId,
   state: PrState,
   appliedChannelName: string,
 ): Promise<void> {
@@ -212,13 +217,13 @@ export async function findByRepoNumber(
   db: Db,
   repoFullName: string,
   number: number,
-): Promise<PullRequestRow | undefined> {
+): Promise<PrRow | undefined> {
   const [row] = await db
     .select()
     .from(pullRequests)
     .where(and(eq(pullRequests.repoFullName, repoFullName), eq(pullRequests.number, number)))
     .limit(1);
-  return row;
+  return row as PrRow | undefined;
 }
 
 /** Resolve repository-scoped PR numbers in caller order with one query. */
@@ -226,34 +231,31 @@ export async function findAllByRepoNumbers(
   db: Db,
   repoFullName: string,
   numbers: number[],
-): Promise<PullRequestRow[]> {
+): Promise<PrRow[]> {
   if (numbers.length === 0) return [];
   const rows = await db
     .select()
     .from(pullRequests)
     .where(and(eq(pullRequests.repoFullName, repoFullName), inArray(pullRequests.number, numbers)));
-  const byNumber = new Map(rows.map((row) => [row.number, row]));
+  const byNumber = new Map((rows as PrRow[]).map((row) => [row.number, row]));
   return numbers.flatMap((number) => {
     const row = byNumber.get(number);
     return row ? [row] : [];
   });
 }
 
-export async function findByGithubPrId(
-  db: Db,
-  githubPrId: number,
-): Promise<PullRequestRow | undefined> {
+export async function findByGithubPrId(db: Db, githubPrId: number): Promise<PrRow | undefined> {
   const [row] = await db
     .select()
     .from(pullRequests)
     .where(eq(pullRequests.githubPrId, githubPrId))
     .limit(1);
-  return row;
+  return row as PrRow | undefined;
 }
 
-export async function findById(db: Db, id: string): Promise<PullRequestRow | undefined> {
+export async function findById(db: Db, id: string): Promise<PrRow | undefined> {
   const [row] = await db.select().from(pullRequests).where(eq(pullRequests.id, id)).limit(1);
-  return row;
+  return row as PrRow | undefined;
 }
 
 /**
@@ -262,8 +264,8 @@ export async function findById(db: Db, id: string): Promise<PullRequestRow | und
  * A row the database already marks closed or merged is omitted — reconciliation
  * does not touch it again.
  */
-export async function listOpenPullRequestsForReconciliation(db: Db): Promise<PullRequestRow[]> {
-  return db
+export async function listOpenPullRequestsForReconciliation(db: Db): Promise<PrRow[]> {
+  const rows = await db
     .select()
     .from(pullRequests)
     .where(
@@ -276,6 +278,7 @@ export async function listOpenPullRequestsForReconciliation(db: Db): Promise<Pul
       ),
     )
     .orderBy(asc(pullRequests.repoFullName), asc(pullRequests.number));
+  return rows as PrRow[];
 }
 
 /**
@@ -288,8 +291,8 @@ export async function listRecentlyClosedPullRequests(
   db: Db,
   since: Date,
   limit = 500,
-): Promise<PullRequestRow[]> {
-  return db
+): Promise<PrRow[]> {
+  const rows = await db
     .select()
     .from(pullRequests)
     .where(
@@ -302,6 +305,7 @@ export async function listRecentlyClosedPullRequests(
     )
     .orderBy(desc(pullRequests.sourceUpdatedAt))
     .limit(limit);
+  return rows as PrRow[];
 }
 
 /** CI mapping (U7): resolve a repository-scoped head SHA to every tracked PR. */
@@ -309,9 +313,10 @@ export async function findAllByRepoHeadSha(
   db: Db,
   repoFullName: string,
   headSha: string,
-): Promise<PullRequestRow[]> {
-  return db
+): Promise<PrRow[]> {
+  const rows = await db
     .select()
     .from(pullRequests)
     .where(and(eq(pullRequests.repoFullName, repoFullName), eq(pullRequests.headSha, headSha)));
+  return rows as PrRow[];
 }

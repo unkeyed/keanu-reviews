@@ -1,9 +1,9 @@
 import { type GithubActor, type PullRequestEvent, isTerminal } from "#events";
 import { type GithubEmailFetcher, displayName, resolveSlackUser } from "#identity";
-import { Retry } from "#lib";
+import { type PrId, Retry } from "#lib";
+import type { PrRow } from "#pr";
 import { findReminderForReviewer } from "#reminders";
 import { channelSink, createLedger, keys } from "#slack";
-import type { PullRequestRow } from "../db/schema.ts";
 import { inviteToChannel } from "./invites.ts";
 import { type PrHandlerDeps, ensurePullRequestChannel } from "./pullRequest.ts";
 
@@ -11,19 +11,19 @@ export interface ReviewRequestDeps extends PrHandlerDeps {
   fetchGithubEmail?: GithubEmailFetcher;
   /** U8 wires these to schedule / cancel the 12h reminder. */
   onReviewRequested?: (
-    prId: string,
+    prId: PrId,
     reviewerGithubId: number,
     sourceUpdatedAt?: Date,
     sourceVersion?: string,
   ) => Promise<void>;
   onReviewRequestRemoved?: (
-    prId: string,
+    prId: PrId,
     reviewerGithubId: number,
     sourceUpdatedAt?: Date,
     sourceVersion?: string,
   ) => Promise<void>;
   /** Push the reminder window to start when the alert is actually sent. */
-  onReviewAlerted?: (prId: string, reviewerGithubId: number) => Promise<void>;
+  onReviewAlerted?: (prId: PrId, reviewerGithubId: number) => Promise<void>;
 }
 
 export function sourceDate(value: string | undefined): Date | undefined {
@@ -188,7 +188,7 @@ export async function handleSynchronizedReviewAlerts(
  */
 export async function releaseReadyReviewAlerts(
   deps: ReviewRequestDeps,
-  row: PullRequestRow,
+  row: PrRow,
   gate: ReviewAlertGate = {},
 ): Promise<void> {
   if (!row.channelId) {
@@ -216,7 +216,7 @@ export async function releaseReadyReviewAlerts(
 
 async function ciAllowsAlert(
   deps: ReviewRequestDeps,
-  row: PullRequestRow,
+  row: PrRow,
   gate: ReviewAlertGate,
 ): Promise<boolean> {
   if (!deps.fetchCiReadiness) return true;
@@ -251,7 +251,7 @@ async function ciAllowsAlert(
 /** Remember a requested reviewer without posting, so a later event can alert once. */
 async function recordReviewRequest(
   deps: ReviewRequestDeps,
-  prId: string,
+  prId: PrId,
   reviewer: Pick<GithubActor, "id" | "login">,
   source: AlertSource,
 ): Promise<void> {
@@ -263,7 +263,7 @@ async function recordReviewRequest(
 
 async function sendReviewAlert(
   deps: ReviewRequestDeps,
-  row: PullRequestRow,
+  row: PrRow,
   channelId: string,
   reviewer: Pick<GithubActor, "id" | "login">,
   source: AlertSource,
@@ -302,7 +302,7 @@ function alertSource(updatedAt: string, sourceVersion: string): AlertSource {
 /** Resolve a requested reviewer to Slack and post the invite note. True when it was posted now. */
 async function inviteReviewer(
   deps: ReviewRequestDeps,
-  prId: string,
+  prId: PrId,
   channelId: string,
   reviewer: Pick<GithubActor, "id" | "login">,
   round: number | string,

@@ -1,4 +1,5 @@
 import { ErrorCode, WebClient, type WebClientOptions } from "@slack/web-api";
+import type { ClientMsgId } from "#lib";
 import {
   type MessageImage,
   SLACK_SECTION_TEXT_LIMIT,
@@ -93,7 +94,7 @@ export interface SlackGateway {
   post(
     channel: string,
     msg: RenderedMessage,
-    opts: { poster: Poster; threadTs?: string; clientMsgId: string },
+    opts: { poster: Poster; threadTs?: string; clientMsgId: ClientMsgId },
   ): Promise<string>;
   /** Slack only lets a message be edited or deleted with the token that posted it. */
   update(channel: string, ts: string, msg: RenderedMessage, userToken?: string): Promise<void>;
@@ -375,7 +376,7 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
     opts: {
       poster: Extract<Poster, { kind: "bot" | "bot-as" }>;
       threadTs?: string;
-      clientMsgId: string;
+      clientMsgId: ClientMsgId;
     },
   ): Promise<unknown> => {
     const username = opts.poster.kind === "bot-as" ? opts.poster.username : undefined;
@@ -413,7 +414,11 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
     channel: string,
     msg: RenderedMessage,
     blocks: SlackBlock[] | undefined,
-    opts: { poster: Extract<Poster, { kind: "user" }>; threadTs?: string; clientMsgId: string },
+    opts: {
+      poster: Extract<Poster, { kind: "user" }>;
+      threadTs?: string;
+      clientMsgId: ClientMsgId;
+    },
   ): Promise<unknown> => {
     const post = () =>
       asUser(opts.poster.token, "chat.postMessage", {

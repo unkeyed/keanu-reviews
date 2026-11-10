@@ -1,5 +1,5 @@
 import type { IssueCommentEvent, ReviewEvent } from "#events";
-import { Retry } from "#lib";
+import { type PrId, Retry } from "#lib";
 import { findByRepoNumber } from "#pr";
 import { type Message, cleanGithubMarkdown, createLedger, keys } from "#slack";
 import { shouldSkipActor } from "../github/actors.ts";
@@ -17,7 +17,7 @@ import { sourceDate } from "./reviewRequest.ts";
 export interface ReviewDeps extends PrHandlerDeps {
   /** U8 wires this to cancel a reviewer's pending reminder once they review. */
   onReviewSubmitted?: (
-    prId: string,
+    prId: PrId,
     reviewerGithubId: number,
     sourceUpdatedAt?: Date,
     sourceVersion?: string,

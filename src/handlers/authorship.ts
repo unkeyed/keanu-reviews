@@ -1,5 +1,5 @@
 import { resolveSlackUser } from "#identity";
-import { errMessage } from "#lib";
+import { type PrId, errMessage } from "#lib";
 import { findByRepoNumber } from "#pr";
 import {
   type Delivered,
@@ -152,7 +152,7 @@ export async function deleteMirroredComment(
   opts: {
     repoFullName: string;
     number: number;
-    key: (prId: string) => EffectKey;
+    key: (prId: PrId) => EffectKey;
     user: { id: number; login: string };
   },
 ): Promise<void> {

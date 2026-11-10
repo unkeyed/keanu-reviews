@@ -1,3 +1,4 @@
+import type { ClientMsgId } from "#lib";
 import {
   type LeaveOutcome,
   type MessageImage,
@@ -18,7 +19,7 @@ export interface FakePost {
   blocks?: SlackBlock[];
   images?: readonly MessageImage[];
   threadTs?: string;
-  clientMsgId: string;
+  clientMsgId: ClientMsgId;
   username?: string;
   iconUrl?: string;
   authorUserToken?: string;
@@ -129,7 +130,7 @@ export class FakeSlackGateway implements SlackGateway {
   async post(
     channel: string,
     msg: RenderedMessage,
-    opts: { poster: Poster; threadTs?: string; clientMsgId: string },
+    opts: { poster: Poster; threadTs?: string; clientMsgId: ClientMsgId },
   ): Promise<string> {
     const existing = this.clientMessageIds.get(opts.clientMsgId);
     if (existing) return existing;

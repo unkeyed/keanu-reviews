@@ -1,8 +1,8 @@
 import { and, asc, eq, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { type Db, type ReminderRow, reminders } from "#db";
+import type { PrId } from "#lib";
 
-const reminderId = (prId: string, reviewerGithubId: number): string =>
-  `${prId}::${reviewerGithubId}`;
+const reminderId = (prId: PrId, reviewerGithubId: number): string => `${prId}::${reviewerGithubId}`;
 
 export interface ReminderSource {
   sourceUpdatedAt: Date;
@@ -34,7 +34,7 @@ async function findReminder(db: Db, id: string): Promise<ReminderRow | undefined
 /** The reminder row for one requested reviewer, if review was requested or cancelled. */
 export async function findReminderForReviewer(
   db: Db,
-  prId: string,
+  prId: PrId,
   reviewerGithubId: number,
 ): Promise<ReminderRow | undefined> {
   return findReminder(db, reminderId(prId, reviewerGithubId));
@@ -47,7 +47,7 @@ export async function findReminderForReviewer(
  */
 export async function pushReminderDue(
   db: Db,
-  prId: string,
+  prId: PrId,
   reviewerGithubId: number,
   dueAt: Date,
 ): Promise<void> {
@@ -63,7 +63,7 @@ export async function pushReminderDue(
 export async function scheduleReminder(
   db: Db,
   input: {
-    prId: string;
+    prId: PrId;
     reviewerGithubId: number;
     dueAt: Date;
     sourceUpdatedAt?: Date;
@@ -236,7 +236,7 @@ export async function cancelReminderClaim(db: Db, claim: ReminderRow): Promise<v
 /** Persist a cancellation even when the corresponding request has not arrived yet. */
 export async function cancelForReviewer(
   db: Db,
-  prId: string,
+  prId: PrId,
   reviewerGithubId: number,
   sourceUpdatedAt = new Date(),
   sourceVersion = "",
@@ -275,7 +275,7 @@ export async function cancelForReviewer(
 
 export async function cancelForPr(
   db: Db,
-  prId: string,
+  prId: PrId,
   sourceUpdatedAt = new Date(),
   sourceVersion = "",
 ): Promise<void> {

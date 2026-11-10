@@ -1,4 +1,5 @@
-import { type DomainEvent, parseEvent } from "#events";
+import { type DomainEvent, jobArrivalKey, parseEvent } from "#events";
+import type { ArrivalKey } from "#lib";
 import type { JobRow } from "../db/schema.ts";
 import { type ChecksDeps, handleCheckRun } from "../handlers/checks.ts";
 import { handlePullRequest } from "../handlers/pullRequest.ts";
@@ -14,8 +15,7 @@ export interface HandlerDeps extends ChecksDeps, ReviewDeps {}
 
 /** What a handler knows about the job carrying its event. */
 export interface Work {
-  /** `${createdAt ISO}:${jobId}`: orders snapshots whose GitHub updated_at ties. */
-  arrivalKey: string;
+  arrivalKey: ArrivalKey;
   /** 1-based. */
   attempt: number;
 }
@@ -58,7 +58,7 @@ export function createDispatcher(deps: HandlerDeps): (job: JobRow) => Promise<vo
   return async (job) => {
     const event = parseEvent(job.event, job.raw);
     const work: Work = {
-      arrivalKey: `${job.createdAt.toISOString()}:${job.id}`,
+      arrivalKey: jobArrivalKey(job.createdAt, job.id),
       attempt: job.attempts,
     };
     // The mapped type pairs each kind with its handler; TS cannot correlate the two lookups.

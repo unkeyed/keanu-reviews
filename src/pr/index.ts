@@ -1,5 +1,6 @@
 export {
   PULL_REQUEST_LIFECYCLE_LEASE_MS,
+  type PrRow,
   type PrSourceInput,
   type PullRequestLifecycleClaim,
   applyPullRequestSource,

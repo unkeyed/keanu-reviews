@@ -1,7 +1,7 @@
 import { isTerminal } from "#events";
 import { findByGithubId } from "#identity";
-import { type Logger, errMessage } from "#lib";
-import { findById } from "#pr";
+import { type Logger, type PrId, errMessage } from "#lib";
+import { type PrRow, findById } from "#pr";
 import {
   cancelForReviewer,
   cancelReminderClaim,
@@ -16,7 +16,6 @@ import {
 } from "#reminders";
 import { type SlackGateway, channelSink, createLedger, keys } from "#slack";
 import type { Db } from "../db/client.ts";
-import type { PullRequestRow } from "../db/schema.ts";
 import type { CiReadinessFetcher } from "../github/users.ts";
 import type { ReviewApprovalFetcher } from "../github/users.ts";
 import type { PullRequestFetcher } from "../handlers/mergeability.ts";
@@ -68,7 +67,7 @@ export interface ReminderDeps {
  */
 async function remindersNoLongerNeeded(
   deps: ReminderDeps,
-  pr: PullRequestRow,
+  pr: PrRow,
   suppressApprovals: number,
 ): Promise<boolean> {
   try {
@@ -90,7 +89,7 @@ async function remindersNoLongerNeeded(
 }
 
 /** True when a due reminder should stay pending until CI finishes and passes. */
-async function reminderWaitingOnCi(deps: ReminderDeps, pr: PullRequestRow): Promise<boolean> {
+async function reminderWaitingOnCi(deps: ReminderDeps, pr: PrRow): Promise<boolean> {
   if (!deps.fetchCiReadiness || !pr.headSha) return false;
   try {
     const readiness = await deps.fetchCiReadiness(pr.repoFullName, pr.headSha);
@@ -112,10 +111,7 @@ async function reminderWaitingOnCi(deps: ReminderDeps, pr: PullRequestRow): Prom
 type HoldReason = "draft" | "no_channel" | "ci";
 
 /** Why an open PR's due reminders cannot be claimed yet, if anything. */
-async function reminderHold(
-  deps: ReminderDeps,
-  pr: PullRequestRow,
-): Promise<HoldReason | undefined> {
+async function reminderHold(deps: ReminderDeps, pr: PrRow): Promise<HoldReason | undefined> {
   if (pr.currentState === "draft") return "draft";
   if (!pr.channelId) return "no_channel";
   if (await reminderWaitingOnCi(deps, pr)) return "ci";
@@ -142,7 +138,7 @@ export function createReminderScheduler(deps: ReminderDeps) {
     `${sourceTime.toISOString()}:${String(++localSourceSequence).padStart(12, "0")}`;
 
   const onReviewRequested = async (
-    prId: string,
+    prId: PrId,
     reviewerGithubId: number,
     sourceUpdatedAt?: Date,
     sourceVersion?: string,
@@ -158,7 +154,7 @@ export function createReminderScheduler(deps: ReminderDeps) {
   };
 
   const cancel = async (
-    prId: string,
+    prId: PrId,
     reviewerGithubId: number,
     sourceUpdatedAt?: Date,
     sourceVersion?: string,
@@ -228,7 +224,7 @@ export function createReminderScheduler(deps: ReminderDeps) {
         if (!(await isReminderClaimCurrent(deps.db, claimed))) continue;
 
         await createLedger(deps.db).deliver(
-          keys.reminder(r.prId, r.reviewerGithubId, claimed.generation),
+          keys.reminder(pr.id, r.reviewerGithubId, claimed.generation),
           channelSink(deps.slack, pr.channelId),
           async () => ({
             message: { kind: "reminder", reviewer: mapped?.slackUserId, hours: deps.reminderHours },
@@ -252,7 +248,7 @@ export function createReminderScheduler(deps: ReminderDeps) {
     return posted;
   };
 
-  const onReviewAlerted = async (prId: string, reviewerGithubId: number): Promise<void> => {
+  const onReviewAlerted = async (prId: PrId, reviewerGithubId: number): Promise<void> => {
     await pushReminderDue(deps.db, prId, reviewerGithubId, new Date(now() + windowMs));
   };
 

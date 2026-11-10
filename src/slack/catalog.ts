@@ -1,5 +1,6 @@
 import type { ChatPostMessageArguments } from "@slack/web-api";
 import type { PrState } from "#events";
+import type { PrId } from "#lib";
 import type { RenderedMessage } from "./gateway.ts";
 
 type ChatPostMessageWithBlocks = Extract<ChatPostMessageArguments, { blocks: unknown[] }>;
@@ -188,54 +189,54 @@ export type LedgerKind =
 
 /** Durable identity of one Slack effect: one `messages` row. */
 export interface EffectKey {
-  readonly prId: string;
+  readonly prId: PrId;
   readonly kind: LedgerKind;
   readonly ref: string;
 }
 
 /** The only place `messages.kind` and ref formats are written. */
 export const keys = {
-  root: (prId: string): EffectKey => ({ prId, kind: "root", ref: "root" }),
-  authorInvite: (prId: string, authorGithubId: number): EffectKey => ({
+  root: (prId: PrId): EffectKey => ({ prId, kind: "root", ref: "root" }),
+  authorInvite: (prId: PrId, authorGithubId: number): EffectKey => ({
     prId,
     kind: "author_invite",
     ref: String(authorGithubId),
   }),
   /** `updatedAt` is the payload's `updated_at` string, verbatim. */
   lifecycle: (
-    prId: string,
+    prId: PrId,
     action: string,
     state: PrState,
     headSha: string,
     updatedAt: string,
   ): EffectKey => ({ prId, kind: "lifecycle", ref: `${action}:${state}:${headSha}:${updatedAt}` }),
-  reviewComment: (prId: string, commentId: number): EffectKey => ({
+  reviewComment: (prId: PrId, commentId: number): EffectKey => ({
     prId,
     kind: "review_comment",
     ref: String(commentId),
   }),
-  issueComment: (prId: string, commentId: number): EffectKey => ({
+  issueComment: (prId: PrId, commentId: number): EffectKey => ({
     prId,
     kind: "issue_comment",
     ref: String(commentId),
   }),
-  review: (prId: string, reviewId: number): EffectKey => ({
+  review: (prId: PrId, reviewId: number): EffectKey => ({
     prId,
     kind: "review",
     ref: String(reviewId),
   }),
   /** `round` is the reminder generation, or the source version when no reminder row exists. */
-  reviewRequest: (prId: string, reviewerGithubId: number, round: number | string): EffectKey => ({
+  reviewRequest: (prId: PrId, reviewerGithubId: number, round: number | string): EffectKey => ({
     prId,
     kind: "invite",
     ref: `${reviewerGithubId}:${round}`,
   }),
-  reminder: (prId: string, reviewerGithubId: number, generation: number): EffectKey => ({
+  reminder: (prId: PrId, reviewerGithubId: number, generation: number): EffectKey => ({
     prId,
     kind: "reminder",
     ref: `${reviewerGithubId}:${generation}`,
   }),
-  shipped: (prId: string): EffectKey => ({ prId, kind: "shipped", ref: "shipped" }),
+  shipped: (prId: PrId): EffectKey => ({ prId, kind: "shipped", ref: "shipped" }),
 } as const;
 
 const section = (text: string): SlackBlock => ({ type: "section", text: { type: "mrkdwn", text } });

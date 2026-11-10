@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertIdentity } from "#identity";
-import { Retry, createLogger } from "#lib";
+import { type ArrivalKey, Retry, createLogger } from "#lib";
 import { findByRepoNumber, prId } from "#pr";
 import { scheduleReminder } from "#reminders";
 import { SlackApiError } from "#slack";
@@ -47,6 +47,7 @@ const payload = (
   }) satisfies PullRequestPayload;
 
 const deps = () => ({ db, slack, logger: createLogger("error") });
+const arrival = (key: string) => key as ArrivalKey;
 
 describe("handlePullRequest (U4 channel lifecycle)", () => {
   it("invites the linked PR author into the channel on open", async () => {
@@ -690,13 +691,13 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     const opened = payload("opened", { draft: true });
     const ready = payload("ready_for_review", { draft: false });
     await handlePullRequest(deps(), pullRequestEvent(opened), {
-      sourceArrivalKey: "2026-08-11T12:00:01Z:a",
+      sourceArrivalKey: arrival("2026-08-11T12:00:01Z:a"),
     });
     await handlePullRequest(deps(), pullRequestEvent(ready), {
-      sourceArrivalKey: "2026-08-11T12:00:02Z:b",
+      sourceArrivalKey: arrival("2026-08-11T12:00:02Z:b"),
     });
     await handlePullRequest(deps(), pullRequestEvent(opened), {
-      sourceArrivalKey: "2026-08-11T12:00:01Z:a",
+      sourceArrivalKey: arrival("2026-08-11T12:00:01Z:a"),
     });
 
     const row = await findByRepoNumber(db, "unkey/api", 1423);
@@ -721,7 +722,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     };
 
     const older = handlePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })), {
-      sourceArrivalKey: "2026-08-11T12:00:01Z:old",
+      sourceArrivalKey: arrival("2026-08-11T12:00:01Z:old"),
     });
     await createStarted;
     await expect(
@@ -732,7 +733,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
             updated_at: "2026-08-11T12:01:00Z",
           }),
         ),
-        { sourceArrivalKey: "2026-08-11T12:01:01Z:new" },
+        { sourceArrivalKey: arrival("2026-08-11T12:01:01Z:new") },
       ),
     ).rejects.toBeInstanceOf(PullRequestLifecycleBusyError);
     releaseCreate?.();
@@ -741,7 +742,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     await handlePullRequest(
       deps(),
       pullRequestEvent(payload("ready_for_review", { updated_at: "2026-08-11T12:01:00Z" })),
-      { sourceArrivalKey: "2026-08-11T12:01:01Z:new" },
+      { sourceArrivalKey: arrival("2026-08-11T12:01:01Z:new") },
     );
     expect((await findByRepoNumber(db, "unkey/api", 1423))?.currentState).toBe("pr");
   });
