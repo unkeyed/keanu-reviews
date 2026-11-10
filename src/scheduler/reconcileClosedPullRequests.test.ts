@@ -18,11 +18,11 @@ import {
   type PullRequestPayload,
   handlePullRequest,
 } from "../handlers/pullRequest.ts";
-import { FakeSlackClient } from "../testing/fakeSlack.ts";
+import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { createClosedPullRequestReconciliation } from "./reconcileClosedPullRequests.ts";
 
 let db: Db;
-let slack: FakeSlackClient;
+let slack: FakeSlackGateway;
 let close: () => Promise<void>;
 let events: { level: string; msg: string; fields?: Record<string, unknown> }[];
 
@@ -30,7 +30,7 @@ beforeEach(async () => {
   const testDb = await createTestDb();
   db = testDb.db;
   close = () => testDb.client.close();
-  slack = new FakeSlackClient();
+  slack = new FakeSlackGateway();
   events = [];
 });
 
@@ -247,7 +247,7 @@ describe("closed pull request reconciliation", () => {
     await handlePullRequest(deps, merge(1, 101));
     expect(slack.channel("C1")?.archived).toBe(true);
     // A late CI/comment/review write would unarchive the channel to deliver.
-    await slack.unarchiveChannel("C1");
+    await slack.unarchive("C1");
     expect(slack.channel("C1")?.archived).toBe(false);
 
     const run = createClosedPullRequestReconciliation({
@@ -357,37 +357,6 @@ describe("closed pull request reconciliation", () => {
     await expect(run()).resolves.toMatchObject({ checked: 0, archived: 0, failed: 0 });
     expect(fetchSnapshot).not.toHaveBeenCalled();
     expect(slack.channel("C1")?.archived).toBe(false);
-  });
-
-  it("treats Slack already_archived as a successful archive", async () => {
-    const deps = handler();
-    await openPr(6, 106, deps);
-    slack.archiveChannel = async (channelId) => {
-      const channel = slack.channel(channelId);
-      if (channel) channel.archived = true;
-      throw { data: { error: "already_archived" } };
-    };
-    const fetchSnapshot = vi.fn<PullRequestSnapshotFetcher>(async () => ({
-      snapshot: snapshot(6, 106, { merged: true }),
-    }));
-    const run = createClosedPullRequestReconciliation({
-      handler: deps,
-      fetchSnapshot,
-      logger: deps.logger,
-    });
-
-    await expect(run()).resolves.toMatchObject({
-      checked: 1,
-      merged: 1,
-      archived: 1,
-      failed: 0,
-    });
-    expect(slack.channel("C1")?.archived).toBe(true);
-    const row = await findByRepoNumber(db, "unkey/api", 6);
-    expect(row?.appliedState).toBe("merged");
-    expect(events).toContainEqual(
-      expect.objectContaining({ level: "info", msg: "channel already archived" }),
-    );
   });
 
   it("continues after a GitHub error on one pull request", async () => {

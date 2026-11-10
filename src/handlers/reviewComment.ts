@@ -2,7 +2,7 @@ import { findMessageEffect } from "../db/repositories/messages.ts";
 import { shouldSkipActor } from "../github/actors.ts";
 import { commentImages } from "../github/attachments.ts";
 import { reviewCommentBlocks, sanitizeMrkdwn } from "../slack/blocks.ts";
-import type { SlackMessage } from "../slack/client.ts";
+import type { SlackMessage } from "../slack/deliver.ts";
 import {
   deleteMirroredComment,
   deliverAuthoredMessage,
@@ -100,8 +100,10 @@ export async function handleReviewComment(
     threadTs,
     // "bot" mode spoofs the linked user's name/avatar (today's behavior); "user"
     // mode posts natively as them, so no spoof is needed.
-    username: mode === "bot" ? author.name : undefined,
-    iconUrl: mode === "bot" ? author.iconUrl : undefined,
+    poster:
+      mode === "bot"
+        ? { kind: "bot-as", username: author.name, iconUrl: author.iconUrl }
+        : undefined,
     text: sanitizeMrkdwn(`New review comment on ${c.path}${c.line ? `:${c.line}` : ""}`),
     blocks: reviewCommentBlocks({
       body: c.body,

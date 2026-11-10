@@ -1,59 +1,35 @@
 import { Retry } from "#lib";
-
-/**
- * Client-side rate limiting (KTD9). Two concerns:
- *  - honor Slack HTTP 429 `Retry-After` by waiting and retrying;
- *  - pace bursty methods (channel creation is Tier 2 ~20/min) via a serialized
- *    per-key minimum interval so a PR flood queues instead of being throttled.
- */
-
-/** Slack HTTP 429. A wait too long to sleep through defers the whole job instead. */
-export class RateLimitedError extends Retry {
-  readonly status = 429;
-  readonly retryAfterSeconds: number;
-
-  constructor(retryAfterSeconds: number) {
-    super(
-      `Slack rate limited; retry after ${retryAfterSeconds}s`,
-      undefined,
-      retryAfterSeconds * 1000,
-    );
-    this.name = "RateLimitedError";
-    this.retryAfterSeconds = retryAfterSeconds;
-  }
-}
-
-export const isRateLimited = (
-  e: unknown,
-): e is Pick<RateLimitedError, "status" | "retryAfterSeconds"> =>
-  typeof e === "object" && e !== null && (e as { status?: number }).status === 429;
+import { SlackApiError } from "./errors.ts";
 
 export type SleepFn = (ms: number) => Promise<void>;
 const realSleep: SleepFn = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** Retry bounded 429 responses while honoring Retry-After; defer long waits to the durable job. */
-export async function withRetry<T>(
+/**
+ * Retry bounded Slack 429s while honoring Retry-After. A wait too long to sleep
+ * through, or one more 429 than allowed, becomes a Retry for the durable job,
+ * so the process never holds a DB lease while doing no useful work.
+ */
+export async function withRateLimitRetry<T>(
   fn: () => Promise<T>,
-  opts: { maxRetries?: number; maxRetryDelayMs?: number; sleep?: SleepFn } = {},
+  opts: { maxRetries: number; maxRetryDelayMs: number; sleep?: SleepFn },
 ): Promise<T> {
-  const maxRetries = opts.maxRetries ?? 3;
-  const maxRetryDelayMs = opts.maxRetryDelayMs ?? Number.POSITIVE_INFINITY;
   const sleep = opts.sleep ?? realSleep;
   let attempt = 0;
   for (;;) {
     try {
       return await fn();
     } catch (err) {
-      if (isRateLimited(err) && attempt < maxRetries) {
-        const retryDelayMs = err.retryAfterSeconds * 1000;
-        // A very long Retry-After belongs at the durable job layer. Keeping it
-        // here would hold a DB lease while the process is doing no useful work.
-        if (retryDelayMs > maxRetryDelayMs) throw err;
-        attempt += 1;
-        await sleep(retryDelayMs);
-        continue;
+      if (!(err instanceof SlackApiError) || err.code !== "ratelimited") throw err;
+      const retryAfterMs = err.retryAfterMs ?? 1000;
+      if (attempt >= opts.maxRetries || retryAfterMs > opts.maxRetryDelayMs) {
+        throw new Retry(
+          `Slack rate limited; retry after ${retryAfterMs / 1000}s`,
+          undefined,
+          retryAfterMs,
+        );
       }
-      throw err;
+      attempt += 1;
+      await sleep(retryAfterMs);
     }
   }
 }

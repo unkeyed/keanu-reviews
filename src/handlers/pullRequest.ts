@@ -1,4 +1,5 @@
 import { type Logger, Retry, errMessage, leaseWaitMs } from "#lib";
+import { SlackApiError, type SlackBlock, type SlackGateway } from "#slack";
 import type { Db } from "../db/client.ts";
 import {
   PULL_REQUEST_LIFECYCLE_LEASE_MS,
@@ -24,15 +25,9 @@ import {
   reviewerDisplayLabel,
 } from "../identity/resolve.ts";
 import { sanitizeInlineCode, sanitizeLinkLabel, sanitizeMrkdwn } from "../slack/blocks.ts";
-import {
-  type SlackBlock,
-  type SlackClient,
-  isSlackChannelAlreadyInState,
-} from "../slack/client.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { slackChannelUrl } from "../slack/links.ts";
 import { CURRENT_CHANNEL_NAME_VERSION, channelName } from "../slack/naming.ts";
-import { isRateLimited } from "../slack/rateLimiter.ts";
 import { inviteToChannel } from "./invites.ts";
 import type { PullRequestFetcher } from "./mergeability.ts";
 import { notifyShipped } from "./shipped.ts";
@@ -59,7 +54,7 @@ export interface PullRequestPayload {
 
 export interface PrHandlerDeps {
   db: Db;
-  slack: SlackClient;
+  slack: SlackGateway;
   logger: Logger;
   /** Optional GitHub email lookup so identity resolution can fall back past the map. */
   fetchGithubEmail?: GithubEmailFetcher;
@@ -227,7 +222,7 @@ export async function handlePullRequest(
       });
       let channelId: string;
       try {
-        ({ channelId } = await slack.createChannel(name));
+        channelId = await slack.createChannel(name);
       } catch (error) {
         // conversations.create can succeed remotely and fail locally, or a
         // retry can receive name_taken. Exact deterministic-name lookup
@@ -272,7 +267,7 @@ export async function handlePullRequest(
     const wasArchived = Boolean(current.appliedState && isTerminal(current.appliedState));
     const stayingArchived = wasArchived && isTerminal(current.currentState);
     if (wasArchived && !isTerminal(current.currentState)) {
-      await slack.unarchiveChannel(channelId);
+      await slack.unarchive(channelId);
     }
 
     if (!current.rootMessageTs && !stayingArchived) {
@@ -354,9 +349,9 @@ export async function handlePullRequest(
       // Either side being terminal can mean the real channel is archived after a
       // partial prior attempt. Make it writable before the idempotent rename.
       if (isTerminal(desiredState) || (current.appliedState && isTerminal(current.appliedState))) {
-        await slack.unarchiveChannel(channelId);
+        await slack.unarchive(channelId);
       }
-      await slack.renameChannel(channelId, desiredChannelName); // rename first, always (KTD8)
+      await slack.rename(channelId, desiredChannelName); // rename first, always (KTD8)
 
       // Terminal channels must still be writable when the lifecycle note is
       // posted. A retry reuses its durable message effect before archiving.
@@ -371,15 +366,7 @@ export async function handlePullRequest(
         // and precedes the optional merge announcements so a later failure can
         // never leave the channel un-archived. Reminders were cancelled above.
         if (deps.quietArchive) await deps.quietArchive(channelId);
-        try {
-          await slack.archiveChannel(channelId);
-        } catch (error) {
-          // Production Slack client already treats this as success. Swallow it
-          // here too so a client that surfaces Slack's already_archived code
-          // does not fail an archive that has in fact completed.
-          if (!isSlackChannelAlreadyInState(error, "already_archived")) throw error;
-          logger.info("channel already archived", { prId: current.id, channelId });
-        }
+        await slack.archive(channelId);
 
         // Merge announcements are best-effort — a failure here must never throw,
         // or it would block archiving and endlessly retry the reconciliation.
@@ -481,19 +468,16 @@ export async function handlePullRequest(
 
 /**
  * A failed `conversations.create` may still have left the channel in Slack when
- * Slack said `name_taken` or when no Slack response arrived at all. A rate limit
- * or any other Slack error means nothing was created.
+ * Slack said `name_taken` or when no usable response arrived. A rate limit or
+ * any other Slack error means nothing was created.
  */
 function createMayHaveSucceeded(error: unknown): boolean {
-  if (isRateLimited(error)) return false;
-  const failure = error as { slackError?: string; data?: { error?: string } };
-  const code = failure?.slackError ?? failure?.data?.error;
-  return code === undefined || code === "name_taken";
+  return error instanceof SlackApiError && (error.ambiguous || error.code === "name_taken");
 }
 
 async function postLifecycleNote(
   db: Db,
-  slack: SlackClient,
+  slack: SlackGateway,
   row: { id: string; rootMessageTs: string | null },
   payload: PullRequestPayload,
   state: PrState,

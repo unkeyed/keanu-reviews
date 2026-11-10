@@ -1,14 +1,14 @@
+import type { SlackGateway } from "#slack";
 import type { Db } from "../db/client.ts";
 import { findByGithubId, upsertIdentity } from "../db/repositories/identities.ts";
 import { sanitizeMrkdwn } from "../slack/blocks.ts";
-import type { SlackClient } from "../slack/client.ts";
 
 /** Fetch a GitHub user's public email (read-only; does not cross the one-way boundary). */
 export type GithubEmailFetcher = (login: string) => Promise<string | undefined>;
 
 export interface IdentityDeps {
   db: Db;
-  slack: SlackClient;
+  slack: SlackGateway;
   fetchGithubEmail?: GithubEmailFetcher;
 }
 
@@ -29,7 +29,7 @@ export async function resolveSlackUser(
   const email = await deps.fetchGithubEmail(reviewer.login);
   if (!email) return undefined;
 
-  const slackUserId = await deps.slack.lookupUserByEmail(email);
+  const slackUserId = await deps.slack.lookupByEmail(email);
   if (!slackUserId) return undefined;
 
   // Cache the match so we never pay the lookup twice.
@@ -49,10 +49,10 @@ export async function resolveSlackUser(
  * (or for a review request they're already invited to the channel for) is noise.
  */
 export async function reviewerDisplayLabel(
-  slack: SlackClient,
+  slack: SlackGateway,
   slackUserId: string | undefined,
   login: string,
 ): Promise<string> {
-  const name = slackUserId ? await slack.lookupUserName(slackUserId) : undefined;
+  const name = slackUserId ? (await slack.profile(slackUserId))?.name : undefined;
   return sanitizeMrkdwn(name ?? login);
 }

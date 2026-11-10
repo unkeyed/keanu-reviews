@@ -1,7 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
-import { type EmbeddedImage, extractEmbeddedImages } from "../slack/blocks.ts";
-import type { MessageImage } from "../slack/client.ts";
+import { type EmbeddedImage, type MessageImage, extractEmbeddedImages } from "../slack/blocks.ts";
 import { isBotActor } from "./actors.ts";
 
 // GitHub serves a pasted image at `github.com/user-attachments/assets/<uuid>`,

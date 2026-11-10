@@ -1,16 +1,55 @@
 import { ErrorCode } from "@slack/web-api";
 import { describe, expect, it, vi } from "vitest";
 import { Retry } from "#lib";
-import { isSlackChannelAlreadyInState } from "./client.ts";
-import {
-  createWebApiSlackClient,
-  lookupSlackUserByEmail,
-  lookupSlackUserName,
-  lookupSlackUserProfile,
-} from "./webApiClient.ts";
+import type { MessageImage, SlackBlock } from "./blocks.ts";
+import { BOT, type SlackGateway, type SlackWebApi, createSlackGateway } from "./gateway.ts";
+
+interface LegacyPost {
+  channel: string;
+  text: string;
+  blocks?: SlackBlock[];
+  images?: readonly MessageImage[];
+  threadTs?: string;
+  clientMsgId?: string;
+  username?: string;
+  iconUrl?: string;
+  authorUserToken?: string;
+  authorUserId?: string;
+}
+
+/** Post the way a caller does, from one flat description of the message and its poster. */
+async function postMessage(slack: SlackGateway, msg: LegacyPost) {
+  const poster = msg.authorUserToken
+    ? { kind: "user" as const, userId: msg.authorUserId ?? "", token: msg.authorUserToken }
+    : msg.username || msg.iconUrl
+      ? { kind: "bot-as" as const, username: msg.username, iconUrl: msg.iconUrl }
+      : BOT;
+  const ts = await slack.post(
+    msg.channel,
+    { text: msg.text, blocks: msg.blocks, images: msg.images },
+    { poster, threadTs: msg.threadTs, clientMsgId: msg.clientMsgId as string },
+  );
+  return { ts };
+}
+
+function updateMessage(
+  slack: SlackGateway,
+  u: Omit<LegacyPost, "threadTs" | "clientMsgId"> & { ts: string },
+) {
+  return slack.update(
+    u.channel,
+    u.ts,
+    { text: u.text, blocks: u.blocks, images: u.images },
+    u.authorUserToken,
+  );
+}
+
+const userWeb = (leave: (args: unknown) => unknown): SlackWebApi => ({
+  apiCall: async (_method, args) => leave(args),
+});
 
 function fakeWebApi() {
-  return {
+  const mocks = {
     conversations: {
       create: vi.fn(
         async (): Promise<{ channel?: { id?: string } }> => ({ channel: { id: "C123" } }),
@@ -48,13 +87,29 @@ function fakeWebApi() {
           user?: {
             name?: string;
             real_name?: string;
-            profile?: { display_name?: string; real_name?: string };
+            profile?: { display_name?: string; real_name?: string; image_72?: string };
           };
         }> => ({ user: { real_name: "Real Name", profile: { display_name: "Display Name" } } }),
       ),
     },
-    apiCall: vi.fn(async (): Promise<{ ts?: unknown }> => ({ ts: "171234.5678" })),
+    chat: vi.fn(
+      async (_method: string, _args?: unknown): Promise<{ ts?: unknown }> => ({
+        ts: "171234.5678",
+      }),
+    ),
   };
+  const web = {
+    ...mocks,
+    apiCall: (method: string, args?: Record<string, unknown>): Promise<unknown> => {
+      if (method.startsWith("chat.")) return web.chat(method, args);
+      const [ns, name] = method.split(".") as ["conversations" | "users", string];
+      const group = web[ns] as unknown as Record<string, (a: unknown) => Promise<unknown>>;
+      const fn = group[name];
+      if (!fn) throw new Error(`fake Slack has no ${method}`);
+      return fn(args);
+    },
+  };
+  return web;
 }
 
 describe("Slack Web API adapter", () => {
@@ -63,22 +118,22 @@ describe("Slack Web API adapter", () => {
     web.conversations.rename
       .mockRejectedValueOnce({ data: { error: "is_archived" } })
       .mockResolvedValueOnce({});
-    const slack = createWebApiSlackClient("unused", { web });
+    const slack = createSlackGateway("unused", { web });
 
-    await slack.renameChannel("C123", "pr-renamed");
+    await slack.rename("C123", "pr-renamed");
     expect(web.conversations.unarchive).toHaveBeenCalledWith({ channel: "C123" });
     expect(web.conversations.rename).toHaveBeenCalledTimes(2);
   });
 
   it("heals a channel that is both archived and left, then posts", async () => {
     const web = fakeWebApi();
-    web.apiCall
+    web.chat
       .mockRejectedValueOnce({ data: { error: "is_archived" } })
       .mockRejectedValueOnce({ data: { error: "not_in_channel" } })
       .mockResolvedValueOnce({ ts: "1.2" });
-    const slack = createWebApiSlackClient("unused", { web });
+    const slack = createSlackGateway("unused", { web });
 
-    await expect(slack.postMessage({ channel: "C123", text: "hi" })).resolves.toEqual({
+    await expect(postMessage(slack, { channel: "C123", text: "hi" })).resolves.toEqual({
       ts: "1.2",
     });
     expect(web.conversations.unarchive).toHaveBeenCalledWith({ channel: "C123" });
@@ -92,10 +147,10 @@ describe("Slack Web API adapter", () => {
       .mockRejectedValueOnce({ data: { error: "not_in_channel" } })
       .mockResolvedValueOnce({ ts: "9.9" });
     const userWebFactory = vi.fn(() => ({ apiCall: userPost }) as never);
-    const slack = createWebApiSlackClient("unused", { web, userWebFactory });
+    const slack = createSlackGateway("unused", { web, userWebFactory });
 
     await expect(
-      slack.postMessage({
+      postMessage(slack, {
         channel: "C123",
         text: "hi",
         authorUserToken: "xoxp-flo",
@@ -106,7 +161,7 @@ describe("Slack Web API adapter", () => {
     expect(userWebFactory).toHaveBeenCalledWith("xoxp-flo");
     expect(web.conversations.invite).toHaveBeenCalledWith({ channel: "C123", users: "U7" });
     expect(userPost).toHaveBeenCalledTimes(2); // failed on not_in_channel, retried after invite
-    expect(web.apiCall).not.toHaveBeenCalled(); // never posted as the bot
+    expect(web.chat).not.toHaveBeenCalled(); // never posted as the bot
   });
 
   it("propagates a dead user token so the caller can drop it and fall back", async () => {
@@ -119,33 +174,33 @@ describe("Slack Web API adapter", () => {
           }),
         }) as never,
     );
-    const slack = createWebApiSlackClient("unused", { web, userWebFactory });
+    const slack = createSlackGateway("unused", { web, userWebFactory });
 
     await expect(
-      slack.postMessage({
+      postMessage(slack, {
         channel: "C123",
         text: "hi",
         authorUserToken: "xoxp-dead",
         authorUserId: "U7",
       }),
-    ).rejects.toMatchObject({ slackError: "token_revoked" });
+    ).rejects.toMatchObject({ code: "token_revoked", deadToken: true });
     expect(web.conversations.invite).not.toHaveBeenCalled();
-    expect(web.apiCall).not.toHaveBeenCalled();
+    expect(web.chat).not.toHaveBeenCalled();
   });
 
   it("suppresses link unfurling on both bot and user posts", async () => {
     const web = fakeWebApi();
     const userPost = vi.fn(async () => ({ ts: "9.9" }));
     const userWebFactory = vi.fn(() => ({ apiCall: userPost }) as never);
-    const slack = createWebApiSlackClient("unused", { web, userWebFactory });
+    const slack = createSlackGateway("unused", { web, userWebFactory });
 
-    await slack.postMessage({ channel: "C123", text: "bot" });
-    expect(web.apiCall).toHaveBeenCalledWith(
+    await postMessage(slack, { channel: "C123", text: "bot" });
+    expect(web.chat).toHaveBeenCalledWith(
       "chat.postMessage",
       expect.objectContaining({ unfurl_links: false, unfurl_media: false }),
     );
 
-    await slack.postMessage({ channel: "C123", text: "user", authorUserToken: "xoxp-flo" });
+    await postMessage(slack, { channel: "C123", text: "user", authorUserToken: "xoxp-flo" });
     expect(userPost).toHaveBeenCalledWith(
       "chat.postMessage",
       expect.objectContaining({ unfurl_links: false, unfurl_media: false }),
@@ -154,11 +209,11 @@ describe("Slack Web API adapter", () => {
 
   it("edits a bot-authored message with the bot token via chat.update", async () => {
     const web = fakeWebApi();
-    const slack = createWebApiSlackClient("unused", { web });
+    const slack = createSlackGateway("unused", { web });
 
-    await slack.updateMessage({ channel: "C123", ts: "1.2", text: "new", blocks: [] });
+    await updateMessage(slack, { channel: "C123", ts: "1.2", text: "new", blocks: [] });
 
-    expect(web.apiCall).toHaveBeenCalledWith("chat.update", {
+    expect(web.chat).toHaveBeenCalledWith("chat.update", {
       channel: "C123",
       ts: "1.2",
       text: "new",
@@ -170,9 +225,9 @@ describe("Slack Web API adapter", () => {
     const web = fakeWebApi();
     const userUpdate = vi.fn(async () => ({ ok: true }));
     const userWebFactory = vi.fn(() => ({ apiCall: userUpdate }) as never);
-    const slack = createWebApiSlackClient("unused", { web, userWebFactory });
+    const slack = createSlackGateway("unused", { web, userWebFactory });
 
-    await slack.updateMessage({
+    await updateMessage(slack, {
       channel: "C123",
       ts: "1.2",
       text: "new",
@@ -181,7 +236,7 @@ describe("Slack Web API adapter", () => {
 
     expect(userWebFactory).toHaveBeenCalledWith("xoxp-flo");
     expect(userUpdate).toHaveBeenCalledWith("chat.update", expect.objectContaining({ ts: "1.2" }));
-    expect(web.apiCall).not.toHaveBeenCalled(); // never touched the bot token
+    expect(web.chat).not.toHaveBeenCalled(); // never touched the bot token
   });
 
   describe("images", () => {
@@ -210,39 +265,39 @@ describe("Slack Web API adapter", () => {
 
     it("renders embeds as image blocks and links in one row, after the message's blocks", async () => {
       const web = fakeWebApi();
-      const slack = createWebApiSlackClient("unused", { web });
+      const slack = createSlackGateway("unused", { web });
 
-      await slack.postMessage({ channel: "C1", text: "t", blocks: [textBlock], images });
+      await postMessage(slack, { channel: "C1", text: "t", blocks: [textBlock], images });
 
-      expect(blocksSent(web.apiCall)).toEqual([
+      expect(blocksSent(web.chat)).toEqual([
         [textBlock, imageBlock, linksRow("Image: <https://gh/b%7C%3Cx%3E|b &lt;!here&gt;¦>")],
       ]);
     });
 
     it("cuts long alt text on a character boundary, never inside an emoji", async () => {
       const web = fakeWebApi();
-      const slack = createWebApiSlackClient("unused", { web });
+      const slack = createSlackGateway("unused", { web });
       const alt = `a${"😀".repeat(2_500)}`;
 
-      await slack.postMessage({
+      await postMessage(slack, {
         channel: "C1",
         text: "t",
         images: [{ ...images[0], alt }],
       });
 
-      expect(blocksSent(web.apiCall)[0]).toEqual([
+      expect(blocksSent(web.chat)[0]).toEqual([
         { ...imageBlock, alt_text: `a${"😀".repeat(1_999)}` },
       ]);
     });
 
     it("re-posts a bot message with every image as a link when Slack refuses an embed", async () => {
       const web = fakeWebApi();
-      web.apiCall.mockRejectedValueOnce(invalidBlocks).mockResolvedValueOnce({ ts: "1.1" });
+      web.chat.mockRejectedValueOnce(invalidBlocks).mockResolvedValueOnce({ ts: "1.1" });
       const onImageFallback = vi.fn();
-      const slack = createWebApiSlackClient("unused", { web, onImageFallback });
+      const slack = createSlackGateway("unused", { web, onImageFallback });
 
       await expect(
-        slack.postMessage({
+        postMessage(slack, {
           channel: "C1",
           text: "t",
           blocks: [textBlock],
@@ -251,14 +306,14 @@ describe("Slack Web API adapter", () => {
         }),
       ).resolves.toEqual({ ts: "1.1" });
 
-      expect(blocksSent(web.apiCall)).toEqual([
+      expect(blocksSent(web.chat)).toEqual([
         [textBlock, imageBlock, expect.objectContaining({ type: "context" })],
         [
           textBlock,
           linksRow("Images: <https://gh/a|a> · <https://gh/b%7C%3Cx%3E|b &lt;!here&gt;¦>"),
         ],
       ]);
-      expect((web.apiCall.mock.calls as unknown[][])[1]?.[1]).toMatchObject({
+      expect((web.chat.mock.calls as unknown[][])[1]?.[1]).toMatchObject({
         client_msg_id: "m1",
         text: "t",
       });
@@ -276,27 +331,27 @@ describe("Slack Web API adapter", () => {
         .mockRejectedValueOnce(invalidBlocks)
         .mockResolvedValueOnce({ ts: "9.9" });
       const userWebFactory = vi.fn(() => ({ apiCall: userPost }) as never);
-      const slack = createWebApiSlackClient("unused", { web, userWebFactory });
+      const slack = createSlackGateway("unused", { web, userWebFactory });
 
       await expect(
-        slack.postMessage({ channel: "C1", text: "t", images, authorUserToken: "xoxp-flo" }),
+        postMessage(slack, { channel: "C1", text: "t", images, authorUserToken: "xoxp-flo" }),
       ).resolves.toEqual({ ts: "9.9" });
 
       expect(blocksSent(userPost)[1]).toEqual([
         linksRow("Images: <https://gh/a|a> · <https://gh/b%7C%3Cx%3E|b &lt;!here&gt;¦>"),
       ]);
-      expect(web.apiCall).not.toHaveBeenCalled();
+      expect(web.chat).not.toHaveBeenCalled();
     });
 
     it("re-sends an edit with links when Slack refuses an embed", async () => {
       const web = fakeWebApi();
-      web.apiCall.mockRejectedValueOnce(invalidBlocks).mockResolvedValueOnce({});
+      web.chat.mockRejectedValueOnce(invalidBlocks).mockResolvedValueOnce({});
       const onImageFallback = vi.fn();
-      const slack = createWebApiSlackClient("unused", { web, onImageFallback });
+      const slack = createSlackGateway("unused", { web, onImageFallback });
 
-      await slack.updateMessage({ channel: "C1", ts: "1.2", text: "t", images });
+      await updateMessage(slack, { channel: "C1", ts: "1.2", text: "t", images });
 
-      expect(web.apiCall).toHaveBeenLastCalledWith("chat.update", {
+      expect(web.chat).toHaveBeenLastCalledWith("chat.update", {
         channel: "C1",
         ts: "1.2",
         text: "t",
@@ -311,17 +366,17 @@ describe("Slack Web API adapter", () => {
 
     it("propagates invalid_blocks when there was no embed to blame, and other errors as is", async () => {
       const web = fakeWebApi();
-      web.apiCall.mockRejectedValueOnce(invalidBlocks);
-      const slack = createWebApiSlackClient("unused", { web });
+      web.chat.mockRejectedValueOnce(invalidBlocks);
+      const slack = createSlackGateway("unused", { web });
       await expect(
-        slack.postMessage({ channel: "C1", text: "t", images: [images[1]] }),
-      ).rejects.toMatchObject({ slackError: "invalid_blocks" });
+        postMessage(slack, { channel: "C1", text: "t", images: [images[1]] }),
+      ).rejects.toMatchObject({ code: "invalid_blocks" });
 
-      web.apiCall.mockRejectedValueOnce({ data: { error: "msg_too_long" } });
-      await expect(slack.postMessage({ channel: "C2", text: "t", images })).rejects.toMatchObject({
-        slackError: "msg_too_long",
+      web.chat.mockRejectedValueOnce({ data: { error: "msg_too_long" } });
+      await expect(postMessage(slack, { channel: "C2", text: "t", images })).rejects.toMatchObject({
+        code: "msg_too_long",
       });
-      expect(web.apiCall).toHaveBeenCalledTimes(2);
+      expect(web.chat).toHaveBeenCalledTimes(2);
     });
 
     describe("within Block Kit's length limits", () => {
@@ -346,7 +401,9 @@ describe("Slack Web API adapter", () => {
           if (!blocks.every(withinLimits)) throw invalidBlocks;
           return { ts: "1.1" };
         });
-        return { web: { ...fakeWebApi(), apiCall }, apiCall };
+        const web = fakeWebApi();
+        web.chat = apiCall as unknown as typeof web.chat;
+        return { web, apiCall };
       };
       const rowText = (apiCall: { mock: { calls: unknown[][] } }) =>
         (blocksSent(apiCall).at(-1) as Block[]).at(-1)?.elements?.[0]?.text ?? "";
@@ -355,10 +412,10 @@ describe("Slack Web API adapter", () => {
 
       it("posts the text with a long label clipped short", async () => {
         const { web, apiCall } = limitedSlack();
-        const slack = createWebApiSlackClient("unused", { web });
+        const slack = createSlackGateway("unused", { web });
 
         await expect(
-          slack.postMessage({
+          postMessage(slack, {
             channel: "C1",
             text: "t",
             blocks: [textBlock],
@@ -375,10 +432,10 @@ describe("Slack Web API adapter", () => {
 
       it("fills the link row up to the limit and counts the links that don't fit", async () => {
         const { web, apiCall } = limitedSlack();
-        const slack = createWebApiSlackClient("unused", { web });
+        const slack = createSlackGateway("unused", { web });
         const url = (n: number) => `https://img.example.com/${String(n).repeat(876)}`;
 
-        await slack.postMessage({
+        await postMessage(slack, {
           channel: "C1",
           text: "t",
           blocks: [textBlock],
@@ -392,10 +449,10 @@ describe("Slack Web API adapter", () => {
 
       it("never sends an image URL longer than Slack accepts", async () => {
         const { web, apiCall } = limitedSlack();
-        const slack = createWebApiSlackClient("unused", { web });
+        const slack = createSlackGateway("unused", { web });
         const huge = `https://img.example.com/c.png?q=${"x".repeat(3000)}`;
 
-        await slack.postMessage({
+        await postMessage(slack, {
           channel: "C1",
           text: "t",
           blocks: [textBlock],
@@ -408,9 +465,9 @@ describe("Slack Web API adapter", () => {
 
       it("lands an edit whose links-only resend carries a long label", async () => {
         const { web, apiCall } = limitedSlack(true);
-        const slack = createWebApiSlackClient("unused", { web });
+        const slack = createSlackGateway("unused", { web });
 
-        await slack.updateMessage({
+        await updateMessage(slack, {
           channel: "C1",
           ts: "1.2",
           text: "t",
@@ -429,24 +486,24 @@ describe("Slack Web API adapter", () => {
 
   it("deletes a bot-authored message with the bot token via chat.delete", async () => {
     const web = fakeWebApi();
-    const slack = createWebApiSlackClient("unused", { web });
+    const slack = createSlackGateway("unused", { web });
 
-    await slack.deleteMessage("C123", "1.2");
+    await slack.remove("C123", "1.2");
 
-    expect(web.apiCall).toHaveBeenCalledWith("chat.delete", { channel: "C123", ts: "1.2" });
+    expect(web.chat).toHaveBeenCalledWith("chat.delete", { channel: "C123", ts: "1.2" });
   });
 
   it("deletes a user-authored message with that user's token, not the bot", async () => {
     const web = fakeWebApi();
     const userDelete = vi.fn(async () => ({ ok: true }));
     const userWebFactory = vi.fn(() => ({ apiCall: userDelete }) as never);
-    const slack = createWebApiSlackClient("unused", { web, userWebFactory });
+    const slack = createSlackGateway("unused", { web, userWebFactory });
 
-    await slack.deleteMessage("C123", "1.2", "xoxp-flo");
+    await slack.remove("C123", "1.2", "xoxp-flo");
 
     expect(userWebFactory).toHaveBeenCalledWith("xoxp-flo");
     expect(userDelete).toHaveBeenCalledWith("chat.delete", { channel: "C123", ts: "1.2" });
-    expect(web.apiCall).not.toHaveBeenCalled();
+    expect(web.chat).not.toHaveBeenCalled();
   });
 
   it("reads a channel's archived state via conversations.info", async () => {
@@ -455,18 +512,18 @@ describe("Slack Web API adapter", () => {
       .mockResolvedValueOnce({ channel: { is_archived: true } })
       .mockResolvedValueOnce({ channel: { is_archived: false } })
       .mockRejectedValueOnce({ data: { error: "channel_not_found" } });
-    const slack = createWebApiSlackClient("unused", { web });
+    const slack = createSlackGateway("unused", { web });
 
-    await expect(slack.isChannelArchived("C1")).resolves.toBe(true);
-    await expect(slack.isChannelArchived("C1")).resolves.toBe(false);
-    await expect(slack.isChannelArchived("C_GONE")).resolves.toBeUndefined();
+    await expect(slack.isArchived("C1")).resolves.toBe(true);
+    await expect(slack.isArchived("C1")).resolves.toBe(false);
+    await expect(slack.isArchived("C_GONE")).resolves.toBeUndefined();
   });
 
   it("configures the production client to keep network retries inside durable leases", () => {
     const web = fakeWebApi();
     const webFactory = vi.fn(() => web);
 
-    createWebApiSlackClient("xoxb-secret", { webFactory });
+    createSlackGateway("xoxb-secret", { webFactory });
 
     expect(webFactory).toHaveBeenCalledWith("xoxb-secret", {
       retryConfig: { retries: 0 },
@@ -477,14 +534,14 @@ describe("Slack Web API adapter", () => {
 
   it("maps channel operations and skips an empty invite", async () => {
     const web = fakeWebApi();
-    const slack = createWebApiSlackClient("unused", { web });
+    const slack = createSlackGateway("unused", { web });
 
-    await expect(slack.createChannel("pr-123")).resolves.toEqual({ channelId: "C123" });
-    await slack.renameChannel("C123", "renamed");
-    await slack.archiveChannel("C123");
-    await slack.unarchiveChannel("C123");
-    await slack.inviteUsers("C123", ["U1", "U2"]);
-    await slack.inviteUsers("C123", []);
+    await expect(slack.createChannel("pr-123")).resolves.toBe("C123");
+    await slack.rename("C123", "renamed");
+    await slack.archive("C123");
+    await slack.unarchive("C123");
+    await slack.invite("C123", ["U1", "U2"]);
+    await slack.invite("C123", []);
 
     expect(web.conversations.create).toHaveBeenCalledWith({ name: "pr-123" });
     expect(web.conversations.rename).toHaveBeenCalledWith({ channel: "C123", name: "renamed" });
@@ -519,19 +576,19 @@ describe("Slack Web API adapter", () => {
         },
       })
       .mockRejectedValueOnce({ data: { error: "channel_not_found" } });
-    const slack = createWebApiSlackClient("unused", { web });
+    const slack = createSlackGateway("unused", { web });
 
-    await expect(slack.inviteUsers("C123", ["U9"])).resolves.toEqual([
+    await expect(slack.invite("C123", ["U9"])).resolves.toEqual([
       { userId: "U9", error: "user_is_restricted" },
     ]);
-    await expect(slack.inviteUsers("C123", ["U1", "U2", "U3"])).resolves.toEqual([
+    await expect(slack.invite("C123", ["U1", "U2", "U3"])).resolves.toEqual([
       { userId: "U3", error: "cant_invite" },
     ]);
-    await expect(slack.inviteUsers("C123", ["U1", "U4"])).resolves.toEqual([
+    await expect(slack.invite("C123", ["U1", "U4"])).resolves.toEqual([
       { userId: "U4", error: "user_not_found" },
     ]);
-    await expect(slack.inviteUsers("C123", ["U1"])).rejects.toMatchObject({
-      slackError: "channel_not_found",
+    await expect(slack.invite("C123", ["U1"])).rejects.toMatchObject({
+      code: "channel_not_found",
     });
   });
 
@@ -542,9 +599,9 @@ describe("Slack Web API adapter", () => {
       web.conversations.invite.mockRejectedValueOnce({
         data: { error, errors: [{ user: "U5", ok: false, error }] },
       });
-      const slack = createWebApiSlackClient("unused", { web });
+      const slack = createSlackGateway("unused", { web });
 
-      await expect(slack.inviteUsers("C123", ["U5"])).resolves.toEqual([{ userId: "U5", error }]);
+      await expect(slack.invite("C123", ["U5"])).resolves.toEqual([{ userId: "U5", error }]);
     },
   );
 
@@ -553,9 +610,9 @@ describe("Slack Web API adapter", () => {
     web.conversations.members
       .mockResolvedValueOnce({ members: ["U1"], response_metadata: { next_cursor: "page-2" } })
       .mockResolvedValueOnce({ members: ["U2", "UBOT"], response_metadata: { next_cursor: "" } });
-    const slack = createWebApiSlackClient("unused", { web });
+    const slack = createSlackGateway("unused", { web });
 
-    await expect(slack.listChannelMembers("C1")).resolves.toEqual(["U1", "U2", "UBOT"]);
+    await expect(slack.members("C1")).resolves.toEqual(["U1", "U2", "UBOT"]);
     expect(web.conversations.members).toHaveBeenNthCalledWith(1, {
       channel: "C1",
       cursor: undefined,
@@ -572,15 +629,15 @@ describe("Slack Web API adapter", () => {
     const web = fakeWebApi();
     const userLeave = vi.fn(async () => ({}));
     const tokensSeen: string[] = [];
-    const slack = createWebApiSlackClient("unused", {
+    const slack = createSlackGateway("unused", {
       web,
       userWebFactory: (token) => {
         tokensSeen.push(token);
-        return { conversations: { leave: userLeave } } as never;
+        return userWeb(userLeave);
       },
     });
 
-    await expect(slack.leaveChannelAsUser("C1", "xoxp-u1")).resolves.toBe("left");
+    await expect(slack.leave("C1", "xoxp-u1")).resolves.toBe("left");
     expect(userLeave).toHaveBeenCalledWith({ channel: "C1" });
     expect(tokensSeen).toEqual(["xoxp-u1"]); // the user token, not the bot token
     // The bot token must never be used to leave (that would be a kick path).
@@ -594,24 +651,24 @@ describe("Slack Web API adapter", () => {
       .mockRejectedValueOnce({ data: { error: "not_in_channel" } })
       .mockRejectedValueOnce({ data: { error: "token_revoked" } })
       .mockRejectedValueOnce({ data: { error: "invalid_auth" } });
-    const slack = createWebApiSlackClient("unused", {
+    const slack = createSlackGateway("unused", {
       web,
-      userWebFactory: () => ({ conversations: { leave } }) as never,
+      userWebFactory: () => userWeb(leave),
     });
 
-    await expect(slack.leaveChannelAsUser("C1", "t")).resolves.toBe("already_out");
-    await expect(slack.leaveChannelAsUser("C1", "t")).resolves.toBe("invalid_token");
-    await expect(slack.leaveChannelAsUser("C1", "t")).resolves.toBe("invalid_token");
+    await expect(slack.leave("C1", "t")).resolves.toBe("already_out");
+    await expect(slack.leave("C1", "t")).resolves.toBe("invalid_token");
+    await expect(slack.leave("C1", "t")).resolves.toBe("invalid_token");
   });
 
   it("propagates an unexpected leave error so the durable job can retry", async () => {
     const web = fakeWebApi();
     const leave = vi.fn().mockRejectedValue({ data: { error: "internal_error" } });
-    const slack = createWebApiSlackClient("unused", {
+    const slack = createSlackGateway("unused", {
       web,
-      userWebFactory: () => ({ conversations: { leave } }) as never,
+      userWebFactory: () => userWeb(leave),
     });
-    await expect(slack.leaveChannelAsUser("C1", "t")).rejects.toBeTruthy();
+    await expect(slack.leave("C1", "t")).rejects.toBeTruthy();
   });
 
   it("finds an exact channel name across paginated public channels", async () => {
@@ -625,7 +682,7 @@ describe("Slack Web API adapter", () => {
         channels: [{ id: "C2", name: "pr-unkey-api-1-deadbeef" }],
         response_metadata: { next_cursor: "" },
       });
-    const slack = createWebApiSlackClient("unused", { web });
+    const slack = createSlackGateway("unused", { web });
 
     await expect(slack.findChannelByName("pr-unkey-api-1-deadbeef")).resolves.toBe("C2");
     expect(web.conversations.list).toHaveBeenNthCalledWith(1, {
@@ -642,10 +699,31 @@ describe("Slack Web API adapter", () => {
     });
   });
 
+  it("resolves a #shipped target: ids pass through, a name is looked up once and the hit kept", async () => {
+    const web = fakeWebApi();
+    web.conversations.list
+      .mockResolvedValueOnce({ channels: [], response_metadata: { next_cursor: "" } })
+      .mockResolvedValue({
+        channels: [{ id: "C77", name: "shipped" }],
+        response_metadata: { next_cursor: "" },
+      });
+    const slack = createSlackGateway("unused", { web });
+
+    await expect(slack.resolveChannel("C0SHIPPED")).resolves.toBe("C0SHIPPED");
+    expect(web.conversations.list).not.toHaveBeenCalled();
+    await expect(slack.resolveChannel("#shipped")).resolves.toBeUndefined();
+    await expect(slack.resolveChannel("#shipped")).resolves.toBe("C77");
+    await expect(slack.resolveChannel("#shipped")).resolves.toBe("C77");
+    expect(web.conversations.list).toHaveBeenCalledTimes(2);
+    expect(web.conversations.list).toHaveBeenLastCalledWith(
+      expect.objectContaining({ types: "public_channel" }),
+    );
+  });
+
   it("rejects malformed channel-list responses instead of misidentifying recovery state", async () => {
     const web = fakeWebApi();
     web.conversations.list.mockResolvedValueOnce({ response_metadata: { next_cursor: "" } });
-    const slack = createWebApiSlackClient("unused", { web });
+    const slack = createSlackGateway("unused", { web });
 
     await expect(slack.findChannelByName("pr-unkey-api-1-deadbeef")).rejects.toThrow(
       "channels array",
@@ -654,11 +732,11 @@ describe("Slack Web API adapter", () => {
 
   it("forwards threading, blocks, and the idempotency key and requires a timestamp", async () => {
     const web = fakeWebApi();
-    const slack = createWebApiSlackClient("unused", { web });
+    const slack = createSlackGateway("unused", { web });
     const blocks = [{ type: "section" as const, text: { type: "mrkdwn" as const, text: "Hi" } }];
 
     await expect(
-      slack.postMessage({
+      postMessage(slack, {
         channel: "C123",
         text: "fallback",
         blocks,
@@ -666,7 +744,7 @@ describe("Slack Web API adapter", () => {
         clientMsgId: "54cf8f7e-071f-4bbc-a1fe-8c5b68d8b152",
       }),
     ).resolves.toEqual({ ts: "171234.5678" });
-    expect(web.apiCall).toHaveBeenCalledWith("chat.postMessage", {
+    expect(web.chat).toHaveBeenCalledWith("chat.postMessage", {
       channel: "C123",
       text: "fallback",
       blocks,
@@ -676,23 +754,23 @@ describe("Slack Web API adapter", () => {
       unfurl_media: false,
     });
 
-    web.apiCall.mockResolvedValueOnce({});
-    await expect(slack.postMessage({ channel: "C999", text: "missing ts" })).rejects.toThrow(
+    web.chat.mockResolvedValueOnce({});
+    await expect(postMessage(slack, { channel: "C999", text: "missing ts" })).rejects.toThrow(
       "chat.postMessage timestamp",
     );
   });
 
   it("authors a message as a Slack user via username + icon_url overrides", async () => {
     const web = fakeWebApi();
-    const slack = createWebApiSlackClient("unused", { web });
+    const slack = createSlackGateway("unused", { web });
 
-    await slack.postMessage({
+    await postMessage(slack, {
       channel: "C123",
       text: "fallback",
       username: "James Perkins",
       iconUrl: "https://slack/avatar.png",
     });
-    expect(web.apiCall).toHaveBeenCalledWith(
+    expect(web.chat).toHaveBeenCalledWith(
       "chat.postMessage",
       expect.objectContaining({
         channel: "C123",
@@ -706,16 +784,16 @@ describe("Slack Web API adapter", () => {
     const web = fakeWebApi();
     // First attempt (with username) is rejected for the missing scope; the retry
     // without author overrides succeeds so comment mirroring never breaks.
-    web.apiCall
+    web.chat
       .mockRejectedValueOnce({ data: { error: "missing_scope", needed: "chat:write.customize" } })
       .mockResolvedValueOnce({ ts: "171234.5678" });
-    const slack = createWebApiSlackClient("unused", { web });
+    const slack = createSlackGateway("unused", { web });
 
     await expect(
-      slack.postMessage({ channel: "C123", text: "hi", username: "James" }),
+      postMessage(slack, { channel: "C123", text: "hi", username: "James" }),
     ).resolves.toEqual({ ts: "171234.5678" });
     // The retry omitted the author override.
-    expect(web.apiCall).toHaveBeenNthCalledWith(
+    expect(web.chat).toHaveBeenNthCalledWith(
       2,
       "chat.postMessage",
       expect.objectContaining({ channel: "C123", username: undefined, icon_url: undefined }),
@@ -724,16 +802,16 @@ describe("Slack Web API adapter", () => {
 
   it("joins the channel and retries when a post hits not_in_channel", async () => {
     const web = fakeWebApi();
-    web.apiCall
+    web.chat
       .mockRejectedValueOnce({ data: { error: "not_in_channel" } })
       .mockResolvedValueOnce({ ts: "171234.5678" });
-    const slack = createWebApiSlackClient("unused", { web });
+    const slack = createSlackGateway("unused", { web });
 
-    await expect(slack.postMessage({ channel: "C123", text: "CI passed" })).resolves.toEqual({
+    await expect(postMessage(slack, { channel: "C123", text: "CI passed" })).resolves.toEqual({
       ts: "171234.5678",
     });
     expect(web.conversations.join).toHaveBeenCalledWith({ channel: "C123" });
-    expect(web.apiCall).toHaveBeenCalledTimes(2);
+    expect(web.chat).toHaveBeenCalledTimes(2);
   });
 
   it("joins the channel and retries when an invite hits not_in_channel", async () => {
@@ -741,25 +819,25 @@ describe("Slack Web API adapter", () => {
     web.conversations.invite
       .mockRejectedValueOnce({ data: { error: "not_in_channel" } })
       .mockResolvedValueOnce({});
-    const slack = createWebApiSlackClient("unused", { web });
+    const slack = createSlackGateway("unused", { web });
 
-    await slack.inviteUsers("C123", ["U7"]);
+    await slack.invite("C123", ["U7"]);
     expect(web.conversations.join).toHaveBeenCalledWith({ channel: "C123" });
     expect(web.conversations.invite).toHaveBeenCalledTimes(2);
   });
 
   it("surfaces the missing scope from a Slack missing_scope error", async () => {
     const web = fakeWebApi();
-    web.apiCall.mockRejectedValueOnce({
+    web.chat.mockRejectedValueOnce({
       data: {
         error: "missing_scope",
         needed: "channels:join",
         provided: "chat:write,channels:manage",
       },
     });
-    const slack = createWebApiSlackClient("unused", { web });
+    const slack = createSlackGateway("unused", { web });
 
-    await expect(slack.postMessage({ channel: "C123", text: "hi" })).rejects.toThrow(
+    await expect(postMessage(slack, { channel: "C123", text: "hi" })).rejects.toThrow(
       /missing_scope.*needed scope: channels:join.*provided scopes: chat:write,channels:manage/,
     );
   });
@@ -768,10 +846,10 @@ describe("Slack Web API adapter", () => {
     const web = fakeWebApi();
     web.conversations.create.mockResolvedValueOnce({});
     web.users.lookupByEmail.mockResolvedValueOnce({});
-    const slack = createWebApiSlackClient("unused", { web });
+    const slack = createSlackGateway("unused", { web });
 
     await expect(slack.createChannel("pr-123")).rejects.toThrow("conversations.create channel ID");
-    await expect(slack.lookupUserByEmail("person@example.com")).rejects.toThrow(
+    await expect(slack.lookupByEmail("person@example.com")).rejects.toThrow(
       "users.lookupByEmail user ID",
     );
   });
@@ -781,11 +859,11 @@ describe("Slack Web API adapter", () => {
     web.conversations.archive.mockRejectedValueOnce({ data: { error: "already_archived" } });
     web.conversations.unarchive.mockRejectedValueOnce({ data: { error: "not_archived" } });
     web.conversations.invite.mockRejectedValueOnce({ data: { error: "already_in_channel" } });
-    const slack = createWebApiSlackClient("unused", { web });
+    const slack = createSlackGateway("unused", { web });
 
-    await expect(slack.archiveChannel("C123")).resolves.toBeUndefined();
-    await expect(slack.unarchiveChannel("C123")).resolves.toBeUndefined();
-    await expect(slack.inviteUsers("C123", ["U123"])).resolves.toEqual([]);
+    await expect(slack.archive("C123")).resolves.toBeUndefined();
+    await expect(slack.unarchive("C123")).resolves.toBeUndefined();
+    await expect(slack.invite("C123", ["U123"])).resolves.toEqual([]);
   });
 
   it("recognizes Slack v8 rate-limit errors and honors a bounded Retry-After", async () => {
@@ -794,15 +872,15 @@ describe("Slack Web API adapter", () => {
       code: ErrorCode.RateLimitedError,
       retryAfter: 2,
     };
-    web.apiCall.mockRejectedValueOnce(rateLimitError).mockResolvedValueOnce({ ts: "171234.5678" });
+    web.chat.mockRejectedValueOnce(rateLimitError).mockResolvedValueOnce({ ts: "171234.5678" });
     const sleep = vi.fn(async () => {});
-    const slack = createWebApiSlackClient("unused", { web, sleep });
+    const slack = createSlackGateway("unused", { web, sleep });
 
-    await expect(slack.postMessage({ channel: "C123", text: "hello" })).resolves.toEqual({
+    await expect(postMessage(slack, { channel: "C123", text: "hello" })).resolves.toEqual({
       ts: "171234.5678",
     });
     expect(sleep).toHaveBeenCalledWith(2_000);
-    expect(web.apiCall).toHaveBeenCalledTimes(2);
+    expect(web.chat).toHaveBeenCalledTimes(2);
   });
 
   it("returns long rate-limit delays to the durable job without sleeping on its lease", async () => {
@@ -811,92 +889,82 @@ describe("Slack Web API adapter", () => {
       code: ErrorCode.RateLimitedError,
       retryAfter: 30,
     };
-    web.apiCall.mockRejectedValue(rateLimitError);
+    web.chat.mockRejectedValue(rateLimitError);
     const sleep = vi.fn(async () => {});
-    const slack = createWebApiSlackClient("unused", { web, sleep });
+    const slack = createSlackGateway("unused", { web, sleep });
 
-    const rejection = slack.postMessage({ channel: "C123", text: "hello" });
+    const rejection = postMessage(slack, { channel: "C123", text: "hello" });
     await expect(rejection).rejects.toBeInstanceOf(Retry);
     await expect(rejection).rejects.toMatchObject({
-      status: 429,
-      retryAfterSeconds: 30,
       retryAfterMs: 30_000,
     });
     expect(sleep).not.toHaveBeenCalled();
-    expect(web.apiCall).toHaveBeenCalledOnce();
-  });
-});
-
-describe("Slack channel state idempotency", () => {
-  it("recognizes only the expected already-in-state responses", () => {
-    const archived = { data: { error: "already_archived" } };
-    const active = { data: { error: "not_archived" } };
-
-    expect(isSlackChannelAlreadyInState(archived, "already_archived")).toBe(true);
-    expect(isSlackChannelAlreadyInState(active, "not_archived")).toBe(true);
-    expect(isSlackChannelAlreadyInState(archived, "not_archived")).toBe(false);
-    expect(isSlackChannelAlreadyInState(new Error("network"), "already_archived")).toBe(false);
+    expect(web.chat).toHaveBeenCalledOnce();
   });
 });
 
 describe("Slack user lookup", () => {
   it("returns undefined only when Slack reports users_not_found", async () => {
-    const lookupByEmail = vi.fn(async () => {
-      throw { data: { error: "users_not_found" } };
-    });
+    const web = fakeWebApi();
+    web.users.lookupByEmail.mockRejectedValueOnce({ data: { error: "users_not_found" } });
+    const slack = createSlackGateway("unused", { web });
 
-    await expect(lookupSlackUserByEmail({ lookupByEmail }, "nobody@example.com")).resolves.toBe(
-      undefined,
-    );
+    await expect(slack.lookupByEmail("nobody@example.com")).resolves.toBe(undefined);
   });
 
   it("rethrows authentication and transport failures", async () => {
-    const authError = { data: { error: "invalid_auth" } };
-    const lookupByEmail = vi.fn(async () => {
-      throw authError;
-    });
+    const web = fakeWebApi();
+    web.users.lookupByEmail
+      .mockRejectedValueOnce({ data: { error: "invalid_auth" } })
+      .mockRejectedValueOnce(new Error("socket hang up"));
+    const slack = createSlackGateway("unused", { web });
 
-    await expect(lookupSlackUserByEmail({ lookupByEmail }, "person@example.com")).rejects.toBe(
-      authError,
-    );
+    await expect(slack.lookupByEmail("person@example.com")).rejects.toMatchObject({
+      code: "invalid_auth",
+    });
+    await expect(slack.lookupByEmail("person@example.com")).rejects.toMatchObject({
+      code: "no_response",
+      message: "socket hang up",
+    });
   });
 
   it("prefers display_name, then real_name, for a user's name", async () => {
-    const info = vi.fn(async () => ({
-      user: { real_name: "James Perkins", profile: { display_name: "jperkins" } },
-    }));
-    await expect(lookupSlackUserName({ info }, "U7")).resolves.toBe("jperkins");
+    const web = fakeWebApi();
+    web.users.info
+      .mockResolvedValueOnce({
+        user: { real_name: "James Perkins", profile: { display_name: "jperkins" } },
+      })
+      .mockResolvedValueOnce({
+        user: { real_name: "James Perkins", profile: { display_name: "" } },
+      });
+    const slack = createSlackGateway("unused", { web });
 
-    const infoNoDisplay = vi.fn(async () => ({
-      user: { real_name: "James Perkins", profile: { display_name: "" } },
-    }));
-    await expect(lookupSlackUserName({ info: infoNoDisplay }, "U7")).resolves.toBe("James Perkins");
+    await expect(slack.profile("U7")).resolves.toEqual({ name: "jperkins" });
+    await expect(slack.profile("U7")).resolves.toEqual({ name: "James Perkins" });
+    expect(web.users.info).toHaveBeenCalledWith({ user: "U7" });
   });
 
   it("returns undefined for an unknown user but rethrows other errors", async () => {
-    const notFound = vi.fn(async () => {
-      throw { data: { error: "user_not_found" } };
-    });
-    await expect(lookupSlackUserName({ info: notFound }, "U0")).resolves.toBeUndefined();
+    const web = fakeWebApi();
+    web.users.info
+      .mockRejectedValueOnce({ data: { error: "user_not_found" } })
+      .mockRejectedValueOnce({ data: { error: "invalid_auth" } });
+    const slack = createSlackGateway("unused", { web });
 
-    const boom = vi.fn(async () => {
-      throw { data: { error: "invalid_auth" } };
-    });
-    await expect(lookupSlackUserName({ info: boom }, "U0")).rejects.toBeTruthy();
+    await expect(slack.profile("U0")).resolves.toBeUndefined();
+    await expect(slack.profile("U0")).rejects.toMatchObject({ code: "invalid_auth" });
   });
 
   it("resolves a profile name and avatar for authoring comments as the user", async () => {
-    const info = vi.fn(async () => ({
+    const web = fakeWebApi();
+    web.users.info.mockResolvedValueOnce({
       user: { profile: { display_name: "James", image_72: "https://slack/img72.png" } },
-    }));
-    await expect(lookupSlackUserProfile({ info }, "U7")).resolves.toEqual({
+    });
+    const slack = createSlackGateway("unused", { web });
+
+    await expect(slack.profile("U7")).resolves.toEqual({
       name: "James",
       iconUrl: "https://slack/img72.png",
     });
-
-    const notFound = vi.fn(async () => {
-      throw { data: { error: "user_not_found" } };
-    });
-    await expect(lookupSlackUserProfile({ info: notFound }, "U0")).resolves.toBeUndefined();
   });
 });

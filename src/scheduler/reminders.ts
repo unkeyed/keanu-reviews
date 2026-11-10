@@ -1,4 +1,5 @@
 import { type Logger, errMessage } from "#lib";
+import type { SlackGateway } from "#slack";
 import type { Db } from "../db/client.ts";
 import { findByGithubId } from "../db/repositories/identities.ts";
 import { findById } from "../db/repositories/pullRequests.ts";
@@ -19,7 +20,6 @@ import { isTerminal } from "../domain/prState.ts";
 import type { CiReadinessFetcher } from "../github/users.ts";
 import type { ReviewApprovalFetcher } from "../github/users.ts";
 import type { PullRequestFetcher } from "../handlers/mergeability.ts";
-import type { SlackClient } from "../slack/client.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
 import { type ReminderWindow, isWithinWindow } from "./window.ts";
 
@@ -33,7 +33,7 @@ const DEFAULT_SUPPRESS_APPROVALS = 1;
 
 export interface ReminderDeps {
   db: Db;
-  slack: SlackClient;
+  slack: SlackGateway;
   logger: Logger;
   reminderHours: number;
   reminderLeaseMs?: number;

@@ -4,18 +4,18 @@ import type { Db } from "../db/client.ts";
 import { upsertIdentity } from "../db/repositories/identities.ts";
 import { setChannel, upsertPullRequest } from "../db/repositories/pullRequests.ts";
 import { createTestDb } from "../db/testDb.ts";
-import { FakeSlackClient } from "../testing/fakeSlack.ts";
+import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { type ReviewCommentPayload, handleReviewComment } from "./reviewComment.ts";
 
 let db: Db;
-let slack: FakeSlackClient;
+let slack: FakeSlackGateway;
 let close: () => Promise<void>;
 
 beforeEach(async () => {
   const t = await createTestDb();
   db = t.db;
   close = () => t.client.close();
-  slack = new FakeSlackClient();
+  slack = new FakeSlackGateway();
 });
 afterEach(() => close());
 
@@ -83,7 +83,7 @@ describe("handleReviewComment (U6)", () => {
       slackUserId: "U7",
       source: "self-link",
     });
-    slack.userProfiles.set("U7", { name: "Flo Rider", iconUrl: "https://slack/avatar.png" });
+    slack.profiles.set("U7", { name: "Flo Rider", iconUrl: "https://slack/avatar.png" });
     await handleReviewComment(deps(), payload());
     const msg = slack.messages.at(-1);
     expect(msg?.username).toBe("Flo Rider"); // posted AS the Slack user
@@ -101,7 +101,7 @@ describe("handleReviewComment (U6)", () => {
       slackUserId: "U7",
       source: "self-link",
     });
-    slack.userProfiles.set("U7", { name: "Flo Rider", iconUrl: "https://slack/avatar.png" });
+    slack.profiles.set("U7", { name: "Flo Rider", iconUrl: "https://slack/avatar.png" });
     const authorPoster = {
       getUserToken: async (id: string) => (id === "U7" ? "xoxp-flo" : undefined),
       onInvalidToken: async () => {},
@@ -126,7 +126,7 @@ describe("handleReviewComment (U6)", () => {
       slackUserId: "U7",
       source: "self-link",
     });
-    slack.userProfiles.set("U7", { name: "Flo Rider", iconUrl: "https://slack/avatar.png" });
+    slack.profiles.set("U7", { name: "Flo Rider", iconUrl: "https://slack/avatar.png" });
     slack.invalidTokens.add("xoxp-dead");
     const dropped: string[] = [];
     const authorPoster = {
@@ -238,7 +238,7 @@ describe("handleReviewComment (U6)", () => {
       slackUserId: "U7",
       source: "self-link",
     });
-    slack.userProfiles.set("U7", { name: "Flo Rider" });
+    slack.profiles.set("U7", { name: "Flo Rider" });
     const authorPoster = {
       getUserToken: async () => "xoxp-flo",
       onInvalidToken: async () => {},
@@ -288,7 +288,7 @@ describe("handleReviewComment (U6)", () => {
       slackUserId: "U7",
       source: "self-link",
     });
-    slack.userProfiles.set("U7", { name: "Flo Rider" });
+    slack.profiles.set("U7", { name: "Flo Rider" });
     const authorPoster = { getUserToken: async () => "xoxp-flo", onInvalidToken: async () => {} };
     await handleReviewComment({ ...deps(), authorPoster }, payload());
     await handleReviewComment({ ...deps(), authorPoster }, { ...payload(), action: "deleted" });
@@ -437,14 +437,14 @@ describe("handleReviewComment (U6)", () => {
 
   it("retries a failed Slack delivery without suppressing the comment", async () => {
     await seedChannel();
-    const post = slack.postMessage.bind(slack);
+    const post = slack.post.bind(slack);
     let fail = true;
-    slack.postMessage = async (message) => {
+    slack.post = async (channel, message, opts) => {
       if (fail) {
         fail = false;
         throw new Error("transient Slack failure");
       }
-      return post(message);
+      return post(channel, message, opts);
     };
 
     await expect(handleReviewComment(deps(), payload())).rejects.toThrow("transient Slack failure");
@@ -456,10 +456,10 @@ describe("handleReviewComment (U6)", () => {
 
   it("deduplicates an ambiguous retry after Slack accepted the first post", async () => {
     await seedChannel();
-    const post = slack.postMessage.bind(slack);
+    const post = slack.post.bind(slack);
     let loseResponse = true;
-    slack.postMessage = async (message) => {
-      const response = await post(message);
+    slack.post = async (channel, message, opts) => {
+      const response = await post(channel, message, opts);
       if (loseResponse) {
         loseResponse = false;
         throw new Error("connection closed after send");

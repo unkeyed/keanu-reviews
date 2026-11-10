@@ -1,6 +1,7 @@
 import { serve } from "@hono/node-server";
 import { createLogger, registerSecrets } from "#lib";
 import { errMessage } from "#lib";
+import { createSlackGateway } from "#slack";
 import { type Config, ConfigError, SECRET_KEYS, loadConfig } from "./config.ts";
 import { createDb } from "./db/client.ts";
 import { createDbReadyCheck } from "./db/readiness.ts";
@@ -18,7 +19,6 @@ import { startReminderLoop } from "./scheduler/loop.ts";
 import { createClosedPullRequestReconciliation } from "./scheduler/reconcileClosedPullRequests.ts";
 import { createReminderScheduler } from "./scheduler/reminders.ts";
 import { createApp } from "./server.ts";
-import { createWebApiSlackClient } from "./slack/webApiClient.ts";
 import { createWorker, startWorkerLoop } from "./worker/loop.ts";
 import { createRouter } from "./worker/router.ts";
 
@@ -43,7 +43,7 @@ function boot(): void {
 
   // Infrastructure
   const { db, close: closeDb } = createDb(config.DATABASE_URL);
-  const slack = createWebApiSlackClient(config.SLACK_BOT_TOKEN, {
+  const slack = createSlackGateway(config.SLACK_BOT_TOKEN, {
     onImageFallback: (info) =>
       logger.warn("slack refused embedded images; retrying with links", info),
   });

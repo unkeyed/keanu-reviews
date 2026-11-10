@@ -12,11 +12,11 @@ import {
 import { claimReminder, deferReminder, listDue } from "../db/repositories/reminders.ts";
 import { reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
-import { FakeSlackClient } from "../testing/fakeSlack.ts";
+import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { createReminderScheduler } from "./reminders.ts";
 
 let db: Db;
-let slack: FakeSlackClient;
+let slack: FakeSlackGateway;
 let close: () => Promise<void>;
 let clock: number;
 
@@ -28,7 +28,7 @@ beforeEach(async () => {
   const t = await createTestDb();
   db = t.db;
   close = () => t.client.close();
-  slack = new FakeSlackClient();
+  slack = new FakeSlackGateway();
   clock = 1_000_000_000_000;
   const row = await upsertPullRequest(db, {
     repoFullName: "unkey/api",
@@ -100,7 +100,7 @@ describe("reminder scheduler (U8, R9)", () => {
     const s = scheduler({ retryBaseMs: 1_000 });
     await s.onReviewRequested(PR, 7);
     advanceHours(HOURS);
-    slack.postMessage = async () => {
+    slack.post = async () => {
       throw new Error("Slack unavailable");
     };
 
@@ -336,10 +336,10 @@ describe("reminder scheduler (U8, R9)", () => {
     const s = scheduler({ retryBaseMs: 1_000 });
     await s.onReviewRequested(PR, 7);
     advanceHours(HOURS);
-    const post = slack.postMessage.bind(slack);
+    const post = slack.post.bind(slack);
     let loseResponse = true;
-    slack.postMessage = async (message) => {
-      const result = await post(message);
+    slack.post = async (channel, message, opts) => {
+      const result = await post(channel, message, opts);
       if (loseResponse) {
         loseResponse = false;
         throw new Error("response lost after accept");
@@ -363,14 +363,14 @@ describe("reminder scheduler (U8, R9)", () => {
     await s.onReviewRequested(PR, 7);
     await s.onReviewRequested(PR, 8);
     advanceHours(HOURS);
-    const post = slack.postMessage.bind(slack);
+    const post = slack.post.bind(slack);
     let poison = true;
-    slack.postMessage = async (message) => {
+    slack.post = async (channel, message, opts) => {
       if (poison) {
         poison = false;
         throw new Error("poison row");
       }
-      return post(message);
+      return post(channel, message, opts);
     };
 
     expect(await s.processDue()).toBe(1);
@@ -383,7 +383,7 @@ describe("reminder scheduler (U8, R9)", () => {
     const s = scheduler({ maxAttempts: 2, retryBaseMs: 1_000 });
     await s.onReviewRequested(PR, 7);
     advanceHours(HOURS);
-    slack.postMessage = async () => {
+    slack.post = async () => {
       throw new Error("permanent Slack failure");
     };
 

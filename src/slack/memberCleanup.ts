@@ -1,8 +1,8 @@
 import { type Logger, errMessage } from "#lib";
-import type { SlackClient } from "./client.ts";
+import type { SlackGateway } from "./gateway.ts";
 
 export interface MemberCleanupDeps {
-  slack: SlackClient;
+  slack: SlackGateway;
   logger: Logger;
   /** Decrypted Slack user token for a member, or undefined if none is stored. */
   getUserToken: (slackUserId: string) => Promise<string | undefined>;
@@ -42,7 +42,7 @@ export async function quietlyRemoveMembers(
 
   let members: string[];
   try {
-    members = await deps.slack.listChannelMembers(channelId);
+    members = await deps.slack.members(channelId);
   } catch (err) {
     // If we can't even list members, skip cleanup and let the archive proceed.
     deps.logger.warn("quiet archive: listing members failed; archiving with members present", {
@@ -71,7 +71,7 @@ export async function quietlyRemoveMembers(
     }
 
     try {
-      const outcome = await deps.slack.leaveChannelAsUser(channelId, token);
+      const outcome = await deps.slack.leave(channelId, token);
       if (outcome === "left") summary.left += 1;
       else if (outcome === "already_out") summary.alreadyOut += 1;
       else {

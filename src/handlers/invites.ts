@@ -1,5 +1,5 @@
 import type { Logger } from "#lib";
-import type { SlackClient } from "../slack/client.ts";
+import type { SlackGateway } from "#slack";
 
 /**
  * Invite users into a PR channel. A user Slack permanently refuses, such as a
@@ -7,12 +7,12 @@ import type { SlackClient } from "../slack/client.ts";
  * block the channel lifecycle or the message that follows the invite.
  */
 export async function inviteToChannel(
-  deps: { slack: SlackClient; logger: Logger },
+  deps: { slack: SlackGateway; logger: Logger },
   channelId: string,
   userIds: string[],
   context: Record<string, unknown>,
 ): Promise<void> {
-  for (const refused of await deps.slack.inviteUsers(channelId, userIds)) {
+  for (const refused of await deps.slack.invite(channelId, userIds)) {
     deps.logger.warn("Slack refused to invite user into channel", {
       ...context,
       channelId,

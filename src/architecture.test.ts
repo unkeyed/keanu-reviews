@@ -4,7 +4,7 @@ import { join, relative } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { GITHUB_ROUTES } from "./github/http.ts";
-import { SLACK_METHODS } from "./slack/webApiClient.ts";
+import { SLACK_METHODS } from "./slack/gateway.ts";
 
 const SRC = join(import.meta.dirname);
 
@@ -48,7 +48,7 @@ const GITHUB_BASELINE = [
   "POST https://github.com/login/oauth/access_token",
 ];
 
-const SLACK_CLIENT_FILES = ["slack/webApiClient.ts"];
+const SLACK_CLIENT_FILES = ["slack/gateway.ts"];
 const GITHUB_POST_FILES = ["github/comments.ts", "github/http.ts", "github/oauth.ts"];
 const GITHUB_MINT_FILES = ["github/octokitAuth.ts"];
 
@@ -122,7 +122,11 @@ describe("Slack surface", () => {
   });
 
   it("calls only listed methods", () => {
-    const listed = new Set<string>(Object.values(SLACK_METHODS).flat());
+    const listed = new Set<string>([
+      ...SLACK_METHODS.bot,
+      ...SLACK_METHODS.user,
+      ...SLACK_METHODS.oauth,
+    ]);
     const called = new Set<string>();
     for (const file of SLACK_CLIENT_FILES) {
       for (const m of read(file).matchAll(/\.(conversations|users|chat|oauth)\.(\w+)\(/g)) {

@@ -8,7 +8,13 @@ import {
   findMessageEffect,
   releaseMessageEffect,
 } from "../db/repositories/messages.ts";
-import type { SlackClient, SlackMessage } from "./client.ts";
+import { BOT, type Poster, type RenderedMessage, type SlackGateway } from "./gateway.ts";
+
+export interface SlackMessage extends RenderedMessage {
+  channel: string;
+  threadTs?: string;
+  poster?: Poster;
+}
 
 export interface DeliveredSlackMessage {
   slackTs: string;
@@ -22,7 +28,7 @@ export interface DeliveredSlackMessage {
  */
 export async function deliverSlackMessage(
   db: Db,
-  slack: SlackClient,
+  slack: SlackGateway,
   effect: MessageEffectInput,
   message: SlackMessage,
   beforePost?: () => Promise<void>,
@@ -42,12 +48,15 @@ export async function deliverSlackMessage(
 
   try {
     await beforePost?.();
-    const result = await slack.postMessage({ ...message, clientMsgId: claim.clientMsgId });
-    if (!result.ts) throw new Error("Slack accepted a message without returning a timestamp");
-    if (!(await completeMessageEffect(db, claim, result.ts))) {
+    const ts = await slack.post(
+      message.channel,
+      { text: message.text, blocks: message.blocks, images: message.images },
+      { poster: message.poster ?? BOT, threadTs: message.threadTs, clientMsgId: claim.clientMsgId },
+    );
+    if (!(await completeMessageEffect(db, claim, ts))) {
       throw new Error(`Slack effect lease was lost before completion: ${effect.kind}`);
     }
-    return { slackTs: result.ts, posted: true };
+    return { slackTs: ts, posted: true };
   } catch (error) {
     await releaseMessageEffect(db, claim);
     throw error;

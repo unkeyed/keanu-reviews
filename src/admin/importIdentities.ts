@@ -1,6 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createSlackGateway } from "#slack";
 import { type Config, ConfigError, loadConfig } from "../config.ts";
 import { createDb } from "../db/client.ts";
 import { createInstallationAuth } from "../github/auth.ts";
@@ -12,7 +13,6 @@ import {
   type LinkDeps,
   importIdentities,
 } from "../identity/link.ts";
-import { createWebApiSlackClient } from "../slack/webApiClient.ts";
 
 const MAX_IMPORT_BYTES = 1_048_576;
 const MAX_IMPORT_ROWS = 10_000;
@@ -202,7 +202,7 @@ function productionImportDependencies(config: Config): IdentityImportRuntime {
   const auth = createInstallationAuth(
     octokitMintFn(config.GITHUB_APP_ID, config.GITHUB_APP_PRIVATE_KEY),
   );
-  const slack = createWebApiSlackClient(config.SLACK_BOT_TOKEN);
+  const slack = createSlackGateway(config.SLACK_BOT_TOKEN);
   // Create the cleanup-bearing resource last so any dependency-construction
   // failure before this point cannot strand an open database pool.
   const database = createDb(config.DATABASE_URL);

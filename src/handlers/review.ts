@@ -3,14 +3,13 @@ import { findMessageEffect } from "../db/repositories/messages.ts";
 import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
 import { isBotActor, shouldSkipActor } from "../github/actors.ts";
 import { commentImages } from "../github/attachments.ts";
-import { reviewerDisplayLabel } from "../identity/resolve.ts";
 import {
   cleanGithubMarkdown,
   issueCommentBlocks,
   reviewSummaryBlocks,
   sanitizeMrkdwn,
 } from "../slack/blocks.ts";
-import type { SlackMessage } from "../slack/client.ts";
+import type { SlackMessage } from "../slack/deliver.ts";
 import {
   deleteMirroredComment,
   deliverAuthoredMessage,
@@ -78,7 +77,7 @@ export async function handleReview(
   if (!isEmptyCommentWrapper) {
     // Never ping the reviewer for their own review activity (approve, request
     // changes, comment) — show their Slack display name as plain text instead.
-    const authorLabel = await reviewerDisplayLabel(deps.slack, author.slackUserId, r.user.login);
+    const authorLabel = sanitizeMrkdwn(author.name ?? r.user.login);
     await deliverAuthoredMessage(
       deps,
       { prId: row.id, kind: "review", githubEventRef: String(r.id) },
@@ -160,8 +159,10 @@ export async function handleIssueComment(
   const effect = { prId: row.id, kind: "issue_comment", githubEventRef: String(c.id) };
   const render = (mode: "user" | "bot"): SlackMessage => ({
     channel: channelId,
-    username: mode === "bot" ? author.name : undefined,
-    iconUrl: mode === "bot" ? author.iconUrl : undefined,
+    poster:
+      mode === "bot"
+        ? { kind: "bot-as", username: author.name, iconUrl: author.iconUrl }
+        : undefined,
     text: sanitizeMrkdwn(`Comment by ${c.user.login}`),
     blocks: issueCommentBlocks({
       body: c.body,

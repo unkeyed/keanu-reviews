@@ -5,7 +5,7 @@ import type { Db } from "./db/client.ts";
 import { createTestDb } from "./db/testDb.ts";
 import { createGithubWebhookRoute } from "./routes/githubWebhook.ts";
 import { createReminderScheduler } from "./scheduler/reminders.ts";
-import { FakeSlackClient } from "./testing/fakeSlack.ts";
+import { FakeSlackGateway } from "./testing/fakeSlack.ts";
 import { createWorker } from "./worker/loop.ts";
 import { createRouter } from "./worker/router.ts";
 
@@ -18,7 +18,7 @@ import { createRouter } from "./worker/router.ts";
 const SECRET = "whsec_test";
 const REPO = "unkey/api";
 let db: Db;
-let slack: FakeSlackClient;
+let slack: FakeSlackGateway;
 let close: () => Promise<void>;
 let route: ReturnType<typeof createGithubWebhookRoute>;
 let worker: ReturnType<typeof createWorker>;
@@ -28,7 +28,7 @@ beforeEach(async () => {
   const t = await createTestDb();
   db = t.db;
   close = () => t.client.close();
-  slack = new FakeSlackClient();
+  slack = new FakeSlackGateway();
   const logger = createLogger("error");
   const scheduler = createReminderScheduler({ db, slack, logger, reminderHours: 12 });
   const router = createRouter({

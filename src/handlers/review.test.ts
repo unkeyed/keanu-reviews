@@ -7,7 +7,7 @@ import { setChannel, upsertPullRequest } from "../db/repositories/pullRequests.t
 import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createReminderScheduler } from "../scheduler/reminders.ts";
-import { FakeSlackClient } from "../testing/fakeSlack.ts";
+import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { handleCheckRun } from "./checks.ts";
 import {
   type IssueCommentPayload,
@@ -18,14 +18,14 @@ import {
 import { handleReviewRequest } from "./reviewRequest.ts";
 
 let db: Db;
-let slack: FakeSlackClient;
+let slack: FakeSlackGateway;
 let close: () => Promise<void>;
 
 beforeEach(async () => {
   const t = await createTestDb();
   db = t.db;
   close = () => t.client.close();
-  slack = new FakeSlackClient();
+  slack = new FakeSlackGateway();
   const row = await upsertPullRequest(db, {
     repoFullName: "unkey/api",
     number: 1,
@@ -85,7 +85,7 @@ describe("handleReview (U6, R5)", () => {
         slackUserId: "U7",
         source: "self-link",
       });
-      slack.userNames.set("U7", "James Perkins");
+      slack.profiles.set("U7", { name: "James Perkins" });
 
       await handleReview(deps(), review(state));
       const blocks = JSON.stringify(slack.messages.at(-1)?.blocks);
@@ -109,7 +109,7 @@ describe("handleReview (U6, R5)", () => {
       slackUserId: "U7",
       source: "self-link",
     });
-    slack.userNames.set("U7", "James Perkins");
+    slack.profiles.set("U7", { name: "James Perkins" });
     const authorPoster = {
       getUserToken: async (id: string) => (id === "U7" ? "xoxp-flo" : undefined),
       onInvalidToken: async () => {},
@@ -150,7 +150,7 @@ describe("handleReview (U6, R5)", () => {
       now: () => Date.parse("2026-08-11T11:00:00Z"),
     });
     await scheduler.onReviewRequested("unkey/api#1", 7, new Date("2026-08-11T11:00:00Z"));
-    slack.postMessage = async () => {
+    slack.post = async () => {
       throw new Error("Slack unavailable");
     };
 
@@ -333,7 +333,7 @@ describe("handleIssueComment (U6)", () => {
       slackUserId: "U7",
       source: "self-link",
     });
-    slack.userProfiles.set("U7", { name: "Flo Rider", iconUrl: "https://slack/a.png" });
+    slack.profiles.set("U7", { name: "Flo Rider", iconUrl: "https://slack/a.png" });
     await handleIssueComment(deps(), issueComment(true));
     const msg = slack.messages.at(-1);
     expect(msg?.username).toBe("Flo Rider");

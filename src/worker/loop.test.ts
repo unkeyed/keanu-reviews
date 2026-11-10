@@ -13,7 +13,7 @@ import { jobs } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { type PullRequestPayload, handlePullRequest } from "../handlers/pullRequest.ts";
 import { deliverSlackMessage } from "../slack/deliver.ts";
-import { FakeSlackClient } from "../testing/fakeSlack.ts";
+import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { createWorker, startWorkerLoop } from "./loop.ts";
 
 let db: Db;
@@ -156,7 +156,7 @@ describe("worker retry hints", () => {
     });
     const effect = { prId: prId("unkey/api", 1), kind: "lifecycle", githubEventRef: "opened" };
     await claimMessageEffect(db, effect);
-    const slack = new FakeSlackClient();
+    const slack = new FakeSlackGateway();
     const job = await enqueue("effect-held");
     const worker = createWorker({
       db,
@@ -189,7 +189,7 @@ describe("worker retry hints", () => {
       db,
       logger: createLogger("error"),
       router: async () => {
-        await deliverSlackMessage(db, new FakeSlackClient(), effect, {
+        await deliverSlackMessage(db, new FakeSlackGateway(), effect, {
           channel: "C1",
           text: "opened",
         });
@@ -204,7 +204,7 @@ describe("worker retry hints", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const start = Date.now();
     await claimPullRequestLifecycle(db, 999);
-    const slack = new FakeSlackClient();
+    const slack = new FakeSlackGateway();
     const job = await enqueue("lifecycle-held");
     const worker = createWorker({
       db,
@@ -231,7 +231,7 @@ describe("worker retry hints", () => {
       logger: createLogger("error"),
       router: async () => {
         await handlePullRequest(
-          { db, slack: new FakeSlackClient(), logger: createLogger("error") },
+          { db, slack: new FakeSlackGateway(), logger: createLogger("error") },
           openedPayload,
         );
       },
@@ -251,7 +251,7 @@ describe("worker retry hints", () => {
       logger: createLogger("error"),
       router: async () => {
         await handlePullRequest(
-          { db, slack: new FakeSlackClient(), logger: createLogger("error") },
+          { db, slack: new FakeSlackGateway(), logger: createLogger("error") },
           openedPayload,
         );
       },

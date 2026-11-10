@@ -61,6 +61,7 @@
     }
   },
   "imports": {
-    "#lib": "./src/lib/index.ts"
+    "#lib": "./src/lib/index.ts",
+    "#slack": "./src/slack/index.ts"
   }
 }

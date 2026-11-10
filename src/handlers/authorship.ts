@@ -1,9 +1,9 @@
 import { errMessage } from "#lib";
+import { type DeliveredSlackMessage, SlackApiError, deliverSlackMessage } from "#slack";
 import { type MessageEffectInput, findMessageEffect } from "../db/repositories/messages.ts";
 import { findByRepoNumber } from "../db/repositories/pullRequests.ts";
 import { resolveSlackUser } from "../identity/resolve.ts";
-import { type SlackMessage, isDeadUserTokenError } from "../slack/client.ts";
-import { type DeliveredSlackMessage, deliverSlackMessage } from "../slack/deliver.ts";
+import type { SlackMessage } from "../slack/deliver.ts";
 import type { PrHandlerDeps } from "./pullRequest.ts";
 
 /**
@@ -34,7 +34,7 @@ export async function resolveMessageAuthor(
     });
     return {};
   }
-  const profile = await deps.slack.lookupUserProfile(slackUserId);
+  const profile = await deps.slack.profile(slackUserId);
   const userToken = deps.authorPoster
     ? await deps.authorPoster.getUserToken(slackUserId)
     : undefined;
@@ -69,11 +69,10 @@ export async function deliverAuthoredMessage(
     try {
       return await deliverSlackMessage(deps.db, deps.slack, effect, {
         ...render("user"),
-        authorUserToken: author.userToken,
-        authorUserId: author.slackUserId,
+        poster: { kind: "user", userId: author.slackUserId, token: author.userToken },
       });
     } catch (error) {
-      if (!isDeadUserTokenError(error)) throw error;
+      if (!(error instanceof SlackApiError && error.deadToken)) throw error;
       // The token was revoked/expired: drop it so we don't retry it, then fall
       // through to a bot-authored post under the released effect claim.
       await deps.authorPoster.onInvalidToken(author.slackUserId);
@@ -102,14 +101,12 @@ export async function updateAuthoredMessage(
   const asUser = Boolean(author.userToken && author.slackUserId && deps.authorPoster);
   const content = render(asUser ? "user" : "bot");
   try {
-    await deps.slack.updateMessage({
+    await deps.slack.update(
       channel,
-      ts: slackTs,
-      text: content.text,
-      blocks: content.blocks,
-      images: content.images,
-      authorUserToken: asUser ? author.userToken : undefined,
-    });
+      slackTs,
+      { text: content.text, blocks: content.blocks, images: content.images },
+      asUser ? author.userToken : undefined,
+    );
   } catch (error) {
     deps.logger.warn("failed to sync comment edit to Slack", {
       channel,
@@ -148,11 +145,7 @@ export async function deleteMirroredComment(
   const author = await resolveMessageAuthor(deps, opts.user);
   const asUser = Boolean(author.userToken && author.slackUserId && deps.authorPoster);
   try {
-    await deps.slack.deleteMessage(
-      row.channelId,
-      existing.slackTs,
-      asUser ? author.userToken : undefined,
-    );
+    await deps.slack.remove(row.channelId, existing.slackTs, asUser ? author.userToken : undefined);
   } catch (error) {
     deps.logger.warn("failed to sync comment deletion to Slack", {
       channel: row.channelId,

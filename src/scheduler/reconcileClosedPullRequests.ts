@@ -225,11 +225,11 @@ async function reArchiveDriftedChannels(
     if (!row.channelId) continue;
     const fields = { repoFullName: row.repoFullName, number: row.number, channelId: row.channelId };
     try {
-      const archived = await handler.slack.isChannelArchived(row.channelId);
+      const archived = await handler.slack.isArchived(row.channelId);
       if (archived !== false) continue; // already archived, or unreadable — leave it
       // Empty the channel first (silent) when quiet-archive is configured, then close.
       if (handler.quietArchive) await handler.quietArchive(row.channelId);
-      await handler.slack.archiveChannel(row.channelId);
+      await handler.slack.archive(row.channelId);
       result.reArchived += 1;
       logger.info("re-archived PR channel that drifted open after a late write", fields);
     } catch (error) {

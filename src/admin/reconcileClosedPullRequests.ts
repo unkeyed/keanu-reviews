@@ -1,5 +1,6 @@
 import { pathToFileURL } from "node:url";
 import { createLogger, registerSecrets } from "#lib";
+import { createSlackGateway } from "#slack";
 import { ConfigError, SECRET_KEYS, loadConfig } from "../config.ts";
 import { createDb } from "../db/client.ts";
 import { createInstallationAuth } from "../github/auth.ts";
@@ -7,7 +8,6 @@ import { octokitMintFn } from "../github/octokitAuth.ts";
 import { createPullRequestSnapshotFetcher } from "../github/pullRequestSnapshot.ts";
 import { createServiceHandlers } from "../handlers/deps.ts";
 import { createClosedPullRequestReconciliation } from "../scheduler/reconcileClosedPullRequests.ts";
-import { createWebApiSlackClient } from "../slack/webApiClient.ts";
 
 const USAGE = `Usage: pnpm jobs:reconcile-closed-prs
 
@@ -41,7 +41,7 @@ export async function runReconcileClosedPullRequestsCli(
     const auth = createInstallationAuth(
       octokitMintFn(config.GITHUB_APP_ID, config.GITHUB_APP_PRIVATE_KEY),
     );
-    const slack = createWebApiSlackClient(config.SLACK_BOT_TOKEN);
+    const slack = createSlackGateway(config.SLACK_BOT_TOKEN);
     // Open the pool last so a failure while building clients cannot strand it.
     const database = createDb(config.DATABASE_URL);
     close = database.close;

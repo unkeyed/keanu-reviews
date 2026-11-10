@@ -5,12 +5,12 @@ import type { Db } from "../db/client.ts";
 import { upsertIdentity } from "../db/repositories/identities.ts";
 import { setChannel, updateState, upsertPullRequest } from "../db/repositories/pullRequests.ts";
 import { createTestDb } from "../db/testDb.ts";
-import { FakeSlackClient } from "../testing/fakeSlack.ts";
+import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { type CheckRunPayload, type ChecksDeps, handleCheckRun } from "./checks.ts";
 import { handleReviewRequest } from "./reviewRequest.ts";
 
 let db: Db;
-let slack: FakeSlackClient;
+let slack: FakeSlackGateway;
 let close: () => Promise<void>;
 let ci: CiReadiness;
 
@@ -18,7 +18,7 @@ beforeEach(async () => {
   const t = await createTestDb();
   db = t.db;
   close = () => t.client.close();
-  slack = new FakeSlackClient();
+  slack = new FakeSlackGateway();
   ci = "passing";
 });
 afterEach(() => close());

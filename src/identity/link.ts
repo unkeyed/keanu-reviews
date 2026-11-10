@@ -1,6 +1,6 @@
+import type { SlackGateway } from "#slack";
 import type { Db } from "../db/client.ts";
 import { upsertIdentity } from "../db/repositories/identities.ts";
-import type { SlackClient } from "../slack/client.ts";
 
 /** Resolve a GitHub login to its immutable numeric id (read-only). */
 export type GithubUserFetcher = (
@@ -9,7 +9,7 @@ export type GithubUserFetcher = (
 
 export interface LinkDeps {
   db: Db;
-  slack: SlackClient;
+  slack: SlackGateway;
   fetchGithubUser: GithubUserFetcher;
 }
 
@@ -39,7 +39,7 @@ export async function importIdentities(deps: LinkDeps, rows: ImportRow[]): Promi
     }
     const slackUserId =
       row.slack_user_id ??
-      (row.slack_email ? await deps.slack.lookupUserByEmail(row.slack_email) : undefined);
+      (row.slack_email ? await deps.slack.lookupByEmail(row.slack_email) : undefined);
     if (!slackUserId) {
       result.skipped.push({ row, reason: "no slack user for email" });
       continue;

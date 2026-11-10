@@ -1,4 +1,11 @@
-import type { SlackBlock } from "./client.ts";
+import type { ChatPostMessageArguments } from "@slack/web-api";
+
+type ChatPostMessageWithBlocks = Extract<ChatPostMessageArguments, { blocks: unknown[] }>;
+export type SlackBlock = ChatPostMessageWithBlocks["blocks"][number];
+
+export type MessageImage =
+  | { kind: "embed"; imageUrl: string; sourceUrl: string; alt: string }
+  | { kind: "link"; sourceUrl: string; alt: string };
 
 /**
  * Block Kit builders + sanitization (U6). Comment bodies are untrusted GitHub

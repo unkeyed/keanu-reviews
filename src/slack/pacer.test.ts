@@ -1,38 +1,48 @@
 import { describe, expect, it, vi } from "vitest";
-import { Pacer, withRetry } from "./rateLimiter.ts";
+import { Retry } from "#lib";
+import { SlackApiError } from "./errors.ts";
+import { Pacer, withRateLimitRetry } from "./pacer.ts";
 
-describe("withRetry (429 Retry-After, KTD9)", () => {
+const rateLimited = (retryAfterMs: number) =>
+  new SlackApiError("chat.postMessage", "ratelimited", { retryAfterMs });
+const limits = { maxRetries: 1, maxRetryDelayMs: 5_000 };
+
+describe("withRateLimitRetry (429 Retry-After, KTD9)", () => {
   it("retries after Retry-After on a 429 then succeeds", async () => {
     const sleep = vi.fn(async () => {});
     let calls = 0;
     const fn = vi.fn(async () => {
       calls += 1;
-      if (calls === 1) throw { status: 429, retryAfterSeconds: 3 };
+      if (calls === 1) throw rateLimited(3_000);
       return "ok";
     });
-    const result = await withRetry(fn, { sleep });
+    const result = await withRateLimitRetry(fn, { ...limits, sleep });
     expect(result).toBe("ok");
     expect(sleep).toHaveBeenCalledWith(3000);
     expect(fn).toHaveBeenCalledTimes(2);
   });
 
-  it("gives up after maxRetries and rethrows", async () => {
+  it("gives up after maxRetries and hands the wait to the durable job", async () => {
     const sleep = vi.fn(async () => {});
     const fn = vi.fn(async () => {
-      throw { status: 429, retryAfterSeconds: 1 };
+      throw rateLimited(1_000);
     });
-    await expect(withRetry(fn, { sleep, maxRetries: 2 })).rejects.toMatchObject({ status: 429 });
+    const rejection = withRateLimitRetry(fn, { ...limits, maxRetries: 2, sleep });
+    await expect(rejection).rejects.toBeInstanceOf(Retry);
+    await expect(rejection).rejects.toMatchObject({ retryAfterMs: 1_000 });
     expect(fn).toHaveBeenCalledTimes(3); // initial + 2 retries
   });
 
   it("does not hold a caller lease for an excessive Retry-After", async () => {
     const sleep = vi.fn(async () => {});
-    const rateLimit = { status: 429 as const, retryAfterSeconds: 30 };
     const fn = vi.fn(async () => {
-      throw rateLimit;
+      throw rateLimited(30_000);
     });
 
-    await expect(withRetry(fn, { maxRetryDelayMs: 5_000, sleep })).rejects.toBe(rateLimit);
+    await expect(withRateLimitRetry(fn, { ...limits, sleep })).rejects.toMatchObject({
+      name: "Retry",
+      retryAfterMs: 30_000,
+    });
     expect(fn).toHaveBeenCalledOnce();
     expect(sleep).not.toHaveBeenCalled();
   });
@@ -41,7 +51,7 @@ describe("withRetry (429 Retry-After, KTD9)", () => {
     const fn = vi.fn(async () => {
       throw new Error("boom");
     });
-    await expect(withRetry(fn)).rejects.toThrow("boom");
+    await expect(withRateLimitRetry(fn, limits)).rejects.toThrow("boom");
     expect(fn).toHaveBeenCalledTimes(1);
   });
 });

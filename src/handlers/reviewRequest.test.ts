@@ -7,7 +7,7 @@ import { setChannel, upsertPullRequest } from "../db/repositories/pullRequests.t
 import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createReminderScheduler } from "../scheduler/reminders.ts";
-import { FakeSlackClient } from "../testing/fakeSlack.ts";
+import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { handlePullRequest } from "./pullRequest.ts";
 import {
   type ReviewRequestPayload,
@@ -16,14 +16,14 @@ import {
 } from "./reviewRequest.ts";
 
 let db: Db;
-let slack: FakeSlackClient;
+let slack: FakeSlackGateway;
 let close: () => Promise<void>;
 
 beforeEach(async () => {
   const t = await createTestDb();
   db = t.db;
   close = () => t.client.close();
-  slack = new FakeSlackClient();
+  slack = new FakeSlackGateway();
   const row = await upsertPullRequest(db, {
     repoFullName: "unkey/api",
     number: 1,
@@ -142,14 +142,14 @@ describe("handleReviewRequest (U5)", () => {
       slackUserId: "U7",
       source: "self-link",
     });
-    const post = slack.postMessage.bind(slack);
+    const post = slack.post.bind(slack);
     let fail = true;
-    slack.postMessage = async (message) => {
+    slack.post = async (channel, message, opts) => {
       if (fail) {
         fail = false;
         throw new Error("transient Slack failure");
       }
-      return post(message);
+      return post(channel, message, opts);
     };
 
     await expect(handleReviewRequest(deps(), payload())).rejects.toThrow("transient Slack failure");

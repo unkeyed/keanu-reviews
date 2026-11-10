@@ -1,5 +1,6 @@
 import type { Hono } from "hono";
 import { type Logger, errMessage } from "#lib";
+import type { SlackGateway } from "#slack";
 import type { PrForShaFetcher } from "../ci/status.ts";
 import type { Config } from "../config.ts";
 import type { Db } from "../db/client.ts";
@@ -16,7 +17,6 @@ import {
 } from "../github/users.ts";
 import type { CiReadinessFetcher, ReviewApprovalFetcher } from "../github/users.ts";
 import { createSlackOAuthRoute } from "../routes/slackOAuth.ts";
-import type { SlackClient } from "../slack/client.ts";
 import { quietlyRemoveMembers } from "../slack/memberCleanup.ts";
 import { SLACK_POST_USER_SCOPE, createSlackOAuthClient, hasScope } from "../slack/oauth.ts";
 import { createTokenCipher } from "../slack/tokenCipher.ts";
@@ -41,7 +41,7 @@ export interface ServiceHandlers {
 export function createServiceHandlers(input: {
   config: Config;
   db: Db;
-  slack: SlackClient;
+  slack: SlackGateway;
   logger: Logger;
   auth: InstallationAuth;
 }): ServiceHandlers {

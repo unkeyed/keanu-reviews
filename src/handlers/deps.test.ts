@@ -8,7 +8,7 @@ import { getSlackUserTokenRow, upsertSlackUserToken } from "../db/repositories/s
 import { createTestDb } from "../db/testDb.ts";
 import { SLACK_POST_USER_SCOPE } from "../slack/oauth.ts";
 import { createTokenCipher } from "../slack/tokenCipher.ts";
-import { FakeSlackClient } from "../testing/fakeSlack.ts";
+import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { createServiceHandlers } from "./deps.ts";
 import { handleReviewComment } from "./reviewComment.ts";
 
@@ -34,14 +34,14 @@ const config = loadConfig({
 });
 
 let db: Db;
-let slack: FakeSlackClient;
+let slack: FakeSlackGateway;
 let close: () => Promise<void>;
 
 beforeEach(async () => {
   const t = await createTestDb();
   db = t.db;
   close = () => t.client.close();
-  slack = new FakeSlackClient();
+  slack = new FakeSlackGateway();
 });
 afterEach(() => close());
 
@@ -60,7 +60,7 @@ describe("createServiceHandlers post-as-user", () => {
       slackUserId: "U7",
       source: "self-link",
     });
-    slack.userProfiles.set("U7", { name: "Flo Rider" });
+    slack.profiles.set("U7", { name: "Flo Rider" });
     await upsertSlackUserToken(db, {
       slackUserId: "U7",
       slackTeamId: "T123",
