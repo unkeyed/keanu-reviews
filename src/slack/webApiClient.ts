@@ -13,6 +13,33 @@ import {
 } from "./client.ts";
 import { Pacer, RateLimitedError, type SleepFn, withRetry } from "./rateLimiter.ts";
 
+/**
+ * Every Slack Web API method this service calls, split by the credential that
+ * makes the call. A new method can need a new bot or user scope, which forces
+ * every workspace to reinstall or relink, so architecture.test.ts pins it.
+ */
+export const SLACK_METHODS = {
+  bot: [
+    "chat.delete",
+    "chat.postMessage",
+    "chat.update",
+    "conversations.archive",
+    "conversations.create",
+    "conversations.info",
+    "conversations.invite",
+    "conversations.join",
+    "conversations.list",
+    "conversations.members",
+    "conversations.rename",
+    "conversations.setTopic",
+    "conversations.unarchive",
+    "users.info",
+    "users.lookupByEmail",
+  ],
+  user: ["chat.delete", "chat.postMessage", "chat.update", "conversations.leave"],
+  oauth: ["oauth.v2.access"],
+} as const;
+
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_RATE_LIMIT_RETRIES = 1;
 const MAX_RATE_LIMIT_DELAY_MS = 5_000;

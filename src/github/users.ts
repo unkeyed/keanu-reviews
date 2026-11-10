@@ -197,9 +197,9 @@ export function createCiReadinessFetcher(
   options: GithubRequestOptions = {},
 ): CiReadinessFetcher {
   return async (repoFullName: string, sha: string): Promise<CiReadiness> => {
-    const root = `/repos/${encodedRepoPath(repoFullName)}/commits/${encodeURIComponent(sha)}`;
+    const checkRuns = `/repos/${encodedRepoPath(repoFullName)}/commits/${encodeURIComponent(sha)}/check-runs`;
     const runs = await listCheckRuns(async (page) => {
-      const path = `${root}/check-runs?per_page=100&page=${page}`;
+      const path = `${checkRuns}?per_page=100&page=${page}`;
       const body = await githubGetJson<CheckRunList>(auth, installationId, path, options);
       if (body === undefined || !Array.isArray(body.check_runs)) throw invalidResponse(path);
       return {

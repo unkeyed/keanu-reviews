@@ -1,6 +1,24 @@
 import type { InstallationAuth } from "./auth.ts";
 
 const GITHUB_API_BASE = "https://api.github.com";
+
+/**
+ * Every GitHub request this service makes. Adding a route can require a new
+ * GitHub App permission, which forces every install to re-approve, so
+ * architecture.test.ts pins this list and fails on any path literal not in it.
+ */
+export const GITHUB_ROUTES = [
+  "GET /repos/{owner}/{repo}/pulls/{number}",
+  "GET /repos/{owner}/{repo}/pulls/{number}/reviews",
+  "GET /repos/{owner}/{repo}/commits/{sha}/check-runs",
+  "GET /repos/{owner}/{repo}/commits/{sha}/pulls",
+  "GET /users/{login}",
+  "POST /repos/{owner}/{repo}/issues/{number}/comments",
+  "POST /app/installations/{installation_id}/access_tokens",
+  "GET /user",
+  "GET https://github.com/login/oauth/authorize",
+  "POST https://github.com/login/oauth/access_token",
+] as const;
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 export type GithubApiErrorKind = "http" | "timeout" | "network" | "invalid_response";
