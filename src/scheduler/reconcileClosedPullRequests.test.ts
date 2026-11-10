@@ -1,9 +1,9 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Logger } from "#lib";
+import { scheduleReminder } from "#reminders";
 import type { Db } from "../db/client.ts";
 import { findByRepoNumber, prId } from "../db/repositories/pullRequests.ts";
-import { scheduleReminder } from "../db/repositories/reminders.ts";
 import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import type { InstallationAuth } from "../github/auth.ts";

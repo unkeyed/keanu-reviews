@@ -8,6 +8,7 @@ import {
 } from "#events";
 import { type GithubEmailFetcher, displayName, resolveSlackUser } from "#identity";
 import { type Logger, Retry, errMessage, leaseWaitMs } from "#lib";
+import { cancelForPr } from "#reminders";
 import {
   type Ledger,
   type PrView,
@@ -32,7 +33,6 @@ import {
   releasePullRequestLifecycle,
   setChannel,
 } from "../db/repositories/pullRequests.ts";
-import { cancelForPr } from "../db/repositories/reminders.ts";
 import type { ImageEmbedder } from "../github/attachments.ts";
 import type { PrCommenter } from "../github/comments.ts";
 import type { CiReadinessFetcher } from "../github/users.ts";

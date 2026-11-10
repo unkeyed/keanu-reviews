@@ -8,6 +8,13 @@ import {
   rescheduleOrFailJob,
   resetFailedJob,
 } from "#queue";
+import {
+  cancelForReviewer,
+  claimReminder,
+  isReminderClaimCurrent,
+  listDue,
+  scheduleReminder,
+} from "#reminders";
 import { enqueueTestJob } from "../testing/queue.ts";
 import type { Db } from "./client.ts";
 import {
@@ -19,13 +26,6 @@ import {
   releasePullRequestLifecycle,
   upsertPullRequest,
 } from "./repositories/pullRequests.ts";
-import {
-  cancelForReviewer,
-  claimReminder,
-  isReminderClaimCurrent,
-  listDue,
-  scheduleReminder,
-} from "./repositories/reminders.ts";
 import { jobs, messages, processedDeliveries, reminders } from "./schema.ts";
 import { createTestDb } from "./testDb.ts";
 

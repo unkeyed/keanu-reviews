@@ -1,6 +1,5 @@
 import { and, asc, eq, isNull, lt, lte, or, sql } from "drizzle-orm";
-import type { Db } from "../client.ts";
-import { type ReminderRow, reminders } from "../schema.ts";
+import { type Db, type ReminderRow, reminders } from "#db";
 
 const reminderId = (prId: string, reviewerGithubId: number): string =>
   `${prId}::${reviewerGithubId}`;
