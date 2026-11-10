@@ -2,8 +2,8 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDispatcher } from "#app";
 import { Retry, createLogger } from "#lib";
+import { claimNextJob } from "#queue";
 import type { Db } from "../db/client.ts";
-import { claimNextJob, enqueueJob } from "../db/repositories/jobs.ts";
 import {
   claimPullRequestLifecycle,
   prId,
@@ -16,6 +16,7 @@ import { keys } from "../slack/catalog.ts";
 import { channelSink, claim, createLedger } from "../slack/ledger.ts";
 import { type PullRequestPayload, pullRequestEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
+import { enqueueTestJob } from "../testing/queue.ts";
 import { createWorker, startWorkerLoop } from "./loop.ts";
 
 let db: Db;
@@ -47,7 +48,7 @@ afterEach(async () => {
 
 describe("worker retries", () => {
   it("backs off a failed job, then retains its payload for admin replay", async () => {
-    const job = await enqueueJob(db, {
+    const job = await enqueueTestJob(db, {
       deliveryId: "retry-job",
       event: "pull_request",
       action: "opened",
@@ -82,7 +83,7 @@ describe("worker retries", () => {
   });
 
   it("fails a job whose payload can never parse on the first attempt", async () => {
-    const job = await enqueueJob(db, {
+    const job = await enqueueTestJob(db, {
       deliveryId: "malformed",
       event: "pull_request",
       action: "opened",
@@ -114,7 +115,7 @@ describe("worker retries", () => {
   });
 
   it("does not run a handler beyond the retry budget when reclaiming a crashed attempt", async () => {
-    const job = await enqueueJob(db, {
+    const job = await enqueueTestJob(db, {
       deliveryId: "crashed-final-attempt",
       event: "pull_request",
       action: "opened",
@@ -143,7 +144,7 @@ describe("worker retries", () => {
 
 describe("worker retry hints", () => {
   const enqueue = (deliveryId: string) =>
-    enqueueJob(db, { deliveryId, event: "pull_request", action: "opened", raw: {} });
+    enqueueTestJob(db, { deliveryId, event: "pull_request", action: "opened", raw: {} });
   const availableAt = async (id: string) => {
     const [row] = await db.select().from(jobs).where(eq(jobs.id, id));
     return { status: row?.status, at: row?.availableAt.getTime() };
@@ -311,7 +312,7 @@ describe("worker retry hints", () => {
 
 describe("worker lease", () => {
   it("keeps a job that outlives its lease from being claimed by another worker", async () => {
-    const job = await enqueueJob(db, {
+    const job = await enqueueTestJob(db, {
       deliveryId: "slow-job",
       event: "pull_request",
       action: "opened",

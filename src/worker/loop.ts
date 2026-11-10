@@ -1,12 +1,6 @@
 import { type Logger, Permanent, Retry, errMessage } from "#lib";
+import { claimNextJob, completeJob, failJob, renewJobLease, rescheduleOrFailJob } from "#queue";
 import type { Db } from "../db/client.ts";
-import {
-  claimNextJob,
-  completeJob,
-  failJob,
-  renewJobLease,
-  rescheduleOrFailJob,
-} from "../db/repositories/jobs.ts";
 import type { JobRow } from "../db/schema.ts";
 
 // Lease errors can ask for the full 5-minute PR lifecycle lease. Nothing waits longer.

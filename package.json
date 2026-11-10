@@ -62,8 +62,10 @@
   },
   "imports": {
     "#lib": "./src/lib/index.ts",
+    "#db": "./src/db/index.ts",
     "#events": "./src/events/index.ts",
     "#slack": "./src/slack/index.ts",
+    "#queue": "./src/queue/index.ts",
     "#app": "./src/app/index.ts"
   }
 }

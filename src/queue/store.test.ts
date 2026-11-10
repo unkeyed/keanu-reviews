@@ -1,9 +1,8 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Db } from "../client.ts";
-import { jobs, processedDeliveries } from "../schema.ts";
-import { createTestDb } from "../testDb.ts";
-import { enqueueDeliveryJob, pruneJobHistory } from "./jobs.ts";
+import { type Db, jobs, processedDeliveries } from "#db";
+import { createTestDb } from "../db/testDb.ts";
+import { enqueueDeliveryJob, pruneJobHistory } from "./store.ts";
 
 let db: Db;
 let close: () => Promise<void>;

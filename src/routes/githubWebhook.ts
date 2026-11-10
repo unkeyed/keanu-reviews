@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { Logger } from "#lib";
+import { enqueueDeliveryJob } from "#queue";
 import type { Db } from "../db/client.ts";
-import { enqueueDeliveryJob } from "../db/repositories/jobs.ts";
 import { verifySignature } from "../github/verify.ts";
 
 export interface WebhookDeps {

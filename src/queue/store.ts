@@ -1,7 +1,5 @@
-import { randomUUID } from "node:crypto";
 import { and, asc, eq, isNotNull, isNull, lt, lte, notExists, or } from "drizzle-orm";
-import type { Db } from "../client.ts";
-import { type JobRow, jobs, processedDeliveries } from "../schema.ts";
+import { type Db, type JobRow, jobs, processedDeliveries } from "#db";
 
 export interface JobInput {
   deliveryId: string;
@@ -10,19 +8,11 @@ export interface JobInput {
   raw: unknown;
 }
 
-export async function enqueueJob(db: Db, input: JobInput): Promise<JobRow> {
-  const [row] = await db
-    .insert(jobs)
-    .values({ id: randomUUID(), ...input, status: "pending", attempts: 0 })
-    .returning();
-  return row as JobRow;
-}
-
 /** Atomically reserve a GitHub delivery id and persist its durable job. */
 export async function enqueueDeliveryJob(
   db: Db,
   input: JobInput,
-): Promise<{ isNew: boolean; job?: JobRow }> {
+): Promise<{ isNew: true; job: JobRow } | { isNew: false }> {
   return db.transaction(async (tx) => {
     const marker = await tx
       .insert(processedDeliveries)

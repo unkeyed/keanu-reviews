@@ -1,15 +1,15 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Db } from "./client.ts";
-import { findByGithubId, upsertIdentity } from "./repositories/identities.ts";
 import {
   claimNextJob,
   completeJob,
   enqueueDeliveryJob,
-  enqueueJob,
   rescheduleOrFailJob,
   resetFailedJob,
-} from "./repositories/jobs.ts";
+} from "#queue";
+import { enqueueTestJob } from "../testing/queue.ts";
+import type { Db } from "./client.ts";
+import { findByGithubId, upsertIdentity } from "./repositories/identities.ts";
 import {
   claimPullRequestLifecycle,
   findAllByRepoHeadSha,
@@ -288,7 +288,7 @@ describe("identities", () => {
 
 describe("jobs", () => {
   it("purges raw payload on completion (retention, KTD13)", async () => {
-    const job = await enqueueJob(db, {
+    const job = await enqueueTestJob(db, {
       deliveryId: "d1",
       event: "pull_request",
       action: "opened",
@@ -304,7 +304,7 @@ describe("jobs", () => {
   });
 
   it("reclaims a processing job after its lease expires", async () => {
-    const job = await enqueueJob(db, {
+    const job = await enqueueTestJob(db, {
       deliveryId: "lease-job",
       event: "pull_request",
       action: "opened",
@@ -323,7 +323,7 @@ describe("jobs", () => {
   });
 
   it("fences a stale worker after its processing lease is reclaimed", async () => {
-    const job = await enqueueJob(db, {
+    const job = await enqueueTestJob(db, {
       deliveryId: "fenced-job",
       event: "pull_request",
       action: "opened",
@@ -344,7 +344,7 @@ describe("jobs", () => {
   });
 
   it("retains a terminal payload for one explicit safe replay", async () => {
-    const job = await enqueueJob(db, {
+    const job = await enqueueTestJob(db, {
       deliveryId: "terminal-job",
       event: "pull_request",
       action: "opened",
