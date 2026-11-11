@@ -1,14 +1,8 @@
-import type { Db } from "#db";
-import type { Logger, PrId } from "#lib";
-import { type PrView, type SlackGateway, channelSink, createLedger, keys } from "#slack";
+import type { PrId } from "#lib";
+import { type PrView, channelSink, createLedger, keys } from "#slack";
+import type { PrDeps } from "./converge.ts";
 
-export interface ShippedDeps {
-  db: Db;
-  slack: SlackGateway;
-  logger: Logger;
-  /** Channel ID or name that receives merge announcements; unset disables it. */
-  shippedChannel?: string;
-}
+export type ShippedDeps = Pick<PrDeps, "db" | "slack" | "logger" | "shippedChannel">;
 
 export interface ShippedInput {
   prId: PrId;
