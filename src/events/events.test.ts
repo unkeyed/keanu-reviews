@@ -1,7 +1,14 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { type PrState, type StateClaim, claimFromAction, nextState, parseEvent } from "#events";
+import {
+  type PrState,
+  type StateClaim,
+  claimFromAction,
+  jobPrKeys,
+  nextState,
+  parseEvent,
+} from "#events";
 import { Permanent } from "#lib";
 
 const FIXTURES = join(
@@ -182,5 +189,31 @@ describe("nextState", () => {
   it("never revives a closed or merged PR from a non-lifecycle action", () => {
     expect(nextState("closed", { kind: "open-hint", draft: false })).toBe("closed");
     expect(nextState("merged", { kind: "open-hint", draft: true })).toBe("merged");
+  });
+});
+
+describe("jobPrKeys", () => {
+  const repository = { full_name: "Unkey/API" };
+
+  it("names the one PR a PR, review, review comment or PR comment event is about", () => {
+    const pr = { repository, pull_request: { number: 7 } };
+    expect(jobPrKeys("pull_request", pr)).toEqual(["unkey/api#7"]);
+    expect(jobPrKeys("pull_request_review", pr)).toEqual(["unkey/api#7"]);
+    expect(jobPrKeys("pull_request_review_comment", pr)).toEqual(["unkey/api#7"]);
+    expect(jobPrKeys("issue_comment", { repository, issue: { number: 7 } })).toEqual([
+      "unkey/api#7",
+    ]);
+  });
+
+  it("names every PR a check run lists, and none for a fork's run or a non-PR event", () => {
+    const run = (numbers: number[]) => ({
+      repository,
+      check_run: { pull_requests: numbers.map((number) => ({ number })) },
+    });
+    expect(jobPrKeys("check_run", run([7, 9, 7]))).toEqual(["unkey/api#7", "unkey/api#9"]);
+    expect(jobPrKeys("check_run", run([]))).toEqual([]);
+    expect(jobPrKeys("installation", { repository })).toEqual([]);
+    expect(jobPrKeys("pull_request", null)).toEqual([]);
+    expect(jobPrKeys("pull_request", { repository, pull_request: { number: "7" } })).toEqual([]);
   });
 });

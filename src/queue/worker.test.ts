@@ -16,7 +16,13 @@ import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { convergePullRequest } from "../testing/pr.ts";
 import { drainQueue, enqueueTestJob } from "../testing/queue.ts";
 import { LEASE_MS, claimNextJob } from "./store.ts";
-import { HANDLER_TIMEOUT_MS, MAX_ATTEMPTS, createWorker, startWorker } from "./worker.ts";
+import {
+  type Claimed,
+  HANDLER_TIMEOUT_MS,
+  MAX_ATTEMPTS,
+  createWorker,
+  startWorker,
+} from "./worker.ts";
 
 let db: Db;
 
@@ -290,6 +296,147 @@ describe("worker retry hints", () => {
   });
 });
 
+describe("worker concurrency", () => {
+  /** Enqueue jobs due in the given order, each keyed to a PR number or to none. */
+  const queued = async (...specs: [id: string, pr: number | undefined][]) => {
+    const base = Date.now() - 60_000;
+    for (const [i, [id, pr]] of specs.entries()) {
+      const raw =
+        pr === undefined
+          ? {}
+          : { repository: { full_name: "unkey/api" }, pull_request: { number: pr } };
+      const event = pr === undefined ? "check_run" : "pull_request";
+      await enqueueTestJob(db, { deliveryId: id, event, action: "edited", raw });
+      const at = new Date(base + i);
+      await db.update(jobs).set({ createdAt: at, availableAt: at }).where(eq(jobs.id, id));
+    }
+  };
+  /** Handlers that each run until the test releases them by job id. */
+  const heldJobs = () => {
+    const started: string[] = [];
+    const releases = new Map<string, () => void>();
+    const signals = new Map<string, AbortSignal>();
+    const dispatch = async (job: JobRow, signal: AbortSignal) => {
+      started.push(job.id);
+      signals.set(job.id, signal);
+      await new Promise<void>((resolve) => releases.set(job.id, resolve));
+    };
+    return { dispatch, started, signals, release: (id: string) => releases.get(id)?.() };
+  };
+  const statuses = async () =>
+    Object.fromEntries((await db.select().from(jobs)).map((j) => [j.id, j.status]));
+
+  it("runs different PRs at once and one PR's jobs one at a time, in claim order", async () => {
+    await queued(["a1", 1], ["a2", 1], ["b1", 2], ["u1", undefined]);
+    const held = heldJobs();
+    const loop = startWorker(createWorker(db, quiet(), held.dispatch), quiet(), 4);
+    loop.wake();
+
+    await vi.waitFor(() => expect(held.started).toEqual(["a1", "b1", "u1"]));
+    held.release("b1");
+    held.release("u1");
+    await vi.waitFor(async () => expect((await statuses()).u1).toBe("done"));
+    expect(held.started).toEqual(["a1", "b1", "u1"]);
+
+    held.release("a1");
+    await vi.waitFor(() => expect(held.started).toEqual(["a1", "b1", "u1", "a2"]));
+    held.release("a2");
+    await loop.stop();
+    expect(await statuses()).toEqual({ a1: "done", a2: "done", b1: "done", u1: "done" });
+  });
+
+  it("runs one job at a time with a single slot", async () => {
+    await queued(["a1", 1], ["b1", 2]);
+    const held = heldJobs();
+    const loop = startWorker(createWorker(db, quiet(), held.dispatch), quiet(), 1);
+    loop.wake();
+
+    await vi.waitFor(() => expect(held.started).toEqual(["a1"]));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(held.started).toEqual(["a1"]);
+    held.release("a1");
+    await vi.waitFor(() => expect(held.started).toEqual(["a1", "b1"]));
+    held.release("b1");
+    await loop.stop();
+  });
+
+  it("starts a chained job's timeout at its turn and renews its lease while it waits", async () => {
+    fakeLeaseTimers();
+    await queued(["t1", 1], ["t2", 1]);
+    const held = heldJobs();
+    const worker = createWorker(db, quiet(), held.dispatch);
+    const first = await worker.claim();
+    const second = await worker.claim();
+
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(held.started).toEqual(["t1"]);
+    expect(await claimNextJob(db)).toBeUndefined();
+
+    held.release("t1");
+    await first?.settled;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(held.started).toEqual(["t1", "t2"]);
+    await vi.advanceTimersByTimeAsync(HANDLER_TIMEOUT_MS - 1);
+    expect(held.signals.get("t2")?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await second?.settled;
+    expect(held.signals.get("t2")?.aborted).toBe(true);
+    expect(await row("t2")).toMatchObject({ status: "pending", attempts: 1 });
+    held.release("t2");
+  });
+
+  it("never runs a chained job whose lease another worker took while it waited", async () => {
+    fakeLeaseTimers();
+    await queued(["l1", 1], ["l2", 1]);
+    const held = heldJobs();
+    const warn = vi.fn();
+    const worker = createWorker(db, { ...quiet(), warn }, held.dispatch);
+    const first = await worker.claim();
+    const second = await worker.claim();
+    const stolenAt = new Date(Date.now() + 1);
+    await db.update(jobs).set({ attempts: 2, claimedAt: stolenAt }).where(eq(jobs.id, "l2"));
+
+    await vi.advanceTimersByTimeAsync(LEASE_MS / 3);
+    expect(warn).toHaveBeenCalledWith("job lease lost to another worker", {
+      jobId: "l2",
+      event: "pull_request",
+    });
+    held.release("l1");
+    await first?.settled;
+    await second?.settled;
+
+    expect(held.started).toEqual(["l1"]);
+    expect(await row("l2")).toMatchObject({
+      status: "processing",
+      attempts: 2,
+      claimedAt: stolenAt,
+    });
+  });
+
+  it("stop hands back chained jobs that never ran and waits for the running ones", async () => {
+    await queued(["s1", 1], ["s2", 1], ["s3", 2]);
+    const held = heldJobs();
+    const loop = startWorker(createWorker(db, quiet(), held.dispatch), quiet(), 4);
+    loop.wake();
+    await vi.waitFor(() => expect(held.started).toEqual(["s1", "s3"]));
+
+    let stopped = false;
+    const stopping = loop.stop().then(() => {
+      stopped = true;
+    });
+    await vi.waitFor(async () =>
+      expect(await row("s2")).toMatchObject({ status: "pending", attempts: 0, claimedAt: null }),
+    );
+    expect(stopped).toBe(false);
+
+    held.release("s1");
+    held.release("s3");
+    await stopping;
+    expect(held.started).toEqual(["s1", "s3"]);
+    expect(await statuses()).toEqual({ s1: "done", s2: "pending", s3: "done" });
+  });
+});
+
 /** A handler that runs until the test releases it, recording the signal it got. */
 function heldHandler() {
   let started!: () => void;
@@ -390,38 +537,45 @@ describe("worker lease", () => {
 });
 
 describe("worker loop", () => {
-  const pendingTicks = () => {
+  /** A worker whose claims and jobs finish when the test says. */
+  const pendingClaims = () => {
     const finishers: ((more: boolean) => void)[] = [];
-    const tick = vi.fn(
+    let finishJob: () => void = () => {};
+    const job = new Promise<void>((resolve) => {
+      finishJob = resolve;
+    });
+    const claim = vi.fn(
       () =>
-        new Promise<boolean>((resolve) => {
-          finishers.push(resolve);
+        new Promise<Claimed | undefined>((resolve) => {
+          finishers.push((more) => resolve(more ? { settled: job } : undefined));
         }),
     );
-    return { tick, finish: (more: boolean) => finishers.shift()?.(more) };
+    return { claim, finish: (more: boolean) => finishers.shift()?.(more), finishJob };
   };
   const loopLogger = (): Logger => quiet();
 
   it("does not overlap drains when one poll takes longer than the timer", async () => {
     vi.useFakeTimers();
-    const { tick, finish } = pendingTicks();
-    const loop = startWorker({ tick }, loopLogger());
+    const { claim, finish } = pendingClaims();
+    const loop = startWorker({ claim }, loopLogger());
 
     await vi.advanceTimersByTimeAsync(3_000);
-    expect(tick).toHaveBeenCalledTimes(1);
+    expect(claim).toHaveBeenCalledTimes(1);
 
     finish(false);
     await vi.advanceTimersByTimeAsync(2_000);
-    expect(tick).toHaveBeenCalledTimes(2);
+    expect(claim).toHaveBeenCalledTimes(2);
     finish(false);
     await loop.stop();
   });
 
   it("stop resolves after the in-flight job finishes and claims no further jobs", async () => {
     vi.useFakeTimers();
-    const { tick, finish } = pendingTicks();
-    const loop = startWorker({ tick }, loopLogger());
+    const { claim, finish, finishJob } = pendingClaims();
+    const loop = startWorker({ claim }, loopLogger());
     await vi.advanceTimersByTimeAsync(1_000);
+    finish(true);
+    await vi.advanceTimersByTimeAsync(0);
 
     let stopped = false;
     const stopping = loop.stop().then(() => {
@@ -430,10 +584,10 @@ describe("worker loop", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect(stopped).toBe(false);
 
-    finish(true);
+    finishJob();
     await stopping;
     expect(stopped).toBe(true);
-    expect(tick).toHaveBeenCalledTimes(1);
+    expect(claim).toHaveBeenCalledTimes(1);
   });
 
   it("backs its idle poll off from one second to five, and back to one after work", async () => {
@@ -441,13 +595,13 @@ describe("worker loop", () => {
     let queued = 0;
     const polls: number[] = [];
     const start = Date.now();
-    const tick = vi.fn(async () => {
+    const claim = vi.fn(async () => {
       polls.push(Date.now() - start);
-      if (queued === 0) return false;
+      if (queued === 0) return undefined;
       queued -= 1;
-      return true;
+      return { settled: Promise.resolve() };
     });
-    const loop = startWorker({ tick }, loopLogger());
+    const loop = startWorker({ claim }, loopLogger(), 4);
 
     await vi.advanceTimersByTimeAsync(17_000);
     expect(polls).toEqual([1_000, 3_000, 7_000, 12_000, 17_000]);
@@ -463,28 +617,28 @@ describe("worker loop", () => {
 
   it("drains at once when nudged, even mid-backoff", async () => {
     vi.useFakeTimers();
-    const tick = vi.fn(async () => false);
-    const loop = startWorker({ tick }, loopLogger());
+    const claim = vi.fn(async () => undefined);
+    const loop = startWorker({ claim }, loopLogger(), 4);
     await vi.advanceTimersByTimeAsync(7_000);
-    expect(tick).toHaveBeenCalledTimes(3);
+    expect(claim).toHaveBeenCalledTimes(3);
 
     loop.wake();
     await vi.advanceTimersByTimeAsync(0);
-    expect(tick).toHaveBeenCalledTimes(4);
+    expect(claim).toHaveBeenCalledTimes(4);
     await loop.stop();
   });
 
   it("drains again right after the run in flight when nudged during it", async () => {
     vi.useFakeTimers();
-    const { tick, finish } = pendingTicks();
-    const loop = startWorker({ tick }, loopLogger());
+    const { claim, finish } = pendingClaims();
+    const loop = startWorker({ claim }, loopLogger());
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(tick).toHaveBeenCalledTimes(1);
+    expect(claim).toHaveBeenCalledTimes(1);
 
     loop.wake();
     finish(false);
     await vi.advanceTimersByTimeAsync(0);
-    expect(tick).toHaveBeenCalledTimes(2);
+    expect(claim).toHaveBeenCalledTimes(2);
     finish(false);
     await loop.stop();
   });

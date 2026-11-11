@@ -128,6 +128,17 @@ export async function rescheduleJob(db: Db, job: JobRow, retryAt: Date): Promise
     .where(currentClaim(job));
 }
 
+/**
+ * Hand back a claimed job whose handler never started: pending and due as
+ * before, with the attempt its claim counted refunded.
+ */
+export async function releaseJob(db: Db, job: JobRow): Promise<void> {
+  await db
+    .update(jobs)
+    .set({ status: "pending", claimedAt: null, attempts: sql`${jobs.attempts} - 1` })
+    .where(currentClaim(job));
+}
+
 /** Reset one terminal failed job only when its replay payload is still present. */
 export async function resetFailedJob(db: Db, id: string): Promise<boolean> {
   const rows = await db

@@ -50,7 +50,11 @@ export async function pruneHistory(db: Db, logger: Logger, now = new Date()): Pr
  */
 export function startBackground(ctx: AppContext): { nudge: () => void; stop: () => Promise<void> } {
   const { db, deps, logger } = ctx;
-  const worker = startWorker(createWorker(db, logger, createDispatcher(deps)), logger);
+  const worker = startWorker(
+    createWorker(db, logger, createDispatcher(deps)),
+    logger,
+    ctx.config.WORKER_CONCURRENCY,
+  );
   const reminders = every({
     delayMs: () => ctx.config.REMINDER_SCAN_INTERVAL_MS,
     run: () => scanDue(deps),

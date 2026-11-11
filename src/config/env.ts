@@ -137,6 +137,9 @@ const ConfigSchema = z
     // approved. Fewer approvals keep the normal reminder.
     REMINDER_SUPPRESS_APPROVALS: z.coerce.number().int().positive().default(1),
     REMINDER_SCAN_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
+    // Jobs this process runs at once. Jobs for one PR always run one at a time,
+    // in the order they were claimed.
+    WORKER_CONCURRENCY: z.coerce.number().int().positive().default(4),
     // Reminders are only delivered during this daily window (in REMINDER_WINDOW_TZ).
     // Default 05:00–14:00 Eastern. Start is inclusive, end exclusive; a window that
     // wraps midnight (start > end) is allowed.

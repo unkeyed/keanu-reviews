@@ -37,6 +37,16 @@ describe("loadConfig", () => {
     );
   });
 
+  it("runs four jobs at once by default and takes WORKER_CONCURRENCY as a positive integer", () => {
+    expect(loadConfig(validEnv()).WORKER_CONCURRENCY).toBe(4);
+    expect(loadConfig({ ...validEnv(), WORKER_CONCURRENCY: "1" }).WORKER_CONCURRENCY).toBe(1);
+    for (const bad of ["0", "-2", "1.5", "many"]) {
+      expect(() => loadConfig({ ...validEnv(), WORKER_CONCURRENCY: bad })).toThrowError(
+        /WORKER_CONCURRENCY/,
+      );
+    }
+  });
+
   it("parses THREAD_COMMENTS as a boolean and lets it be disabled", () => {
     expect(loadConfig({ ...validEnv(), THREAD_COMMENTS: "false" }).THREAD_COMMENTS).toBe(false);
     expect(loadConfig({ ...validEnv(), THREAD_COMMENTS: "true" }).THREAD_COMMENTS).toBe(true);
