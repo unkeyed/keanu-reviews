@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { Permanent } from "#lib";
-import type { DomainEvent, GithubActor, MirrorAction, PrSnapshot } from "./types.ts";
+import type { DomainEvent, GithubActor, PrSnapshot } from "./types.ts";
 
 // Only the fields a handler reads are required. Everything else GitHub sends is
 // ignored, so a new or missing optional field never fails a delivery.
@@ -182,7 +182,7 @@ interface EventParser {
   skip?: (raw: Envelope) => string | undefined;
 }
 
-const MIRRORED: ReadonlySet<string> = new Set<MirrorAction>(["created", "edited", "deleted"]);
+const MIRRORED: ReadonlySet<string> = new Set(mirrorAction.options);
 const unhandledMirrorAction = (raw: Envelope) =>
   raw.action && MIRRORED.has(raw.action) ? undefined : "unhandled action";
 

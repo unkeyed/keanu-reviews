@@ -203,12 +203,10 @@ export async function runIdentityImportCli(
       { db: ctx.db, slack: ctx.deps.slack, fetchGithubUser: ctx.fetchGithubUser },
       rows,
     );
-    const skippedByReason = Object.fromEntries(
-      [...new Set(result.skipped.map(({ reason }) => reason))].map((reason) => [
-        reason,
-        result.skipped.filter((skipped) => skipped.reason === reason).length,
-      ]),
-    );
+    const skippedByReason: Record<string, number> = {};
+    for (const { reason } of result.skipped) {
+      skippedByReason[reason] = (skippedByReason[reason] ?? 0) + 1;
+    }
     io.stdout(
       JSON.stringify({
         imported: result.imported,
