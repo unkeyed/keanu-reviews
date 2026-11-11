@@ -39,6 +39,7 @@ export function handlerDeps(
     embedImages: async () => [],
     allowedBots: new Set(),
     threadComments: true,
+    fetchSnapshot: async () => ({ snapshot: undefined, remaining: undefined }),
     authorPoster: undefined,
     ...over,
   };

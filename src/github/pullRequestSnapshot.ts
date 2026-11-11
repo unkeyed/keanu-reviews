@@ -1,4 +1,4 @@
-import type { GithubActor } from "#events";
+import type { GithubActor, PrSnapshot } from "#events";
 import type { Logger } from "#lib";
 import type { InstallationAuth } from "./auth.ts";
 import {
@@ -35,6 +35,24 @@ export interface PullRequestSnapshot {
   headSha: string;
   headRef?: string;
   baseRef?: string;
+}
+
+/** GitHub's REST view of a PR in `repo`, as the domain snapshot a webhook also carries. */
+export function toPrSnapshot(repo: string, snapshot: PullRequestSnapshot): PrSnapshot {
+  return {
+    repo,
+    number: snapshot.number,
+    githubPrId: snapshot.id,
+    title: snapshot.title,
+    url: snapshot.htmlUrl,
+    author: snapshot.user,
+    draft: snapshot.draft,
+    headSha: snapshot.headSha,
+    headRef: snapshot.headRef,
+    baseRef: snapshot.baseRef,
+    updatedAt: snapshot.updatedAt,
+    requestedReviewers: [],
+  };
 }
 
 export interface PullRequestSnapshotFetch {

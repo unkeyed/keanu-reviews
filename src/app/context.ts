@@ -50,7 +50,7 @@ export interface AppContext {
   db: Db;
   /** What every webhook handler, the reminder scan and the daily reconcile read. */
   deps: HandlerDeps;
-  /** GitHub's view of one PR, for the daily reconcile. */
+  /** GitHub's view of one PR, for the daily reconcile; the same reader as `deps.fetchSnapshot`. */
   fetchSnapshot: PullRequestSnapshotFetcher;
   /** GitHub user by login, for the identity import. */
   fetchGithubUser: GithubUserFetcher;
@@ -92,6 +92,7 @@ export function createContext(config: Config): AppContext {
   const userTokens =
     slackOAuth && userTokenAccess({ db, slack, logger, teamId, cipher: slackOAuth.cipher });
 
+  const fetchSnapshot = createPullRequestSnapshotFetcher(auth, installationId, { logger });
   const deps: HandlerDeps = {
     db,
     slack,
@@ -121,6 +122,7 @@ export function createContext(config: Config): AppContext {
     authorPoster: userTokens?.authorPoster,
     allowedBots: config.ALLOWED_BOTS,
     threadComments: config.THREAD_COMMENTS,
+    fetchSnapshot,
   };
 
   const githubOauthCallbackUrl = `${config.PUBLIC_URL}/oauth/github/callback`;
@@ -172,7 +174,7 @@ export function createContext(config: Config): AppContext {
     logger,
     db,
     deps,
-    fetchSnapshot: createPullRequestSnapshotFetcher(auth, installationId, { logger }),
+    fetchSnapshot,
     fetchGithubUser: createGithubUserFetcher(auth, installationId),
     routes,
     close,

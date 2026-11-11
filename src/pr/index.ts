@@ -3,6 +3,7 @@ export { createClosedPullRequestReconciliation } from "./reconcile.ts";
 export {
   type ChannelPr,
   type PrSession,
+  type PrSource,
   PullRequestLifecycleBusyError,
   session,
 } from "./session.ts";

@@ -1,7 +1,7 @@
 import type { GithubActor, IssueCommentEvent, ReviewCommentEvent, Work } from "#events";
-import { shouldSkipActor } from "#github";
+import { shouldSkipActor, toPrSnapshot } from "#github";
 import { type PrId, Retry } from "#lib";
-import { type PrRow, type PrSession, findByRepoNumber, session } from "#pr";
+import { type PrRow, type PrSession, type PrSource, findByRepoNumber, session } from "#pr";
 import { type EffectKey, keys } from "#slack";
 import { type MirrorDeps, commentPresentation, removeMirror, upsertAuthored } from "./author.ts";
 
@@ -95,8 +95,9 @@ async function parentTs(
 }
 
 /**
- * Mirror a PR conversation comment. It carries no PR object to build a channel
- * from, so it waits for the pull_request event that builds one.
+ * Mirror a PR conversation comment. It carries no PR object, so a PR without a
+ * channel yet is read from GitHub and built the way a review comment builds
+ * one from its embedded PR.
  */
 export async function onIssueComment(
   deps: MirrorDeps,
@@ -121,12 +122,12 @@ export async function onIssueComment(
   const action = ev.action;
 
   const pr = await findByRepoNumber(deps.db, ev.repo, ev.number);
-  if (!pr?.channelId) throw new Retry(`PR channel is not ready for ${ev.repo}#${ev.number}`);
   await session(
     deps,
-    locked(pr),
+    pr?.channelId ? locked(pr) : await fromGithub(deps, ev.repo, ev.number),
     async (s) => {
-      const item = { key: keys.issueComment(pr.id, c.id), action, author: c.author, body: c.body };
+      const { id } = await s.channelPr();
+      const item = { key: keys.issueComment(id, c.id), action, author: c.author, body: c.body };
       // GitHub has no threads here, so the comment posts top-level.
       await upsertAuthored(deps, s, item, (author, images) => {
         const { poster, label } = commentPresentation(author);
@@ -146,6 +147,12 @@ export async function onIssueComment(
     },
     signal,
   );
+}
+
+async function fromGithub(deps: MirrorDeps, repo: string, number: number): Promise<PrSource> {
+  const { snapshot } = await deps.fetchSnapshot(repo, number);
+  if (!snapshot) throw new Retry(`PR channel is not ready for ${repo}#${number}`);
+  return { kind: "snapshot", snapshot: toPrSnapshot(repo, snapshot), cause: { kind: "child" } };
 }
 
 /** A deletion never creates a channel or a PR row; without a row there is no key to tombstone. */

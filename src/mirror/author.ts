@@ -1,5 +1,5 @@
 import type { GithubActor } from "#events";
-import type { ImageEmbedder } from "#github";
+import type { ImageEmbedder, PullRequestSnapshotFetcher } from "#github";
 import { resolveSlackUser } from "#identity";
 import { errMessage } from "#lib";
 import type { PrDeps, PrSession } from "#pr";
@@ -25,6 +25,8 @@ export interface MirrorDeps extends PrDeps {
    * comments are always top-level regardless.
    */
   threadComments: boolean;
+  /** GitHub's view of one PR, for a conversation comment that arrives before its channel exists. */
+  fetchSnapshot: PullRequestSnapshotFetcher;
   /**
    * Post-as-user, when Slack user OAuth is configured (undefined otherwise):
    * mirrored comments/reviews are authored with the linked user's own token

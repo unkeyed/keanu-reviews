@@ -442,7 +442,39 @@ describe("onIssueComment (U6)", () => {
     expect(slack.messages).toHaveLength(0);
   });
 
-  it("throws for a PR comment whose parent mapping is not ready", async () => {
+  it("builds a missing channel from GitHub's view of the PR, then mirrors (B2)", async () => {
+    await db.delete(pullRequests);
+    const fetched: string[] = [];
+    const fetchSnapshot = async (repo: string, number: number) => {
+      fetched.push(`${repo}#${number}`);
+      return {
+        snapshot: {
+          id: 1,
+          number: 1,
+          state: "open" as const,
+          merged: false,
+          draft: false,
+          title: "Review me",
+          htmlUrl: "https://github.com/unkey/api/pull/1",
+          updatedAt: "2026-08-11T12:00:00Z",
+          user: { id: 100, login: "oz", isBot: false },
+          headSha: "sha-1",
+        },
+        remaining: 4999,
+      };
+    };
+
+    await onIssueComment(deps({ fetchSnapshot }), issueCommentEvent(issueComment(true)));
+
+    expect(fetched).toEqual(["unkey/api#1"]);
+    expect(slack.channels).toHaveLength(1);
+    const [root, comment] = slack.messages;
+    expect(root?.text).toContain("Review me");
+    expect(comment?.text).toContain("flo");
+    expect(comment?.channel).toBe(slack.channels[0]?.id);
+  });
+
+  it("retries a PR comment whose PR GitHub cannot find yet", async () => {
     await db.delete(pullRequests);
     await expect(onIssueComment(deps(), issueCommentEvent(issueComment(true)))).rejects.toThrow(
       "PR channel is not ready",

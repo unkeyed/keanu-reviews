@@ -1,8 +1,9 @@
-import { type PrSnapshot, isTerminal, reconcileArrivalKey } from "#events";
+import { isTerminal, reconcileArrivalKey } from "#events";
 import {
   GithubRateLimitExhaustedError,
   type PullRequestSnapshot,
   type PullRequestSnapshotFetcher,
+  toPrSnapshot,
 } from "#github";
 import { errMessage } from "#lib";
 import type { PrDeps } from "./converge.ts";
@@ -71,24 +72,6 @@ function outcomeOf(snapshot: PullRequestSnapshot): "merged" | "closed" | undefin
   if (snapshot.merged) return "merged";
   if (snapshot.state === "closed") return "closed";
   return undefined;
-}
-
-/** GitHub's REST view of the PR, in the repository the row tracks. */
-function prSnapshot(row: PrRow, snapshot: PullRequestSnapshot): PrSnapshot {
-  return {
-    repo: row.repoFullName,
-    number: snapshot.number,
-    githubPrId: snapshot.id,
-    title: snapshot.title,
-    url: snapshot.htmlUrl,
-    author: snapshot.user,
-    draft: snapshot.draft,
-    headSha: snapshot.headSha,
-    headRef: snapshot.headRef,
-    baseRef: snapshot.baseRef,
-    updatedAt: snapshot.updatedAt,
-    requestedReviewers: [],
-  };
 }
 
 /**
@@ -299,7 +282,7 @@ async function applySnapshot(
   } as const;
   const handled = await session(
     deps,
-    { kind: "snapshot", snapshot: prSnapshot(fresh, snapshot), cause },
+    { kind: "snapshot", snapshot: toPrSnapshot(fresh.repoFullName, snapshot), cause },
     async (s) => s.converged,
   );
   if (!handled?.accepted) {
