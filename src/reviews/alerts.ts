@@ -37,7 +37,7 @@ export type AlertTrigger =
   | { kind: "check_run" };
 
 interface AlertPolicy {
-  /** A cancelled reminder (review submitted, request removed, PR closed) may start again. */
+  /** An ended reminder (see `ended`) may start a new generation. */
   revive: boolean;
   /**
    * While CI is not ready, record the request on a reminder row, so the alert
@@ -69,7 +69,17 @@ const ABSENT_CI_ATTEMPTS = 4;
 interface Alertable {
   reviewer: Reviewer;
   reminder: ReminderRow | undefined;
+  /** The alert goes out on a new reminder generation: none yet, or a revived one. */
+  restart: boolean;
 }
+
+/**
+ * A request that ended without a review: removed, closed, reviewed, or out
+ * of reminder attempts. A sent reminder has not ended, so a re-request after
+ * the nudge stays quiet.
+ */
+const ended = (reminder: ReminderRow) =>
+  reminder.status === "cancelled" || reminder.status === "failed";
 
 /** pull_request actions after the session converged the channel. */
 export async function onPullRequest(
@@ -187,13 +197,12 @@ async function alertable(
   const out: Alertable[] = [];
   for (const reviewer of reviewers) {
     const reminder = await findReminderForReviewer(deps.db, prId, reviewer.id);
+    const restart = !reminder || (revive && ended(reminder));
     const settled =
-      reminder &&
-      (reminder.status === "cancelled"
-        ? !revive
-        : (await s.sentTs(keys.reviewRequest(prId, reviewer.id, reminder.generation))) !==
-          undefined);
-    if (!settled) out.push({ reviewer, reminder });
+      !restart &&
+      (reminder.status === "cancelled" ||
+        (await s.sentTs(keys.reviewRequest(prId, reviewer.id, reminder.generation))) !== undefined);
+    if (!settled) out.push({ reviewer, reminder, restart });
   }
   return out;
 }
@@ -239,10 +248,10 @@ async function ciAllowsAlert(
 async function recordRequest(
   deps: ReviewDeps,
   prId: PrId,
-  { reviewer, reminder }: Alertable,
+  { reviewer, restart }: Alertable,
   stamp: SourceStamp,
 ): Promise<void> {
-  if (reminder && reminder.status !== "cancelled") return;
+  if (!restart) return;
   await scheduleReminder(deps.db, {
     prId,
     reviewerGithubId: reviewer.id,
@@ -254,26 +263,26 @@ async function recordRequest(
 
 /**
  * Post the alert keyed by the reminder generation, which changes only when a
- * request replaces a cancelled one, so every trigger for one request shares
+ * request replaces an ended one, so every trigger for one request shares
  * one post. The reminder clock restarts in the transaction that records it.
  */
 async function sendAlert(
   deps: ReviewDeps,
   s: PrSession,
   prId: PrId,
-  { reviewer, reminder }: Alertable,
+  { reviewer, reminder, restart }: Alertable,
   stamp: SourceStamp,
 ): Promise<void> {
   let current = reminder;
-  if (!current || current.status === "cancelled") {
+  if (restart || !current) {
     current = await scheduleReminder(deps.db, {
       prId,
       reviewerGithubId: reviewer.id,
       dueAt: hoursAfter(deps, stamp.updatedAt),
       stamp,
     });
-    // A request older than the cancellation does not revive it.
-    if (current.status === "cancelled") return;
+    // A request older than the reminder's end does not revive it.
+    if (ended(current)) return;
   }
   await s.deliver(
     keys.reviewRequest(prId, reviewer.id, current.generation),

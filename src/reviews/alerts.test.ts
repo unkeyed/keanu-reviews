@@ -428,6 +428,35 @@ describe("review requests (U5)", () => {
     expect(slack.messages).toHaveLength(2);
   });
 
+  it("alerts again on a new request after the reminder ran out of attempts", async () => {
+    await linkFlo();
+    await handle(deps(), pullRequestEvent(payload()), nextJob());
+    await db.update(reminders).set({ status: "failed" });
+
+    const later = { ...payload().pull_request, updated_at: "2026-08-11T13:00:00Z" };
+    await handle(deps(), pullRequestEvent(payload({ pull_request: later })), nextJob());
+
+    expect(slack.messages.map((m) => m.text)).toEqual([
+      "Review requested from flo",
+      "Review requested from flo",
+    ]);
+    const [revived] = await reminderRows();
+    expect(revived).toMatchObject({ status: "pending", generation: 2 });
+  });
+
+  it("stays quiet on a re-request after the reminder was sent", async () => {
+    await linkFlo();
+    await handle(deps(), pullRequestEvent(payload()), nextJob());
+    await db.update(reminders).set({ status: "sent" });
+
+    const later = { ...payload().pull_request, updated_at: "2026-08-11T13:00:00Z" };
+    await handle(deps(), pullRequestEvent(payload({ pull_request: later })), nextJob());
+
+    expect(slack.messages).toHaveLength(1);
+    const [sent] = await reminderRows();
+    expect(sent).toMatchObject({ status: "sent", generation: 1 });
+  });
+
   it("restarts the reminder clock when the held alert finally posts", async () => {
     await seedHeadSha();
     await linkFlo();
