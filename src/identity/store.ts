@@ -113,6 +113,16 @@ function secretHash(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("base64url");
 }
 
+/** Record a signed OAuth state's nonce as used. False when it was used before. */
+async function consumeNonce(db: Db, nonce: string, expiresAt: Date): Promise<boolean> {
+  const consumed = await db
+    .insert(oauthStateNonces)
+    .values({ nonceHash: secretHash(nonce), expiresAt })
+    .onConflictDoNothing({ target: oauthStateNonces.nonceHash })
+    .returning({ nonceHash: oauthStateNonces.nonceHash });
+  return consumed.length > 0;
+}
+
 async function deleteExpiredGithubLinkArtifacts(
   db: Db,
   now = new Date(),
@@ -153,15 +163,10 @@ export async function createGithubLinkConfirmation(
   );
 
   return db.transaction(async (tx) => {
-    const transactionDb = tx as unknown as Db;
-    await deleteExpiredGithubLinkArtifacts(transactionDb, now);
-
-    const consumed = await tx
-      .insert(oauthStateNonces)
-      .values({ nonceHash: secretHash(input.nonce), expiresAt: input.stateExpiresAt })
-      .onConflictDoNothing({ target: oauthStateNonces.nonceHash })
-      .returning({ nonceHash: oauthStateNonces.nonceHash });
-    if (consumed.length === 0) return { outcome: "state_replayed" as const };
+    await deleteExpiredGithubLinkArtifacts(tx, now);
+    if (!(await consumeNonce(tx, input.nonce, input.stateExpiresAt))) {
+      return { outcome: "state_replayed" as const };
+    }
 
     // Only the newest completed OAuth flow for a Slack identity remains valid.
     await tx
@@ -198,8 +203,7 @@ export async function confirmGithubLink(
 ): Promise<ConfirmGithubLinkResult> {
   const now = input.now ?? new Date();
   return db.transaction(async (tx) => {
-    const transactionDb = tx as unknown as Db;
-    await deleteExpiredGithubLinkArtifacts(transactionDb, now);
+    await deleteExpiredGithubLinkArtifacts(tx, now);
 
     const [pending] = await tx
       .delete(githubLinkConfirmations)
@@ -214,7 +218,7 @@ export async function confirmGithubLink(
       .returning();
     if (!pending) return { outcome: "invalid_or_expired" as const };
 
-    return linkSelfIdentity(transactionDb, {
+    return linkSelfIdentity(tx, {
       githubUserId: pending.githubUserId,
       githubLogin: pending.githubLogin,
       slackUserId: pending.slackUserId,
@@ -286,13 +290,9 @@ export async function completeSlackTokenAuthorization(
 
   return db.transaction(async (tx) => {
     await tx.delete(oauthStateNonces).where(lte(oauthStateNonces.expiresAt, now));
-
-    const consumed = await tx
-      .insert(oauthStateNonces)
-      .values({ nonceHash: secretHash(input.nonce), expiresAt: input.stateExpiresAt })
-      .onConflictDoNothing({ target: oauthStateNonces.nonceHash })
-      .returning({ nonceHash: oauthStateNonces.nonceHash });
-    if (consumed.length === 0) return { outcome: "state_replayed" as const };
+    if (!(await consumeNonce(tx, input.nonce, input.stateExpiresAt))) {
+      return { outcome: "state_replayed" as const };
+    }
 
     await upsertSlackUserToken(tx, {
       slackUserId: input.slackUserId,

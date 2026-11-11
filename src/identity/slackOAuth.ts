@@ -3,6 +3,7 @@ import type { Db } from "#db";
 import { verifyOAuthState } from "#github";
 import type { Logger, TokenCipher } from "#lib";
 import { SLACK_LEAVE_USER_SCOPE, type SlackOAuthClient, SlackOAuthError, hasScope } from "#slack";
+import { callbackHeaders, callbackPage } from "./callbackPage.ts";
 import { completeSlackTokenAuthorization } from "./store.ts";
 
 export interface SlackOAuthRouteDeps {
@@ -16,25 +17,12 @@ export interface SlackOAuthRouteDeps {
   now?: () => number;
 }
 
-function page(message: string): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Slack quiet-archive setup</title></head><body><main><p>${message}</p></main></body></html>`;
-}
+const page = callbackPage("Slack quiet-archive setup");
 
 export function createSlackOAuthRoute(deps: SlackOAuthRouteDeps): Hono {
   const app = new Hono();
 
-  app.use("/oauth/slack/callback", async (c, next) => {
-    c.header("cache-control", "no-store");
-    c.header("pragma", "no-cache");
-    c.header("referrer-policy", "no-referrer");
-    c.header(
-      "content-security-policy",
-      "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
-    );
-    c.header("x-content-type-options", "nosniff");
-    c.header("x-frame-options", "DENY");
-    await next();
-  });
+  app.use("/oauth/slack/callback", callbackHeaders);
 
   app.get("/oauth/slack/callback", async (c) => {
     const state = verifyOAuthState({

@@ -66,6 +66,14 @@ export function createSlackCommandRoute(deps: SlackCommandDeps): Hono {
     }
     const slackUserId = params.get("user_id");
     if (!slackUserId) return c.json({ error: "missing_user" }, 400);
+    const oauthState = () =>
+      createOAuthState({
+        secret: deps.oauthStateSecret,
+        slackUserId,
+        slackTeamId: deps.slackTeamId,
+        now: deps.now,
+        randomBytes: deps.randomBytes,
+      });
 
     // `/link-slack` grants the user token that lets us (a) post your mirrored
     // comments/reviews as you, and (b) make you leave PR channels quietly before
@@ -77,17 +85,10 @@ export function createSlackCommandRoute(deps: SlackCommandDeps): Hono {
           text: "Quiet archiving isn't configured on this workspace.",
         });
       }
-      const slackState = createOAuthState({
-        secret: deps.oauthStateSecret,
-        slackUserId,
-        slackTeamId: deps.slackTeamId,
-        now: deps.now,
-        randomBytes: deps.randomBytes,
-      });
       const slackAuthorizeUrl = createSlackAuthorizeUrl({
         clientId: deps.slackOauthClientId,
         callbackUrl: deps.slackOauthCallbackUrl,
-        state: slackState,
+        state: oauthState(),
       });
       return c.json({
         response_type: "ephemeral",
@@ -129,17 +130,10 @@ export function createSlackCommandRoute(deps: SlackCommandDeps): Hono {
       });
     }
 
-    const state = createOAuthState({
-      secret: deps.oauthStateSecret,
-      slackUserId,
-      slackTeamId: deps.slackTeamId,
-      now: deps.now,
-      randomBytes: deps.randomBytes,
-    });
     const authorizeUrl = createGithubAuthorizeUrl({
       clientId: deps.githubOauthClientId,
       callbackUrl: deps.githubOauthCallbackUrl,
-      state,
+      state: oauthState(),
     });
     return c.json({
       response_type: "ephemeral",
