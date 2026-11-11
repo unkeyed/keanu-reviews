@@ -76,7 +76,8 @@ GitHub App webhook  ──►  /webhooks/github  ──►  jobs table  ──�
 - **Ack-fast, process-async.** The webhook route verifies the signature,
   authorizes the installation, deduplicates the delivery, persists a job, and
   returns `2xx` well within GitHub's timeout. A worker processes the job later, so
-  slow Slack calls never trigger GitHub retries.
+  slow Slack calls never trigger GitHub retries. A delivery no handler acts on,
+  such as a check run that has not completed, is acknowledged without a job.
 - **Idempotent & ordered.** PR state is a function of the latest known facts, not
   event arrival order, and every Slack side effect is keyed so retries and
   redeliveries never double-post.

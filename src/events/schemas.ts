@@ -220,3 +220,14 @@ function invalid(event: string, error: z.ZodError): Permanent {
   );
   return new Permanent(`invalid ${event} payload`, { issues: fields });
 }
+
+/** A malformed payload is queued, not ignored, so its job fails where an operator can see it. */
+export function ignoredReason(event: string, raw: unknown): string | undefined {
+  try {
+    const parsed = parseEvent(event, raw);
+    return parsed.kind === "ignored" ? parsed.reason : undefined;
+  } catch (err) {
+    if (err instanceof Permanent) return undefined;
+    throw err;
+  }
+}
