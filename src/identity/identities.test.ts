@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "#db";
 import { createTestDb } from "../db/testDb.ts";
+import { createGithubEmailFetcher } from "../github/users.ts";
+import { FakeSlackGateway } from "../testing/fakeSlack.ts";
+import { resolveSlackUser } from "./resolve.ts";
 import { findSlackUsersByGithubLogins, upsertIdentity } from "./store.ts";
 
 let db: Db;
@@ -59,5 +62,26 @@ describe("findSlackUsersByGithubLogins", () => {
         ["bob", "Ubob"],
       ]),
     );
+  });
+});
+
+describe("resolveSlackUser", () => {
+  it("resolves a user linked after a cached miss at once", async () => {
+    const auth = { getToken: async () => "token", invalidate: () => {} };
+    const fetchGithubEmail = createGithubEmailFetcher(auth, "42", {
+      fetch: async () => Response.json({ email: null }),
+    });
+    const deps = { db, slack: new FakeSlackGateway(), fetchGithubEmail };
+    const oz = { githubId: 100, login: "oz" };
+
+    expect(await resolveSlackUser(deps, oz)).toBeUndefined();
+    await upsertIdentity(db, {
+      githubUserId: 100,
+      githubLogin: "oz",
+      slackUserId: "U100",
+      source: "self-link",
+    });
+
+    expect(await resolveSlackUser(deps, oz)).toBe("U100");
   });
 });

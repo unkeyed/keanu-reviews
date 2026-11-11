@@ -724,7 +724,7 @@ describe("Slack Web API adapter", () => {
     });
   });
 
-  it("resolves a #shipped target: ids pass through, a name is looked up once and the hit kept", async () => {
+  it("resolves a #shipped target: ids pass through, a miss is kept five minutes, a hit for good", async () => {
     const web = fakeWebApi();
     web.conversations.list
       .mockResolvedValueOnce({ channels: [], response_metadata: { next_cursor: "" } })
@@ -732,12 +732,18 @@ describe("Slack Web API adapter", () => {
         channels: [{ id: "C77", name: "shipped" }],
         response_metadata: { next_cursor: "" },
       });
-    const slack = createSlackGateway("unused", { web });
+    let now = 1_000_000;
+    const slack = createSlackGateway("unused", { web, now: () => now });
 
     await expect(slack.resolveChannel("C0SHIPPED")).resolves.toBe("C0SHIPPED");
     expect(web.conversations.list).not.toHaveBeenCalled();
     await expect(slack.resolveChannel("#shipped")).resolves.toBeUndefined();
+    now += 5 * 60_000 - 1;
+    await expect(slack.resolveChannel("#shipped")).resolves.toBeUndefined();
+    expect(web.conversations.list).toHaveBeenCalledTimes(1);
+    now += 1;
     await expect(slack.resolveChannel("#shipped")).resolves.toBe("C77");
+    now += 60 * 60_000;
     await expect(slack.resolveChannel("#shipped")).resolves.toBe("C77");
     expect(web.conversations.list).toHaveBeenCalledTimes(2);
     expect(web.conversations.list).toHaveBeenLastCalledWith(
@@ -965,8 +971,42 @@ describe("Slack user lookup", () => {
     const slack = createSlackGateway("unused", { web });
 
     await expect(slack.profile("U7")).resolves.toEqual({ name: "jperkins" });
-    await expect(slack.profile("U7")).resolves.toEqual({ name: "James Perkins" });
+    await expect(slack.profile("U8")).resolves.toEqual({ name: "James Perkins" });
     expect(web.users.info).toHaveBeenCalledWith({ user: "U7" });
+  });
+
+  it("reads a user's profile at most once per five minutes, and never keeps a failure", async () => {
+    const web = fakeWebApi();
+    web.users.info
+      .mockRejectedValueOnce({ data: { error: "invalid_auth" } })
+      .mockResolvedValueOnce({ user: { profile: { display_name: "flo" } } })
+      .mockResolvedValueOnce({ user: { profile: { display_name: "Flo" } } });
+    let now = 1_000_000;
+    const slack = createSlackGateway("unused", { web, now: () => now });
+
+    await expect(slack.profile("U7")).rejects.toMatchObject({ code: "invalid_auth" });
+    await expect(slack.profile("U7")).resolves.toEqual({ name: "flo" });
+    now += 5 * 60_000 - 1;
+    await expect(slack.profile("U7")).resolves.toEqual({ name: "flo" });
+    expect(web.users.info).toHaveBeenCalledTimes(2);
+    now += 1;
+    await expect(slack.profile("U7")).resolves.toEqual({ name: "Flo" });
+    expect(web.users.info).toHaveBeenCalledTimes(3);
+  });
+
+  it("remembers an email with no Slack user for five minutes", async () => {
+    const web = fakeWebApi();
+    web.users.lookupByEmail
+      .mockRejectedValueOnce({ data: { error: "users_not_found" } })
+      .mockResolvedValueOnce({ user: { id: "U9" } });
+    let now = 1_000_000;
+    const slack = createSlackGateway("unused", { web, now: () => now });
+
+    await expect(slack.lookupByEmail("new@example.com")).resolves.toBeUndefined();
+    await expect(slack.lookupByEmail("new@example.com")).resolves.toBeUndefined();
+    expect(web.users.lookupByEmail).toHaveBeenCalledTimes(1);
+    now += 5 * 60_000;
+    await expect(slack.lookupByEmail("new@example.com")).resolves.toBe("U9");
   });
 
   it("returns undefined for an unknown user but rethrows other errors", async () => {
@@ -977,7 +1017,7 @@ describe("Slack user lookup", () => {
     const slack = createSlackGateway("unused", { web });
 
     await expect(slack.profile("U0")).resolves.toBeUndefined();
-    await expect(slack.profile("U0")).rejects.toMatchObject({ code: "invalid_auth" });
+    await expect(slack.profile("U1")).rejects.toMatchObject({ code: "invalid_auth" });
   });
 
   it("resolves a profile name and avatar for authoring comments as the user", async () => {

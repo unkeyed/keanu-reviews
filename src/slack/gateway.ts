@@ -1,5 +1,5 @@
 import { ErrorCode, WebClient, type WebClientOptions } from "@slack/web-api";
-import type { ClientMsgId } from "#lib";
+import { type ClientMsgId, ttlCache } from "#lib";
 import {
   type MessageImage,
   SLACK_SECTION_TEXT_LIMIT,
@@ -123,6 +123,13 @@ export interface SlackGatewayOptions {
 }
 
 const REQUEST_TIMEOUT_MS = 10_000;
+/**
+ * Profiles, email matches and #shipped misses are read again after five
+ * minutes, so a new Slack account, a renamed user or a newly created #shipped
+ * shows up that late. Errors are never kept.
+ */
+const LOOKUP_CACHE_MS = 5 * 60_000;
+const LOOKUP_CACHE_ENTRIES = 5_000;
 const MAX_RATE_LIMIT_RETRIES = 1;
 const MAX_RATE_LIMIT_DELAY_MS = 5_000;
 
@@ -327,6 +334,10 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
   const postPacer = new Pacer(1000, options.sleep, options.now);
   const createPacer = new Pacer(3000, options.sleep, options.now);
   const resolvedChannels = new Map<string, string>();
+  const cached = { ttlMs: LOOKUP_CACHE_MS, maxEntries: LOOKUP_CACHE_ENTRIES, now: options.now };
+  const channelLookups = ttlCache<string, string | undefined>(cached);
+  const emailLookups = ttlCache<string, string | undefined>(cached);
+  const profiles = ttlCache<string, SlackProfile | undefined>(cached);
 
   const bot = (method: BotMethod, args: Record<string, unknown>) => callApi(web, method, args);
   const asUser = (userToken: string, method: UserMethod, args: Record<string, unknown>) =>
@@ -517,8 +528,11 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
       const cached = resolvedChannels.get(idOrName);
       if (cached) return cached;
       // A name lookup pages through every public channel, archived PR channels
-      // included, so a hit is kept for the life of the gateway.
-      const channelId = await findChannelByName(idOrName.replace(/^#/, ""));
+      // included, so a hit is kept for the life of the gateway and a miss for
+      // five minutes.
+      const channelId = await channelLookups.get(idOrName, () =>
+        findChannelByName(idOrName.replace(/^#/, "")),
+      );
       if (channelId) resolvedChannels.set(idOrName, channelId);
       return channelId;
     },
@@ -662,51 +676,56 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
         }),
       ),
     lookupByEmail: (email) =>
-      call(async () => {
-        try {
-          const result = (await bot("users.lookupByEmail", { email })) as {
-            user?: { id?: unknown };
-          };
-          return requireNonEmptyString(
-            result?.user?.id,
-            "users.lookupByEmail",
-            "users.lookupByEmail user ID",
-          );
-        } catch (error) {
-          // A legitimate miss; every other error is operational.
-          if (error instanceof SlackApiError && error.code === "users_not_found") return undefined;
-          throw error;
-        }
-      }),
+      emailLookups.get(email, () =>
+        call(async () => {
+          try {
+            const result = (await bot("users.lookupByEmail", { email })) as {
+              user?: { id?: unknown };
+            };
+            return requireNonEmptyString(
+              result?.user?.id,
+              "users.lookupByEmail",
+              "users.lookupByEmail user ID",
+            );
+          } catch (error) {
+            // A legitimate miss; every other error is operational.
+            if (error instanceof SlackApiError && error.code === "users_not_found")
+              return undefined;
+            throw error;
+          }
+        }),
+      ),
     profile: (user) =>
-      call(async () => {
-        try {
-          const result = (await bot("users.info", { user })) as {
-            user?: {
-              name?: string;
-              real_name?: string;
-              profile?: {
-                display_name?: string;
+      profiles.get(user, () =>
+        call(async () => {
+          try {
+            const result = (await bot("users.info", { user })) as {
+              user?: {
+                name?: string;
                 real_name?: string;
-                image_72?: string;
-                image_48?: string;
+                profile?: {
+                  display_name?: string;
+                  real_name?: string;
+                  image_72?: string;
+                  image_48?: string;
+                };
               };
             };
-          };
-          const p = result?.user?.profile;
-          const name =
-            p?.display_name?.trim() ||
-            p?.real_name?.trim() ||
-            result?.user?.real_name?.trim() ||
-            result?.user?.name?.trim() ||
-            undefined;
-          const iconUrl = p?.image_72?.trim() || p?.image_48?.trim() || undefined;
-          if (!name && !iconUrl) return undefined;
-          return { name, iconUrl };
-        } catch (error) {
-          if (error instanceof SlackApiError && error.code === "user_not_found") return undefined;
-          throw error;
-        }
-      }),
+            const p = result?.user?.profile;
+            const name =
+              p?.display_name?.trim() ||
+              p?.real_name?.trim() ||
+              result?.user?.real_name?.trim() ||
+              result?.user?.name?.trim() ||
+              undefined;
+            const iconUrl = p?.image_72?.trim() || p?.image_48?.trim() || undefined;
+            if (!name && !iconUrl) return undefined;
+            return { name, iconUrl };
+          } catch (error) {
+            if (error instanceof SlackApiError && error.code === "user_not_found") return undefined;
+            throw error;
+          }
+        }),
+      ),
   };
 }

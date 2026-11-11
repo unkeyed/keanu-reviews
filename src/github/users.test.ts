@@ -41,6 +41,27 @@ describe("GitHub API fetchers", () => {
     });
   });
 
+  it("reads a login's public email at most once per five minutes, a private one too", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const fetchFn = vi.fn(async (url: string | URL | Request) =>
+        jsonResponse(200, { email: String(url).endsWith("/ghost") ? null : "oz@example.com" }),
+      );
+      const fetchEmail = createGithubEmailFetcher(createAuth(), "42", { fetch: fetchFn });
+
+      for (let i = 0; i < 3; i++) {
+        expect(await fetchEmail("oz")).toBe("oz@example.com");
+        expect(await fetchEmail("ghost")).toBeUndefined();
+      }
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+      vi.setSystemTime(Date.now() + 5 * 60_000);
+      await fetchEmail("ghost");
+      expect(fetchFn).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("invalidates the installation token and retries once after a 401", async () => {
     const auth = createAuth(["stale-token", "fresh-token"]);
     const fetchFn = vi

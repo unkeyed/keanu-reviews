@@ -1,3 +1,4 @@
+import { ttlCache } from "#lib";
 import type { InstallationAuth } from "./auth.ts";
 import {
   type CiCheckRun,
@@ -36,6 +37,9 @@ export type PullRequestFetcher = (
 
 export { GithubApiError } from "./http.ts";
 
+const EMAIL_CACHE_MS = 5 * 60_000;
+const EMAIL_CACHE_ENTRIES = 5_000;
+
 /** Most pages (of 100) read from one paged GitHub list. */
 const PAGE_LIMIT = 10;
 
@@ -53,20 +57,27 @@ function invalidResponse(path: string): GithubApiError {
  * Production GitHub email fetcher (U5). Reads a user's public profile via
  * `GET /users/{login}`. This is a read — it never writes to GitHub, so it stays
  * within the one-way boundary (R10). Returns undefined when the email is private.
+ * Each login is read at most once per five minutes; an unlinked author with a
+ * private email is otherwise read on every event of their PR.
  */
 export function createGithubEmailFetcher(
   auth: InstallationAuth,
   installationId: string,
   options: GithubRequestOptions = {},
 ): GithubEmailFetcher {
-  return async (login: string): Promise<string | undefined> => {
-    const path = `/users/${encodeURIComponent(login)}`;
-    const body = await githubGetJson<GithubEmailResponse>(auth, installationId, path, options);
-    if (body === undefined) return undefined;
-    if (body.email === null) return undefined;
-    if (typeof body.email !== "string") throw invalidResponse(path);
-    return body.email;
-  };
+  const emails = ttlCache<string, string | undefined>({
+    ttlMs: EMAIL_CACHE_MS,
+    maxEntries: EMAIL_CACHE_ENTRIES,
+  });
+  return (login) =>
+    emails.get(login.toLowerCase(), async () => {
+      const path = `/users/${encodeURIComponent(login)}`;
+      const body = await githubGetJson<GithubEmailResponse>(auth, installationId, path, options);
+      if (body === undefined) return undefined;
+      if (body.email === null) return undefined;
+      if (typeof body.email !== "string") throw invalidResponse(path);
+      return body.email;
+    });
 }
 
 /** Production GitHub user fetcher (U9): resolve a login to its immutable id. */
