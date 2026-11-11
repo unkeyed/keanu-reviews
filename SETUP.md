@@ -286,8 +286,8 @@ Make sure your `PUBLIC_URL` actually routes to the running process (tunnel up, o
 deployed). Then **open a test PR** in a watched repo. Within a few seconds you
 should see:
 
-- a new channel named like `pr-<repo-slug>-<number>-<title-slug>`
-  (e.g. `pr-unkey-api-6949-configure-amp-orb-setup-and-service-portals`), with a
+- a new channel named like `pr-<number>-<author>-<repo-slug>-<title-slug>`
+  (e.g. `pr-6949-octocat-unkey-api-configure-amp-orb-setup-and-service-portals`), with a
   **topic** like `PR 6949: octocat wants to merge into main from feature/x`,
 - an opening message describing the PR,
 - the author invited (once they're linked — see Step 7).
