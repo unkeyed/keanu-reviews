@@ -216,6 +216,9 @@ export const jobs = pgTable(
     claimedAt: timestamp("claimed_at", { withTimezone: true }), // single-writer lease (KTD10)
     availableAt: timestamp("available_at", { withTimezone: true }).notNull().defaultNow(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    // The PRs this job touches (`jobPrKeys`). A claim skips a job while a live
+    // job shares one of its lanes, so each PR's events apply one at a time.
+    lanes: text("lanes").array().notNull().default([]),
   },
   (t) => ({
     statusCreatedIdx: index("jobs_status_created_idx").on(t.status, t.availableAt, t.createdAt),

@@ -1,5 +1,7 @@
-import { and, asc, eq, isNotNull, isNull, lt, lte, notExists, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, isNotNull, isNull, lt, lte, notExists, or, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { type Db, type JobRow, jobs, processedDeliveries } from "#db";
+import { jobPrKeys } from "#events";
 
 export const LEASE_MS = 60_000;
 
@@ -39,6 +41,7 @@ export async function enqueueDeliveryJob(
           claimedAt: sql`null::timestamptz`.as("claimed_at"),
           availableAt: sql`now()`.as("available_at"),
           createdAt: sql`now()`.as("created_at"),
+          lanes: sql`${sql.param(jobPrKeys(input.event, input.raw))}::text[]`.as("lanes"),
         })
         .from(marker),
     )
@@ -46,19 +49,34 @@ export async function enqueueDeliveryJob(
   return job ? { isNew: true, job: job as JobRow } : { isNew: false };
 }
 
+const running = alias(jobs, "running");
+
 export async function claimNextJob(db: Db): Promise<JobRow | undefined> {
   const now = new Date();
   const leaseExpiredAt = new Date(now.getTime() - LEASE_MS);
+  const laneBusy = db
+    .select({ id: running.id })
+    .from(running)
+    .where(
+      and(
+        eq(running.status, "processing"),
+        gt(running.claimedAt, leaseExpiredAt),
+        sql`${running.lanes} && ${jobs.lanes}`,
+      ),
+    );
   const next = db
     .select({ id: jobs.id })
     .from(jobs)
     .where(
-      or(
-        and(eq(jobs.status, "pending"), lte(jobs.availableAt, now)),
-        and(
-          eq(jobs.status, "processing"),
-          or(isNull(jobs.claimedAt), lte(jobs.claimedAt, leaseExpiredAt)),
+      and(
+        or(
+          and(eq(jobs.status, "pending"), lte(jobs.availableAt, now)),
+          and(
+            eq(jobs.status, "processing"),
+            or(isNull(jobs.claimedAt), lte(jobs.claimedAt, leaseExpiredAt)),
+          ),
         ),
+        notExists(laneBusy),
       ),
     )
     .orderBy(asc(jobs.availableAt), asc(jobs.createdAt))

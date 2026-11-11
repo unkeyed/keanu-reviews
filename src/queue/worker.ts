@@ -1,5 +1,4 @@
 import type { Db, JobRow } from "#db";
-import { jobPrKeys } from "#events";
 import { type Logger, type Loop, Permanent, RateLimited, Retry, errMessage, every } from "#lib";
 import { PULL_REQUEST_LIFECYCLE_LEASE_MS } from "#pr";
 import { MESSAGE_LEASE_MS } from "#slack";
@@ -37,19 +36,12 @@ export interface Worker {
 type Outcome =
   | { kind: "ran"; claim: JobRow; ok: true }
   | { kind: "ran"; claim: JobRow; ok: false; error: unknown }
-  | { kind: "lost" }
-  | { kind: "released" };
+  | { kind: "lost" };
 
 const NEVER = new AbortController().signal;
 
 export function createWorker(db: Db, logger: Logger, dispatch: Dispatch): Worker {
-  const tails = new Map<string, Promise<void>>();
-
-  const runLeased = async (
-    job: JobRow,
-    turn: Promise<void>,
-    draining: AbortSignal,
-  ): Promise<Outcome> => {
+  const runLeased = async (job: JobRow): Promise<Outcome> => {
     const controller = new AbortController();
     let claim = job;
     let lost = false;
@@ -77,17 +69,6 @@ export function createWorker(db: Db, logger: Logger, dispatch: Dispatch): Worker
       await renewing;
     };
 
-    await untilAborted(turn, AbortSignal.any([controller.signal, draining])).catch(() => {});
-    if (lost) {
-      await stopLease();
-      return { kind: "lost" };
-    }
-    if (draining.aborted) {
-      await stopLease();
-      await releaseJob(db, claim);
-      return { kind: "released" };
-    }
-
     const timeout = setTimeout(() => {
       controller.abort(new Error(`job handler timed out after ${HANDLER_TIMEOUT_MS}ms`));
     }, HANDLER_TIMEOUT_MS);
@@ -104,12 +85,16 @@ export function createWorker(db: Db, logger: Logger, dispatch: Dispatch): Worker
     return lost ? { kind: "lost" } : { kind: "ran", claim, ...result };
   };
 
-  const settle = async (job: JobRow, turn: Promise<void>, draining: AbortSignal) => {
+  const settle = async (job: JobRow, draining: AbortSignal) => {
+    if (draining.aborted) {
+      await releaseJob(db, job);
+      return;
+    }
     if (job.attempts > MAX_ATTEMPTS) {
       await failJob(db, job);
       return;
     }
-    const outcome = await runLeased(job, turn, draining);
+    const outcome = await runLeased(job);
     if (outcome.kind !== "ran") return;
     const { claim } = outcome;
     if (outcome.ok) {
@@ -156,22 +141,10 @@ export function createWorker(db: Db, logger: Logger, dispatch: Dispatch): Worker
     else await failJob(db, claim);
   };
 
-  const chainBehindPr = (job: JobRow, draining: AbortSignal): Promise<void> => {
-    const keys = jobPrKeys(job.event, job.raw);
-    const turn = Promise.all(keys.map((key) => tails.get(key))).then(() => undefined);
-    const settled = settle(job, turn, draining);
-    const tail = Promise.all([turn, settled.catch(() => undefined)]).then(() => undefined);
-    for (const key of keys) tails.set(key, tail);
-    void tail.then(() => {
-      for (const key of keys) if (tails.get(key) === tail) tails.delete(key);
-    });
-    return settled;
-  };
-
   const claim = async (draining = NEVER): Promise<Claimed | undefined> => {
     const job = await claimNextJob(db);
     if (!job) return undefined;
-    return { settled: chainBehindPr(job, draining) };
+    return { settled: settle(job, draining) };
   };
 
   return { claim };
@@ -193,9 +166,13 @@ export function startWorker(worker: Worker, logger: Logger, concurrency = 1): Lo
         const claimed = await worker.claim(draining.signal);
         if (!claimed) break;
         worked = true;
+        // A settled job can free the next job in its PR lane, so poll now rather than after the idle backoff.
         const settled: Promise<void> = claimed.settled
           .catch((err) => logger.error("worker drain failed", { err: errMessage(err) }))
-          .finally(() => inFlight.delete(settled));
+          .finally(() => {
+            inFlight.delete(settled);
+            loop.wake();
+          });
         inFlight.add(settled);
       }
       idleMs = worked ? IDLE_MIN_MS : Math.min(IDLE_MAX_MS, idleMs * 2);

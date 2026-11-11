@@ -89,6 +89,21 @@ describe("enqueueDeliveryJob", () => {
     expect(job.availableAt.getTime()).toBe(job.createdAt.getTime());
   });
 
+  it("stores the PR lanes the delivery touches", async () => {
+    const repository = { full_name: "Unkey/API" };
+    const lanesOf = async (deliveryId: string, event: string, raw: unknown) => {
+      await enqueueDeliveryJob(db, { deliveryId, event, action: null, raw });
+      return (await row(deliveryId))?.lanes;
+    };
+
+    expect(await lanesOf("comment", "issue_comment", { repository, issue: { number: 7 } })).toEqual(
+      ["unkey/api#7"],
+    );
+    const run = { repository, check_run: { pull_requests: [{ number: 7 }, { number: 9 }] } };
+    expect(await lanesOf("run", "check_run", run)).toEqual(["unkey/api#7", "unkey/api#9"]);
+    expect(await lanesOf("install", "installation", { repository })).toEqual([]);
+  });
+
   it("stores neither a marker nor a job for a duplicate delivery", async () => {
     await enqueue("d-dup", { first: true });
 
@@ -182,6 +197,72 @@ describe("claimNextJob", () => {
     const both = await Promise.all([claimNextJob(db), claimNextJob(db), claimNextJob(db)]);
 
     expect(both.map((job) => job?.id).sort()).toEqual(["a", "b", undefined]);
+  });
+});
+
+describe("claimNextJob lanes", () => {
+  const repository = { full_name: "unkey/api" };
+  const onPr = async (id: string, number: number) => {
+    await enqueueTestJob(db, {
+      deliveryId: id,
+      event: "pull_request",
+      action: "edited",
+      raw: { repository, pull_request: { number } },
+    });
+  };
+  const ids = async () => {
+    const order: string[] = [];
+    for (let job = await claimNextJob(db); job; job = await claimNextJob(db)) order.push(job.id);
+    return order;
+  };
+
+  it("holds a PR's next job back while its current one runs, and lets other PRs through", async () => {
+    await onPr("a1", 1);
+    await onPr("a2", 1);
+    await onPr("b1", 2);
+    await enqueue("no-pr");
+
+    expect(await ids()).toEqual(["a1", "b1", "no-pr"]);
+
+    await completeJob(db, claimed(await row("a1")));
+    expect(await ids()).toEqual(["a2"]);
+  });
+
+  it("claims a PR's next job once the running one's lease expires", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+    const at = (id: string, ms: number) =>
+      db
+        .update(jobs)
+        .set({ availableAt: new Date(now.getTime() - ms) })
+        .where(eq(jobs.id, id));
+    await onPr("crashed", 1);
+    await at("crashed", 1_000);
+    expect((await claimNextJob(db))?.id).toBe("crashed");
+    await onPr("next", 1);
+    await at("next", 2_000);
+    expect(await claimNextJob(db)).toBeUndefined();
+
+    vi.setSystemTime(new Date(now.getTime() + LEASE_MS));
+    expect((await claimNextJob(db))?.id).toBe("next");
+    expect(await claimNextJob(db)).toBeUndefined();
+  });
+
+  it("holds a check run on several PRs until every one of them is free", async () => {
+    await onPr("p1", 1);
+    await onPr("p2", 2);
+    await enqueueTestJob(db, {
+      deliveryId: "run",
+      event: "check_run",
+      action: "completed",
+      raw: { repository, check_run: { pull_requests: [{ number: 1 }, { number: 2 }] } },
+    });
+
+    expect(await ids()).toEqual(["p1", "p2"]);
+    await completeJob(db, claimed(await row("p1")));
+    expect(await claimNextJob(db)).toBeUndefined();
+    await completeJob(db, claimed(await row("p2")));
+    expect((await claimNextJob(db))?.id).toBe("run");
   });
 });
 
