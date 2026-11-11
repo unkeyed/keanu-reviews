@@ -30,8 +30,8 @@ default.
 ## Features
 
 - **One channel per PR.** A channel is created when a PR is first seen and named
-  `‹state›-‹repo›-‹number›-‹title›` (e.g. `pr-acme-api-1423-add-auth`), slugified
-  to Slack's constraints. The name tracks the PR's state (`draft` → `pr` →
+  `‹state›-‹number›-‹author›-‹repo›-‹title›` (e.g. `pr-1423-octocat-acme-api-add-auth`),
+  slugified to Slack's constraints. The name tracks the PR's state (`draft` → `pr` →
   `closed`/`merged`) via rename, and the channel is archived on close/merge.
 - **Author + reviewer invites.** The PR author and each requested reviewer are
   invited to the channel once their GitHub↔Slack identity is known.
@@ -225,10 +225,17 @@ redirect URL, and `/link-slack` command.
 
 ### Channel lifecycle & naming
 
-Channels are named `‹state›-‹repo-slug›-‹number›-‹title-slug›`, lowercased and
-trimmed to Slack's 80-char limit. The `‹state›-‹repo›-‹number›` prefix uniquely
-identifies a PR; a later title edit simply renames the channel. On close/merge the
-channel is archived; on reopen it is unarchived and renamed back.
+Channels are named `‹state›-‹number›-‹author›-‹repo-slug›-‹title-slug›`, lowercased
+and trimmed to Slack's 80-char limit. The author is the PR author's GitHub login, or
+`unknown` when GitHub sends none. The `‹state›-‹number›-‹author›-‹repo›` prefix
+uniquely identifies a PR. State, number, and author are never trimmed, a very long
+repo slug is cut to fit, and the title takes whatever room is left. A later title
+edit simply renames the channel. On close/merge the channel
+is archived; on reopen it is unarchived and renamed back.
+
+Existing channels keep the naming scheme they were created with, so a channel
+created as `pr-acme-api-1423-add-auth` or `pr-octocat-acme-api-1423-add-auth` keeps
+that layout through every later rename and archive.
 
 ### GitHub account linking
 

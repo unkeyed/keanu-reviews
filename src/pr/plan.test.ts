@@ -29,10 +29,10 @@ const record = (over: Partial<PlanRecord> = {}): PlanRecord => ({
   number: 1423,
   currentState: "pr",
   appliedState: "pr",
-  appliedChannelName: "pr-oz-unkey-api-1423-add-auth",
+  appliedChannelName: "pr-1423-oz-unkey-api-add-auth",
   channelId: "C1",
   rootMessageTs: "ts-1",
-  channelNameVersion: 2,
+  channelNameVersion: 3,
   ...over,
 });
 
@@ -60,7 +60,7 @@ const none: ChannelFeatures = { shipped: false, commentOnMerge: false, quietLeav
 const all: ChannelFeatures = { shipped: true, commentOnMerge: true, quietLeave: true };
 
 const author: ChannelStep[] = [{ kind: "resolve-author" }, { kind: "invite-author" }];
-const name = (state: string, title = "add-auth") => `${state}-oz-unkey-api-1423-${title}`;
+const name = (state: string, title = "add-auth") => `${state}-1423-oz-unkey-api-${title}`;
 
 interface Row {
   record: PlanRecord;
@@ -325,7 +325,7 @@ const table: Record<string, Row> = {
     ],
   },
   "a root that failed to post is posted first on retry, with no note": {
-    record: { ...fresh("merged"), channelId: "C1", channelNameVersion: 2 },
+    record: { ...fresh("merged"), channelId: "C1", channelNameVersion: 3 },
     cause: webhook("closed", true),
     steps: [
       { kind: "post-root" },
@@ -342,12 +342,12 @@ const table: Record<string, Row> = {
     cause: webhook("edited"),
     steps: [
       ...author,
-      { kind: "rename", name: "pr-oz-unkey-platform-1423-add-auth" },
+      { kind: "rename", name: "pr-1423-oz-unkey-platform-add-auth" },
       {
         kind: "mark-applied",
         from: "pr",
         state: "pr",
-        name: "pr-oz-unkey-platform-1423-add-auth",
+        name: "pr-1423-oz-unkey-platform-add-auth",
       },
     ],
   },
@@ -359,6 +359,21 @@ const table: Record<string, Row> = {
       ...author,
       { kind: "rename", name: "pr-unkey-api-1423-add-better-auth" },
       { kind: "mark-applied", from: "pr", state: "pr", name: "pr-unkey-api-1423-add-better-auth" },
+    ],
+  },
+  "a v2 channel renames within its author-first scheme": {
+    record: record({ channelNameVersion: 2, appliedChannelName: "pr-oz-unkey-api-1423-add-auth" }),
+    cause: webhook("edited"),
+    snapshot: { title: "Add better auth" },
+    steps: [
+      ...author,
+      { kind: "rename", name: "pr-oz-unkey-api-1423-add-better-auth" },
+      {
+        kind: "mark-applied",
+        from: "pr",
+        state: "pr",
+        name: "pr-oz-unkey-api-1423-add-better-auth",
+      },
     ],
   },
   "a child event for a new PR builds the channel and root, never a note": {

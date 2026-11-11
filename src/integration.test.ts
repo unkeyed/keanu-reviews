@@ -70,7 +70,7 @@ describe("end-to-end webhook -> Slack smoke", () => {
   it("drives a full PR lifecycle through the real ingestion path", async () => {
     await deliver("pull_request", { action: "opened", pull_request: pr() });
     expect(slack.channels).toHaveLength(1);
-    expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("pr-1423-oz-unkey-api-add-auth");
 
     await deliver("pull_request_review_comment", {
       action: "created",
@@ -108,7 +108,7 @@ describe("end-to-end webhook -> Slack smoke", () => {
     expect(JSON.stringify(slack.messages)).not.toContain("checks are failing");
 
     await deliver("pull_request", { action: "closed", pull_request: pr({ merged: true }) });
-    expect(slack.channel("C1")?.name).toBe("merged-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("merged-1423-oz-unkey-api-add-auth");
     expect(slack.channel("C1")?.archived).toBe(true);
 
     expect(slack.channels).toHaveLength(1);
