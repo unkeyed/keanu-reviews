@@ -372,11 +372,12 @@ src/
   slack/             Slack Web API gateway, message catalog, delivery ledger
   identity/          GitHub↔Slack identity, user tokens, linking routes
   reminders/         per-reviewer reminder state
-  pr/                pull request rows and lifecycle lease
+  pr/                pull request rows, the per-PR session and its channel writer
+  mirror/            comments and reviews mirrored into the PR channel as their author
   queue/             durable job queue
   ingest/            GitHub webhook route
   app/               event → handler table
-  handlers/          per-event logic (pull request, review, comment, checks)
+  handlers/          review-request alerts and check runs
   scheduler/         reminder delivery, daily reconcile
   index.ts           wiring: routes, worker loop, reminder loop
 ```

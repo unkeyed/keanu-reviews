@@ -1,12 +1,22 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseEvent } from "#events";
+import { handlers } from "#app";
+import { type ReviewEvent, jobArrivalKey, parseEvent } from "#events";
 import { upsertIdentity } from "#identity";
 import { createLogger } from "#lib";
+import type { HandlerDeps } from "../app/handlers.ts";
 import type { Db } from "../db/client.ts";
 import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
-import { applyPullRequestSource, prId, setChannel } from "../pr/store.ts";
+import { handleCheckRun } from "../handlers/checks.ts";
+import { handleReviewRequest as handleReviewRequestStep } from "../handlers/reviewRequest.ts";
+import { PullRequestLifecycleBusyError } from "../pr/session.ts";
+import {
+  applyPullRequestSource,
+  claimPullRequestLifecycle,
+  prId,
+  setChannel,
+} from "../pr/store.ts";
 import { createReminderScheduler } from "../scheduler/reminders.ts";
 import {
   type IssueCommentPayload,
@@ -18,11 +28,13 @@ import {
 } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { inSession } from "../testing/pr.ts";
-import { handleCheckRun } from "./checks.ts";
-import { handleIssueComment, handleReview } from "./review.ts";
-import { handleReviewRequest as handleReviewRequestStep } from "./reviewRequest.ts";
+import { onIssueComment } from "./comments.ts";
 
 const handleReviewRequest = inSession(handleReviewRequestStep);
+const reviewArrival = jobArrivalKey(new Date(0), "review");
+/** A review job as the worker runs it: reminder cancel, then the mirror. */
+const handleReview = (deps: HandlerDeps, ev: ReviewEvent, arrivalKey = reviewArrival) =>
+  handlers.review(deps, ev, { arrivalKey, attempt: 1 });
 
 let db: Db;
 let slack: FakeSlackGateway;
@@ -70,7 +82,7 @@ const review = (state: string): ReviewPayload => ({
   },
 });
 
-describe("handleReview (U6, R5)", () => {
+describe("review job (U6, R5)", () => {
   it("posts a distinct summary for changes_requested vs approved", async () => {
     await handleReview(deps(), reviewEvent(review("approved")));
     const approved = JSON.stringify(slack.messages.at(-1)?.blocks);
@@ -135,6 +147,32 @@ describe("handleReview (U6, R5)", () => {
     expect(blocks).not.toContain("<@"); // still never a mention
   });
 
+  it("drops a dead token and posts the review as the bot with the reviewer's name", async () => {
+    await upsertIdentity(db, {
+      githubUserId: 7,
+      githubLogin: "flo",
+      slackUserId: "U7",
+      source: "self-link",
+    });
+    slack.profiles.set("U7", { name: "James Perkins", iconUrl: "https://slack/a.png" });
+    slack.invalidTokens.add("xoxp-dead");
+    const dropped: string[] = [];
+    const authorPoster = {
+      getUserToken: async () => "xoxp-dead",
+      onInvalidToken: async (id: string) => {
+        dropped.push(id);
+      },
+    };
+    await handleReview(deps({ authorPoster }), reviewEvent(review("approved")));
+
+    expect(dropped).toEqual(["U7"]);
+    expect(slack.messages).toHaveLength(1);
+    const msg = slack.messages[0];
+    expect(msg?.authorUserToken).toBeUndefined();
+    expect(msg?.username).toBeUndefined(); // a review never wears the reviewer's face
+    expect(JSON.stringify(msg?.blocks)).toContain("James Perkins");
+  });
+
   it("ignores a review submitted by a bot", async () => {
     const botReview = review("approved");
     botReview.review.user.type = "Bot";
@@ -149,7 +187,7 @@ describe("handleReview (U6, R5)", () => {
       "unkey/api#1",
       7,
       new Date("2026-08-11T12:00:00Z"),
-      "1",
+      reviewArrival,
     );
   });
 
@@ -279,7 +317,7 @@ describe("handleReview (U6, R5)", () => {
     await handleReview(
       deps({ onReviewSubmitted: scheduler.onReviewSubmitted }),
       reviewEvent(submitted),
-      "delivery-review",
+      jobArrivalKey(new Date(0), "delivery-review"),
     );
     const afterReview = slack.messages.length;
 
@@ -317,7 +355,7 @@ describe("handleReview (U6, R5)", () => {
   });
 });
 
-describe("handleIssueComment (U6)", () => {
+describe("onIssueComment (U6)", () => {
   const issueComment = (isPr: boolean): IssueCommentPayload => ({
     action: "created",
     repository: { full_name: "unkey/api" },
@@ -331,12 +369,12 @@ describe("handleIssueComment (U6)", () => {
   });
 
   it("mirrors a PR conversation comment", async () => {
-    await handleIssueComment(deps(), issueCommentEvent(issueComment(true)));
+    await onIssueComment(deps(), issueCommentEvent(issueComment(true)));
     expect(slack.messages.at(-1)?.text).toContain("flo");
   });
 
   it("posts a conversation comment top-level, never threaded (GitHub has no threads here)", async () => {
-    await handleIssueComment(deps(), issueCommentEvent(issueComment(true)));
+    await onIssueComment(deps(), issueCommentEvent(issueComment(true)));
     expect(slack.messages.at(-1)?.threadTs).toBeUndefined();
   });
 
@@ -348,7 +386,7 @@ describe("handleIssueComment (U6)", () => {
       source: "self-link",
     });
     slack.profiles.set("U7", { name: "Flo Rider", iconUrl: "https://slack/a.png" });
-    await handleIssueComment(deps(), issueCommentEvent(issueComment(true)));
+    await onIssueComment(deps(), issueCommentEvent(issueComment(true)));
     const msg = slack.messages.at(-1);
     expect(msg?.username).toBe("Flo Rider");
     expect(msg?.iconUrl).toBe("https://slack/a.png");
@@ -364,13 +402,13 @@ describe("handleIssueComment (U6)", () => {
   });
 
   it("removes the mirrored message when a conversation comment is deleted", async () => {
-    await handleIssueComment(deps(), issueCommentEvent(issueComment(true)));
+    await onIssueComment(deps(), issueCommentEvent(issueComment(true)));
     const original = slack.messages.at(-1);
     expect(original).toBeDefined();
 
     const deleted = issueComment(true);
     deleted.action = "deleted";
-    await handleIssueComment(deps(), issueCommentEvent(deleted));
+    await onIssueComment(deps(), issueCommentEvent(deleted));
 
     expect(slack.deletes).toEqual([
       { channel: "C1", ts: original?.ts, authorUserToken: undefined },
@@ -381,14 +419,14 @@ describe("handleIssueComment (U6)", () => {
   it("syncs an edit onto the existing Slack message in place", async () => {
     const created = issueComment(true);
     created.comment.body = "first draft";
-    await handleIssueComment(deps(), issueCommentEvent(created));
+    await onIssueComment(deps(), issueCommentEvent(created));
     const original = slack.messages.at(-1);
     const count = slack.messages.length;
 
     const edited = issueComment(true);
     edited.action = "edited";
     edited.comment.body = "second draft";
-    await handleIssueComment(deps(), issueCommentEvent(edited));
+    await onIssueComment(deps(), issueCommentEvent(edited));
 
     expect(slack.messages).toHaveLength(count); // no new message
     expect(slack.updates).toHaveLength(1);
@@ -400,13 +438,21 @@ describe("handleIssueComment (U6)", () => {
   it("ignores comments from bots (Vercel/Mintlify, and our own bot)", async () => {
     const bot = issueComment(true);
     bot.comment.user.type = "Bot";
-    await handleIssueComment(deps(), issueCommentEvent(bot));
+    await onIssueComment(deps(), issueCommentEvent(bot));
+    expect(slack.messages).toHaveLength(0);
+  });
+
+  it("retries while another replica holds the PR's lease", async () => {
+    await claimPullRequestLifecycle(db, 1, { now: new Date() });
+    await expect(onIssueComment(deps(), issueCommentEvent(issueComment(true)))).rejects.toThrow(
+      PullRequestLifecycleBusyError,
+    );
     expect(slack.messages).toHaveLength(0);
   });
 
   it("throws for a PR comment whose parent mapping is not ready", async () => {
     await db.delete(pullRequests);
-    await expect(handleIssueComment(deps(), issueCommentEvent(issueComment(true)))).rejects.toThrow(
+    await expect(onIssueComment(deps(), issueCommentEvent(issueComment(true)))).rejects.toThrow(
       "PR channel is not ready",
     );
   });
@@ -415,7 +461,7 @@ describe("handleIssueComment (U6)", () => {
     const input = issueComment(true);
     input.comment.body = `${"x\n".repeat(2_000)}<!channel>`;
     input.comment.user.login = "<!everyone>";
-    await handleIssueComment(deps(), issueCommentEvent(input));
+    await onIssueComment(deps(), issueCommentEvent(input));
     const block = slack.messages.at(-1)?.blocks?.[0] as { text?: { text?: string } };
     expect(block.text?.text?.length).toBeLessThanOrEqual(3_000);
     expect(JSON.stringify(slack.messages.at(-1))).not.toContain("<!channel>");

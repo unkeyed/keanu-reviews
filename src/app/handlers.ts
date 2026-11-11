@@ -1,17 +1,26 @@
 import type { JobRow } from "#db";
 import { type DomainEvent, jobArrivalKey, parseEvent } from "#events";
-import type { ArrivalKey } from "#lib";
+import { shouldSkipActor } from "#github";
+import type { ArrivalKey, PrId } from "#lib";
+import { mirrorReview, onIssueComment, onReviewComment } from "#mirror";
 import { session } from "#pr";
 import { type ChecksDeps, handleCheckRun } from "../handlers/checks.ts";
-import { type ReviewDeps, handleIssueComment, handleReview } from "../handlers/review.ts";
-import { handleReviewComment } from "../handlers/reviewComment.ts";
 import {
   handleReadyForReview,
   handleReviewRequest,
   handleSynchronizedReviewAlerts,
+  sourceDate,
 } from "../handlers/reviewRequest.ts";
 
-export interface HandlerDeps extends ChecksDeps, ReviewDeps {}
+export interface HandlerDeps extends ChecksDeps {
+  /** Cancels a reviewer's pending reminder once they review. */
+  onReviewSubmitted?: (
+    prId: PrId,
+    reviewerGithubId: number,
+    sourceUpdatedAt?: Date,
+    sourceVersion?: string,
+  ) => Promise<void>;
+}
 
 /** What a handler knows about the job carrying its event. */
 export interface Work {
@@ -51,9 +60,24 @@ export const handlers: HandlerTable = {
       }
     });
   },
-  review_comment: (deps, ev) => handleReviewComment(deps, ev),
-  review: (deps, ev, work) => handleReview(deps, ev, work.arrivalKey),
-  issue_comment: (deps, ev) => handleIssueComment(deps, ev),
+  review_comment: (deps, ev) => onReviewComment(deps, ev),
+  review: async (deps, ev, work) => {
+    const r = ev.review;
+    if (shouldSkipActor(r.author, deps.allowedBots)) return;
+    await session(
+      deps,
+      { kind: "snapshot", snapshot: ev.pr, cause: { kind: "child" } },
+      async (s) => {
+        const pr = await s.ready();
+        // Cancel before any Slack I/O, so a failed post cannot leave the
+        // reminder live and a later check_run sends no review-needed alert.
+        const reviewedAt = sourceDate(r.submittedAt ?? ev.pr.updatedAt);
+        await deps.onReviewSubmitted?.(pr.id, r.author.id, reviewedAt, work.arrivalKey);
+        await mirrorReview(deps, s, ev);
+      },
+    );
+  },
+  issue_comment: (deps, ev) => onIssueComment(deps, ev),
   check_run: (deps, ev, work) => handleCheckRun(deps, ev, { attempt: work.attempt }),
   ignored: async (deps, ev) => {
     deps.logger.debug("unhandled event", { event: ev.event, action: ev.action, reason: ev.reason });

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSlackUserTokenRow, upsertIdentity, upsertSlackUserToken } from "#identity";
 import { createLogger } from "#lib";
+import { onReviewComment } from "#mirror";
 import { loadConfig } from "../config/env.ts";
 import type { Db } from "../db/client.ts";
 import { createTestDb } from "../db/testDb.ts";
@@ -10,7 +11,6 @@ import { SLACK_POST_USER_SCOPE } from "../slack/oauth.ts";
 import { reviewCommentEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { createServiceHandlers } from "./deps.ts";
-import { handleReviewComment } from "./reviewComment.ts";
 
 const ENC_KEY = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
 const ROTATED_KEY = "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100";
@@ -78,7 +78,7 @@ describe("createServiceHandlers post-as-user", () => {
       auth: { getToken: async () => "ghs_unused", invalidate: () => {} },
     });
 
-    await handleReviewComment(
+    await onReviewComment(
       handler,
       reviewCommentEvent({
         action: "created",

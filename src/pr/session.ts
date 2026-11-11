@@ -10,6 +10,7 @@ import {
 } from "#slack";
 import { type PrChannel, prChannel } from "./channel.ts";
 import { type ConvergeOutcome, type PrDeps, converge } from "./converge.ts";
+import { inviteMentions } from "./mentions.ts";
 import type { ConvergeCause } from "./plan.ts";
 import {
   PULL_REQUEST_LIFECYCLE_LEASE_MS,
@@ -58,6 +59,11 @@ export interface PrSession {
   ): Promise<Delivered<B>>;
   /** The Slack ts of an effect already posted, else undefined. */
   sentTs(key: EffectKey): Promise<string | undefined>;
+  /**
+   * Invite the Slack users linked to the GitHub logins @-mentioned in `body`,
+   * except `excludeLogin`. A lookup or invite failure is logged, not thrown.
+   */
+  inviteMentions(body: string, excludeLogin: string | undefined): Promise<void>;
 }
 
 /** Another replica holds the PR; a retry waits until a crashed holder's lease can be taken over. */
@@ -134,6 +140,8 @@ function prSession(
     deliver: (async (key, build, opts) =>
       ledger.deliver(key, await s.channel(), build, opts)) as PrSession["deliver"],
     sentTs: (key) => ledger.sentTs(key),
+    inviteMentions: async (body, excludeLogin) =>
+      inviteMentions(deps, await s.channel(), body, excludeLogin),
   };
   return s;
 }

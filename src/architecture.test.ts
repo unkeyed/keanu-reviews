@@ -285,13 +285,6 @@ const TABLE_READERS: Record<string, string> = {
  * must still match a violation, so the list can only shrink.
  */
 const PENDING: readonly { files: string; rule: string; slice: string }[] = [
-  // S4: mirror/ replaces comment and review mirroring.
-  { files: "handlers/authorship.ts", rule: "not in a layered module", slice: "S4" },
-  { files: "handlers/mentions.ts", rule: "not in a layered module", slice: "S4" },
-  { files: "handlers/review.ts", rule: "not in a layered module", slice: "S4" },
-  { files: "handlers/reviewComment.ts", rule: "not in a layered module", slice: "S4" },
-  { files: "app/handlers.ts", rule: "(../handlers/review.ts)", slice: "S4" },
-  { files: "app/handlers.ts", rule: "(../handlers/reviewComment.ts)", slice: "S4" },
   // S5: reviews/ replaces review alerts, CI release and the reminder scan.
   { files: "handlers/reviewRequest.ts", rule: "not in a layered module", slice: "S5" },
   { files: "handlers/checks.ts", rule: "not in a layered module", slice: "S5" },
