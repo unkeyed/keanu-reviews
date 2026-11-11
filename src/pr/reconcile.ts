@@ -63,10 +63,6 @@ const ZERO: ReconciliationSummary = {
   reArchived: 0,
 };
 
-function summary(overrides: Partial<ReconciliationSummary> = {}): ReconciliationSummary {
-  return { ...ZERO, ...overrides };
-}
-
 function channelArchived(row: PrRow): boolean {
   return row.appliedState !== null && isTerminal(row.appliedState);
 }
@@ -93,7 +89,7 @@ export function createClosedPullRequestReconciliation(
 
   return async function runClosedPullRequestReconciliation() {
     if (inProgress) {
-      const overlapped = summary({ overlapped: true });
+      const overlapped = { ...ZERO, overlapped: true };
       deps.logger.info("pull request reconciliation skipped; another run is in progress", {
         ...overlapped,
       });
@@ -115,7 +111,7 @@ async function reconcile(
 ): Promise<ReconciliationSummary> {
   const { logger } = deps;
   const rows = await listOpenPullRequestsForReconciliation(deps.db);
-  const result = summary();
+  const result = { ...ZERO };
 
   for (let index = 0; index < rows.length; index++) {
     const row = rows[index];

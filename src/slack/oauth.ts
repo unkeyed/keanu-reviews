@@ -27,14 +27,13 @@ export function createSlackAuthorizeUrl(input: {
   clientId: string;
   callbackUrl: string;
   state: string;
-  userScopes?: string;
 }): string {
   const url = new URL(AUTHORIZE_URL);
   url.searchParams.set("client_id", input.clientId);
   url.searchParams.set("redirect_uri", input.callbackUrl);
   url.searchParams.set("state", input.state);
   // Request only user scopes — the bot token is provisioned separately at install.
-  url.searchParams.set("user_scope", input.userScopes ?? SLACK_USER_SCOPES);
+  url.searchParams.set("user_scope", SLACK_USER_SCOPES);
   url.searchParams.set("scope", "");
   return url.toString();
 }

@@ -36,15 +36,7 @@ export async function claim(
   const natural = naturalKey(key);
   await db
     .insert(messages)
-    .values({
-      id: randomUUID(),
-      naturalKey: natural,
-      prId: key.prId,
-      kind: key.kind,
-      githubEventRef: key.ref,
-      clientMsgId: clientMsgId(natural),
-      status: "pending",
-    })
+    .values({ ...newEffect(key, natural), status: "pending" })
     .onConflictDoNothing({ target: messages.naturalKey });
 
   const [claimed] = await db
@@ -54,6 +46,16 @@ export async function claim(
     .returning();
   return claimed as MessageRow | undefined;
 }
+
+/** A `messages` row for `key`, without its status. */
+const newEffect = (key: EffectKey, natural: string) => ({
+  id: randomUUID(),
+  naturalKey: natural,
+  prId: key.prId,
+  kind: key.kind,
+  githubEventRef: key.ref,
+  clientMsgId: clientMsgId(natural),
+});
 
 /** Pending, or sending under a lease that expired. */
 const claimable = (natural: string, now: Date, leaseMs: number) =>
@@ -259,15 +261,7 @@ export function createLedger(db: Db, clock: Clock = systemClock): Ledger {
       const tombstone = { status: "sent" as const, slackTs: null, claimedAt: null };
       const [inserted] = await db
         .insert(messages)
-        .values({
-          id: randomUUID(),
-          naturalKey: natural,
-          prId: key.prId,
-          kind: key.kind,
-          githubEventRef: key.ref,
-          clientMsgId: clientMsgId(natural),
-          ...tombstone,
-        })
+        .values({ ...newEffect(key, natural), ...tombstone })
         .onConflictDoNothing({ target: messages.naturalKey })
         .returning({ id: messages.id });
       if (inserted) return undefined;

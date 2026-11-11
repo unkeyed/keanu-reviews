@@ -120,8 +120,10 @@ export function extractEmbeddedImages(body: string, max = 5): EmbeddedImage[] {
 export const SLACK_SECTION_TEXT_LIMIT = 3_000;
 
 /** Apply the limit after every prefix, link, and quote marker is rendered. */
-function clipSlackText(text: string, max = SLACK_SECTION_TEXT_LIMIT): string {
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+function clipSlackText(text: string): string {
+  return text.length > SLACK_SECTION_TEXT_LIMIT
+    ? `${text.slice(0, SLACK_SECTION_TEXT_LIMIT - 1)}…`
+    : text;
 }
 
 export interface PrView {

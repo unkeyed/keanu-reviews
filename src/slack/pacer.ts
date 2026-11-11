@@ -35,48 +35,43 @@ export async function withRateLimitRetry<T>(
 }
 
 /** Serialize calls sharing a key, enforcing a minimum interval between them. */
-export class Pacer {
-  private chains = new Map<string, Promise<unknown>>();
-  private lastAt = new Map<string, number>();
-  private readonly minIntervalMs: number;
-  private readonly sleep: SleepFn;
-  private readonly now: () => number;
+export function createPacer(
+  minIntervalMs: number,
+  sleep: SleepFn = realSleep,
+  now: () => number = Date.now,
+) {
+  const chains = new Map<string, Promise<unknown>>();
+  const lastAt = new Map<string, number>();
 
-  constructor(minIntervalMs: number, sleep: SleepFn = realSleep, now: () => number = Date.now) {
-    this.minIntervalMs = minIntervalMs;
-    this.sleep = sleep;
-    this.now = now;
-  }
+  const cleanupWhenIdle = (key: string, tail: Promise<unknown>): void => {
+    if (chains.get(key) !== tail) return;
+    chains.delete(key);
 
-  private cleanupWhenIdle(key: string, tail: Promise<unknown>): void {
-    if (this.chains.get(key) !== tail) return;
-    this.chains.delete(key);
-
-    const lastAt = this.lastAt.get(key);
-    if (lastAt === undefined) return;
-    const remainingMs = Math.max(0, lastAt + this.minIntervalMs - this.now());
+    const last = lastAt.get(key);
+    if (last === undefined) return;
+    const remainingMs = Math.max(0, last + minIntervalMs - now());
     const timer = setTimeout(() => {
-      if (!this.chains.has(key) && this.lastAt.get(key) === lastAt) {
-        this.lastAt.delete(key);
-      }
+      if (!chains.has(key) && lastAt.get(key) === last) lastAt.delete(key);
     }, remainingMs);
     timer.unref?.();
-  }
+  };
 
-  run<T>(key: string, fn: () => Promise<T>): Promise<T> {
-    const prior = this.chains.get(key) ?? Promise.resolve();
-    const next = prior.then(async () => {
-      const lastAt = this.lastAt.get(key);
-      if (lastAt !== undefined) {
-        const wait = this.minIntervalMs - (this.now() - lastAt);
-        if (wait > 0) await this.sleep(wait);
-      }
-      this.lastAt.set(key, this.now());
-      return fn();
-    });
-    const tail = next.catch(() => undefined);
-    this.chains.set(key, tail);
-    void tail.then(() => this.cleanupWhenIdle(key, tail));
-    return next;
-  }
+  return {
+    run<T>(key: string, fn: () => Promise<T>): Promise<T> {
+      const prior = chains.get(key) ?? Promise.resolve();
+      const next = prior.then(async () => {
+        const last = lastAt.get(key);
+        if (last !== undefined) {
+          const wait = minIntervalMs - (now() - last);
+          if (wait > 0) await sleep(wait);
+        }
+        lastAt.set(key, now());
+        return fn();
+      });
+      const tail = next.catch(() => undefined);
+      chains.set(key, tail);
+      void tail.then(() => cleanupWhenIdle(key, tail));
+      return next;
+    },
+  };
 }

@@ -61,14 +61,9 @@ export function createTokenCipher(
       ].join(".");
     },
     decrypt(payload) {
-      const [version, ivPart, tagPart, ctPart] = payload.split(".");
-      if (
-        payload.split(".").length !== 4 ||
-        version !== VERSION ||
-        !ivPart ||
-        !tagPart ||
-        !ctPart
-      ) {
+      const parts = payload.split(".");
+      const [version, ivPart, tagPart, ctPart] = parts;
+      if (parts.length !== 4 || version !== VERSION || !ivPart || !tagPart || !ctPart) {
         throw new Error("Unrecognized Slack token ciphertext format");
       }
       const iv = Buffer.from(ivPart, "base64url");

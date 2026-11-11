@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { Retry } from "#lib";
 import { SlackApiError } from "./errors.ts";
-import { Pacer, withRateLimitRetry } from "./pacer.ts";
+import { createPacer, withRateLimitRetry } from "./pacer.ts";
 
 const rateLimited = (retryAfterMs: number) =>
   new SlackApiError("chat.postMessage", "ratelimited", { retryAfterMs });
@@ -56,13 +56,13 @@ describe("withRateLimitRetry (429 Retry-After, KTD9)", () => {
   });
 });
 
-describe("Pacer", () => {
+describe("createPacer", () => {
   it("preserves the last-send timestamp across sequential calls for a key", async () => {
     let currentTime = 1_000;
     const sleep = vi.fn(async (ms: number) => {
       currentTime += ms;
     });
-    const pacer = new Pacer(250, sleep, () => currentTime);
+    const pacer = createPacer(250, sleep, () => currentTime);
 
     await pacer.run("channel", async () => "first");
     await pacer.run("channel", async () => "second");
@@ -73,7 +73,7 @@ describe("Pacer", () => {
 
   it("tracks pacing independently per key", async () => {
     const sleep = vi.fn(async () => {});
-    const pacer = new Pacer(250, sleep, () => 1_000);
+    const pacer = createPacer(250, sleep, () => 1_000);
 
     await pacer.run("channel-a", async () => undefined);
     await pacer.run("channel-b", async () => undefined);
@@ -85,7 +85,7 @@ describe("Pacer", () => {
     vi.useFakeTimers();
     try {
       const sleep = vi.fn(async () => {});
-      const pacer = new Pacer(250, sleep, () => 1_000);
+      const pacer = createPacer(250, sleep, () => 1_000);
 
       await pacer.run("channel", async () => undefined);
       await vi.advanceTimersByTimeAsync(250);

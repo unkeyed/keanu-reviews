@@ -7,7 +7,7 @@ import {
   sanitizeLinkLabel,
 } from "./catalog.ts";
 import { SlackApiError } from "./errors.ts";
-import { Pacer, type SleepFn, withRateLimitRetry } from "./pacer.ts";
+import { type SleepFn, createPacer, withRateLimitRetry } from "./pacer.ts";
 
 /**
  * Every Slack Web API method this service calls, split by the credential that
@@ -331,8 +331,8 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
   const web = options.web ?? webFactory(token, clientOptions);
   const userWebFactory =
     options.userWebFactory ?? ((userToken: string) => webFactory(userToken, clientOptions));
-  const postPacer = new Pacer(1000, options.sleep, options.now);
-  const createPacer = new Pacer(3000, options.sleep, options.now);
+  const postPacer = createPacer(1000, options.sleep, options.now);
+  const createChannelPacer = createPacer(3000, options.sleep, options.now);
   const resolvedChannels = new Map<string, string>();
   const cached = { ttlMs: LOOKUP_CACHE_MS, maxEntries: LOOKUP_CACHE_ENTRIES, now: options.now };
   const channelLookups = ttlCache<string, string | undefined>(cached);
@@ -497,7 +497,7 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
 
   return {
     createChannel: (name) =>
-      createPacer.run("create", () =>
+      createChannelPacer.run("create", () =>
         call(async () => {
           const res = (await bot("conversations.create", { name })) as {
             channel?: { id?: unknown };

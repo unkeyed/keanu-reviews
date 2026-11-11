@@ -21,9 +21,6 @@ const ORPHANED_CLAIM_MS = 24 * 60 * 60_000;
  * day so a restart at that instant does not run twice.
  */
 export function millisecondsUntilUtcHour(now: Date, hourUtc: number): number {
-  if (!Number.isInteger(hourUtc) || hourUtc < 0 || hourUtc > 23) {
-    throw new Error(`hourUtc must be an integer from 0 through 23, got ${hourUtc}`);
-  }
   const next = new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hourUtc, 0, 0, 0),
   );
