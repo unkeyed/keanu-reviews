@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { PrSnapshot } from "#events";
+import { type PrSnapshot, isTerminal } from "#events";
 import { Retry, errMessage, leaseWaitMs } from "#lib";
 import {
   type DeliverOptions,
@@ -7,6 +7,7 @@ import {
   type EffectKey,
   type EffectState,
   type Outgoing,
+  SlackApiError,
   createLedger,
 } from "#slack";
 import { type PrChannel, prChannel } from "./channel.ts";
@@ -69,11 +70,29 @@ export async function session<T>(
   const outer = inSession.getStore();
   if (outer !== undefined) throw new Error(`PR session for ${outer} cannot open another`);
   const githubPrId = source.kind === "snapshot" ? source.snapshot.githubPrId : source.githubPrId;
+  const run = async ({ session: s, wroteToChannel }: OpenedSession): Promise<T> => {
+    let result: T;
+    try {
+      result = await body(s);
+    } catch (error) {
+      if (wroteToChannel()) {
+        await keepTerminalChannelArchived(deps, githubPrId).catch((err) =>
+          deps.logger.warn("re-archive after a failed write did not finish", {
+            githubPrId,
+            err: errMessage(err),
+          }),
+        );
+      }
+      throw error;
+    }
+    if (wroteToChannel()) await keepTerminalChannelArchived(deps, githubPrId);
+    return result;
+  };
   return inLane(githubPrId, () =>
     inSession.run(githubPrId, () =>
       leased(deps, githubPrId, signal, async () => {
         if (source.kind === "existing") {
-          return body(
+          return run(
             prSession(deps, signal, undefined, {
               ready: () => stored(deps, githubPrId),
               channel: () => storedChannel(deps, githubPrId),
@@ -84,10 +103,43 @@ export async function session<T>(
         if (source.cause.kind === "child") await followNewerSnapshot(deps, source.snapshot, signal);
         else converged = await converge(deps, source.snapshot, source.cause);
         const readyPr = () => ready(deps, source.snapshot);
-        return body(prSession(deps, signal, converged, { ready: readyPr, channel: readyPr }));
+        return run(prSession(deps, signal, converged, { ready: readyPr, channel: readyPr }));
       }),
     ),
   );
+}
+
+interface OpenedSession {
+  session: PrSession;
+  /** Whether the body reached for the channel, so a write may have unarchived it. */
+  wroteToChannel(): boolean;
+}
+
+/**
+ * The gateway answers `is_archived` by unarchiving and retrying, so a late
+ * comment, review, or invite on a closed or merged PR reopens its channel.
+ * Archive it again before releasing the lease, once Slack confirms it is open.
+ * A transient failure retries the job (deliveries are idempotent); anything
+ * else is logged, since the write itself already landed.
+ */
+async function keepTerminalChannelArchived(deps: PrDeps, githubPrId: number): Promise<void> {
+  const row = await findByGithubPrId(deps.db, githubPrId);
+  const channelId = row?.channelId;
+  if (!row || !channelId || !isTerminal(row.currentState)) return;
+  if (!row.appliedState || !isTerminal(row.appliedState)) return;
+  const fields = { prId: row.id, githubPrId, channelId };
+  try {
+    if ((await deps.slack.isArchived(channelId)) !== false) return;
+    await deps.quietArchive?.(channelId);
+    await deps.slack.archive(channelId);
+    deps.logger.info("re-archived PR channel after a late write reopened it", fields);
+  } catch (err) {
+    if (err instanceof Retry || (err instanceof SlackApiError && err.transient)) throw err;
+    deps.logger.error("could not re-archive PR channel after a late write", {
+      ...fields,
+      err: errMessage(err),
+    });
+  }
 }
 
 function prSession(
@@ -95,7 +147,7 @@ function prSession(
   signal: AbortSignal | undefined,
   converged: ConvergeOutcome | undefined,
   find: { ready: () => Promise<ReadyPr>; channel: () => Promise<ChannelPr> },
-): PrSession {
+): OpenedSession {
   const ledger = createLedger(deps.db);
   let readyPr: Promise<ReadyPr> | undefined;
   let channelPr: Promise<ChannelPr> | undefined;
@@ -125,7 +177,7 @@ function prSession(
     inviteMentions: async (body, excludeLogin) =>
       inviteMentions(deps, await s.channel(), body, excludeLogin),
   };
-  return s;
+  return { session: s, wroteToChannel: () => channel !== undefined };
 }
 
 function inLane<T>(githubPrId: number, run: () => Promise<T>): Promise<T> {

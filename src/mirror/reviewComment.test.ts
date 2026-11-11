@@ -9,8 +9,13 @@ import { applyPullRequestSource, prId, setChannel } from "../pr/store.ts";
 import { SlackApiError, keys } from "../slack/index.ts";
 import { clientMsgId, naturalKey } from "../slack/ledger.ts";
 import { handlerDeps } from "../testing/deps.ts";
-import { type ReviewCommentPayload, reviewCommentEvent } from "../testing/events.ts";
+import {
+  type ReviewCommentPayload,
+  pullRequestEvent,
+  reviewCommentEvent,
+} from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
+import { convergePullRequest } from "../testing/pr.ts";
 import { onReviewComment } from "./comments.ts";
 
 let db: Db;
@@ -438,6 +443,33 @@ describe("onReviewComment (U6)", () => {
     expect(slack.deletes).toHaveLength(1);
     expect(slack.deletes[0]?.authorUserToken).toBe("xoxp-flo");
     expect(profile).not.toHaveBeenCalled();
+  });
+
+  it("re-archives a closed PR's channel after mirroring a late review comment into it", async () => {
+    const pr = payload().pull_request;
+    await convergePullRequest(
+      deps(),
+      pullRequestEvent({
+        action: "opened",
+        repository: { full_name: "unkey/api" },
+        pull_request: pr,
+      }),
+    );
+    const closedPr = { ...pr, updated_at: "2026-08-11T12:05:00Z" };
+    await convergePullRequest(
+      deps(),
+      pullRequestEvent({
+        action: "closed",
+        repository: { full_name: "unkey/api" },
+        pull_request: closedPr,
+      }),
+    );
+    expect(slack.channel("C1")?.archived).toBe(true);
+
+    await onReviewComment(deps(), reviewCommentEvent({ ...payload(), pull_request: closedPr }));
+
+    expect(slack.messages.at(-1)?.text).toContain("New review comment");
+    expect(slack.channel("C1")?.archived).toBe(true);
   });
 
   it("invites every linked mentioned user in one call, in mention order", async () => {
