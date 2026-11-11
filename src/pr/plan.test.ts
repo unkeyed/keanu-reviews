@@ -243,7 +243,7 @@ const table: Record<string, Row> = {
     }),
     cause: webhook("edited"),
     features: all,
-    steps: [{ kind: "resolve-author" }, { kind: "cancel-reminders" }],
+    steps: [{ kind: "cancel-reminders" }],
   },
   "a redelivered close of an archived channel posts no note": {
     record: record({
@@ -252,7 +252,7 @@ const table: Record<string, Row> = {
       appliedChannelName: name("closed"),
     }),
     cause: webhook("closed"),
-    steps: [{ kind: "resolve-author" }, { kind: "cancel-reminders" }],
+    steps: [{ kind: "cancel-reminders" }],
   },
   "a title edit after a merge reopens the archive only to rename it": {
     record: record({
@@ -263,11 +263,34 @@ const table: Record<string, Row> = {
     cause: webhook("edited"),
     snapshot: { title: "Add better auth" },
     steps: [
+      { kind: "cancel-reminders" },
+      { kind: "unarchive" },
+      { kind: "rename", name: name("merged", "add-better-auth") },
+      { kind: "archive" },
+      {
+        kind: "mark-applied",
+        from: "merged",
+        state: "merged",
+        name: name("merged", "add-better-auth"),
+      },
+    ],
+  },
+  "a rename after a merge still resolves the author the #shipped post may name": {
+    record: record({
+      currentState: "merged",
+      appliedState: "merged",
+      appliedChannelName: name("merged"),
+    }),
+    cause: webhook("edited"),
+    snapshot: { title: "Add better auth" },
+    features: { shipped: true, commentOnMerge: false, quietLeave: false },
+    steps: [
       { kind: "resolve-author" },
       { kind: "cancel-reminders" },
       { kind: "unarchive" },
       { kind: "rename", name: name("merged", "add-better-auth") },
       { kind: "archive" },
+      { kind: "announce-shipped" },
       {
         kind: "mark-applied",
         from: "merged",

@@ -6,7 +6,7 @@ import { type ArrivalKey, Retry, createLogger } from "#lib";
 import { scheduleReminder } from "#reminders";
 import { SlackApiError, keys } from "#slack";
 import type { Db } from "../db/client.ts";
-import { pullRequests, reminders } from "../db/schema.ts";
+import { identities, pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { handlerDeps } from "../testing/deps.ts";
 import { type PullRequestPayload, pullRequestEvent } from "../testing/events.ts";
@@ -402,6 +402,24 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
     });
     expect(slack.channel("C1")?.archived).toBe(true); // stays archived
     expect(slack.messages.length).toBe(before); // nothing posted to the archived channel
+  });
+
+  it("does not resolve the author for a later event on an archived merged PR (B12)", async () => {
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("closed", { merged: true })));
+    // The author's GitHub email now matches a Slack user, so resolving them
+    // would read GitHub and Slack and record an email-match identity.
+    const fetchGithubEmail = vi.fn(async () => "oz@example.com");
+    slack.emailToUser.set("oz@example.com", "U100");
+
+    await convergePullRequest(
+      { ...deps(), fetchGithubEmail },
+      pullRequestEvent(payload("edited", { updated_at: "2026-08-11T13:00:00Z" })),
+    );
+
+    expect(fetchGithubEmail).not.toHaveBeenCalled();
+    expect(await db.select().from(identities)).toEqual([]);
+    expect(slack.channel("C1")?.archived).toBe(true);
   });
 
   it("unarchives before writing when a merged PR is reopened after the author links late", async () => {

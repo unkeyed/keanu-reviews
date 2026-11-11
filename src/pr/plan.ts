@@ -124,7 +124,7 @@ export function planChannel(
 
   if (record.appliedState === desired && record.appliedChannelName === name) {
     if (!stayingArchived) steps.push(...note);
-    return steps;
+    return resolveAuthorOnlyIfUsed(steps);
   }
 
   if (isTerminal(desired) || wasArchived) steps.push({ kind: "unarchive" });
@@ -135,7 +135,17 @@ export function planChannel(
     if (desired === "merged") steps.push(...announcements(cause, features));
   }
   steps.push({ kind: "mark-applied", from: record.appliedState, state: desired, name });
-  return steps;
+  return resolveAuthorOnlyIfUsed(steps);
+}
+
+/**
+ * Resolving the author can read GitHub and Slack and record an email-match
+ * identity, so a plan resolves them only for a step that names them: the
+ * invite, or the #shipped post. A channel that stays archived has neither.
+ */
+function resolveAuthorOnlyIfUsed(steps: ChannelStep[]): ChannelStep[] {
+  const used = steps.some((s) => s.kind === "invite-author" || s.kind === "announce-shipped");
+  return used ? steps : steps.filter((s) => s.kind !== "resolve-author");
 }
 
 /** A late catch-up skips both merge announcements; the archive itself still happens. */
