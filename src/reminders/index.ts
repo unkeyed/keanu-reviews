@@ -1,4 +1,7 @@
 export {
+  type DuePr,
+  type DueReminder,
+  type SourceStamp,
   cancelForPr,
   cancelForReviewer,
   cancelReminderClaim,
@@ -6,7 +9,7 @@ export {
   deferReminder,
   findReminderForReviewer,
   isReminderClaimCurrent,
-  listDue,
+  listDueWithContext,
   markReminderSent,
   pushReminderDue,
   rescheduleOrFailReminder,

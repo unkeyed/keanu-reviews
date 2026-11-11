@@ -34,7 +34,6 @@ const deps = (over: Partial<ChecksDeps> = {}): ChecksDeps => ({
   logger: createLogger("error"),
   fetchCiReadiness: async () => ci,
   fetchPullRequest: async (_repo, number) => ({
-    mergeable: false,
     mergeableState: "blocked",
     draft: false,
     requestedReviewers: number === 2 ? [{ id: 8, login: "ada" }] : [{ id: 7, login: "flo" }],
@@ -112,7 +111,6 @@ describe("CI events release review alerts", () => {
     await handleCheckRun(
       deps({
         fetchPullRequest: async () => ({
-          mergeable: true,
           mergeableState: "clean",
           draft: false,
           requestedReviewers: [],

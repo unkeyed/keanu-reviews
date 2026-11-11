@@ -150,6 +150,7 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
       prId: prId("unkey/api", 1423),
       reviewerGithubId: 7,
       dueAt: new Date("2026-08-13T00:00:00Z"),
+      stamp: { updatedAt: new Date(0), version: "" },
     });
     const realPost = slack.post.bind(slack);
     slack.post = async (channel, m, opts) => {
@@ -224,6 +225,7 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
       prId: prId("unkey/api", 1423),
       reviewerGithubId: 7,
       dueAt: new Date("2026-08-13T00:00:00Z"),
+      stamp: { updatedAt: new Date(0), version: "" },
     });
 
     const merged = pullRequestEvent(payload("closed", { merged: true }));

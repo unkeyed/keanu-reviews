@@ -278,6 +278,7 @@ const TABLE_OWNERS: Record<string, string> = {
 /** Files that read tables they do not own, and why. */
 const TABLE_READERS: Record<string, string> = {
   "db/readiness.ts": "probes every table's columns with a limit-0 select",
+  "reminders/store.ts": "the due scan reads each reminder's PR and reviewer identity in one join",
 };
 
 /**
@@ -291,7 +292,6 @@ const PENDING: readonly { files: string; rule: string; slice: string }[] = [
   { files: "app/handlers.ts", rule: "(../handlers/reviewRequest.ts)", slice: "S5" },
   { files: "app/handlers.ts", rule: "(../handlers/checks.ts)", slice: "S5" },
   { files: "scheduler/reminders.ts", rule: "not in a layered module", slice: "S5" },
-  { files: "scheduler/window.ts", rule: "not in a layered module", slice: "S5" },
   // S6: queue worker, app context and HTTP, main.ts and the admin CLIs.
   { files: "handlers/deps.ts", rule: "not in a layered module", slice: "S6" },
   { files: "worker/loop.ts", rule: "not in a layered module", slice: "S6" },

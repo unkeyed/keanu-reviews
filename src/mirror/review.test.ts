@@ -325,7 +325,6 @@ describe("review job (U6, R5)", () => {
       deps({
         fetchCiReadiness: async () => "passing",
         fetchPullRequest: async () => ({
-          mergeable: false,
           mergeableState: "blocked",
           draft: false,
           requestedReviewers: [{ id: 7, login: "flo" }],

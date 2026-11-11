@@ -165,12 +165,10 @@ async function execute(
         break;
       }
       case "cancel-reminders":
-        await cancelForPr(
-          db,
-          row.id,
-          new Date(snapshot.updatedAt),
-          cause.kind === "child" ? "" : cause.arrivalKey,
-        );
+        await cancelForPr(db, row.id, {
+          updatedAt: new Date(snapshot.updatedAt),
+          version: cause.kind === "child" ? "" : cause.arrivalKey,
+        });
         break;
       case "rename":
         await slack.rename(channel(), step.name);

@@ -10,9 +10,10 @@ import {
 } from "#github";
 import { createGithubOAuthRoute, createSlackCommandRoute } from "#identity";
 import { createGithubWebhookRoute } from "#ingest";
-import { createLogger, errMessage, registerSecrets } from "#lib";
+import { createLogger, errMessage, registerSecrets, systemClock } from "#lib";
 import { createClosedPullRequestReconciliation } from "#pr";
 import { pruneJobHistory } from "#queue";
+import { scanDue } from "#reviews";
 import { createSlackGateway } from "#slack";
 import { createServiceHandlers } from "./handlers/deps.ts";
 import { DAILY_RECONCILE_HOUR_UTC, startDailyLoop } from "./scheduler/dailyLoop.ts";
@@ -58,19 +59,21 @@ function boot(): void {
     slack,
     logger,
     reminderHours: config.REMINDER_HOURS,
-    deliveryWindow: {
+  });
+  const reviewDeps = {
+    ...services.handler,
+    clock: systemClock,
+    fetchCiReadiness: services.fetchCiReadiness,
+    fetchPullRequest: services.fetchPullRequest,
+    fetchApprovalCount: services.fetchApprovalCount,
+    reminderHours: config.REMINDER_HOURS,
+    reminderWindow: {
       startHour: config.REMINDER_WINDOW_START_HOUR,
       endHour: config.REMINDER_WINDOW_END_HOUR,
       timeZone: config.REMINDER_WINDOW_TZ,
     },
-    // Don't remind the channel or remaining reviewers once the PR is ready to
-    // merge or has REMINDER_SUPPRESS_APPROVALS approvals (default 1).
     suppressApprovals: config.REMINDER_SUPPRESS_APPROVALS,
-    fetchPullRequest: services.fetchPullRequest,
-    fetchApprovalCount: services.fetchApprovalCount,
-    // Hold the 12h ping while CI is failing or still running.
-    fetchCiReadiness: services.fetchCiReadiness,
-  });
+  };
   const dispatch = createDispatcher({
     ...services.handler,
     fetchPrForSha: services.fetchPrForSha,
@@ -136,7 +139,7 @@ function boot(): void {
   );
   const workerLoop = startWorkerLoop(worker, 1000, logger);
   const reminderLoop = startReminderLoop(
-    scheduler.processDue,
+    () => scanDue(reviewDeps),
     config.REMINDER_SCAN_INTERVAL_MS,
     logger,
   );

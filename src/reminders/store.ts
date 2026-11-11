@@ -1,30 +1,37 @@
 import { and, asc, eq, isNull, lt, lte, or, sql } from "drizzle-orm";
-import { type Db, type ReminderRow, reminders } from "#db";
+import { type Db, type ReminderRow, identities, pullRequests, reminders } from "#db";
+import type { PrState } from "#events";
 import type { PrId } from "#lib";
+
+/** A `sending` claim older than this belongs to a crashed scanner and may be taken over. */
+const LEASE_MS = 5 * 60_000;
+/** Delivery attempts before a reminder is marked failed. */
+const MAX_ATTEMPTS = 5;
+/** Backoff after a failed attempt: 1, 2, 4, 8 minutes. */
+const RETRY_BASE_MS = 60_000;
 
 const reminderId = (prId: PrId, reviewerGithubId: number): string => `${prId}::${reviewerGithubId}`;
 
-export interface ReminderSource {
-  sourceUpdatedAt: Date;
-  sourceVersion?: string;
+/**
+ * Orders writes to a reminder: one applies only when (updatedAt, version) is
+ * strictly newer than the stored pair, so a duplicate or stale event cannot
+ * change a later request or cancellation.
+ */
+export interface SourceStamp {
+  updatedAt: Date;
+  version: string;
 }
 
-const normalizedSource = (source: ReminderSource) => ({
-  sourceUpdatedAt: source.sourceUpdatedAt,
-  sourceVersion: source.sourceVersion ?? "",
+const stampColumns = (stamp: SourceStamp) => ({
+  sourceUpdatedAt: stamp.updatedAt,
+  sourceVersion: stamp.version,
 });
 
-/** Strict ordering keeps duplicate or stale source events from changing a tombstone. */
-const incomingIsNewer = (source: ReminderSource) => {
-  const normalized = normalizedSource(source);
-  return or(
-    lt(reminders.sourceUpdatedAt, normalized.sourceUpdatedAt),
-    and(
-      eq(reminders.sourceUpdatedAt, normalized.sourceUpdatedAt),
-      lt(reminders.sourceVersion, normalized.sourceVersion),
-    ),
+const incomingIsNewer = (stamp: SourceStamp) =>
+  or(
+    lt(reminders.sourceUpdatedAt, stamp.updatedAt),
+    and(eq(reminders.sourceUpdatedAt, stamp.updatedAt), lt(reminders.sourceVersion, stamp.version)),
   );
-};
 
 async function findReminder(db: Db, id: string): Promise<ReminderRow | undefined> {
   const [row] = await db.select().from(reminders).where(eq(reminders.id, id)).limit(1);
@@ -41,9 +48,8 @@ export async function findReminderForReviewer(
 }
 
 /**
- * Move a still-pending reminder's due time without starting a new generation.
- * Used when the review-needed alert was held and is only sent once CI is green,
- * so the 12h clock starts at the alert rather than at the original request.
+ * Move a still-pending reminder's due time without starting a new generation,
+ * so the clock starts when the review alert posts rather than at the request.
  */
 export async function pushReminderDue(
   db: Db,
@@ -59,22 +65,13 @@ export async function pushReminderDue(
     );
 }
 
-/** Schedule a new generation only when its source version is newer than stored state. */
+/** Schedule a new generation when the stamp is newer than stored state; returns the row either way. */
 export async function scheduleReminder(
   db: Db,
-  input: {
-    prId: PrId;
-    reviewerGithubId: number;
-    dueAt: Date;
-    sourceUpdatedAt?: Date;
-    sourceVersion?: string;
-  },
+  input: { prId: PrId; reviewerGithubId: number; dueAt: Date; stamp: SourceStamp },
 ): Promise<ReminderRow> {
   const id = reminderId(input.prId, input.reviewerGithubId);
-  const source = normalizedSource({
-    sourceUpdatedAt: input.sourceUpdatedAt ?? new Date(0),
-    sourceVersion: input.sourceVersion,
-  });
+  const source = stampColumns(input.stamp);
   const [row] = await db
     .insert(reminders)
     .values({
@@ -99,7 +96,7 @@ export async function scheduleReminder(
         claimedAt: null,
         generation: sql`${reminders.generation} + 1`,
       },
-      setWhere: incomingIsNewer(source),
+      setWhere: incomingIsNewer(input.stamp),
     })
     .returning();
   if (row) return row;
@@ -108,9 +105,9 @@ export async function scheduleReminder(
   return existing;
 }
 
-/** Due, and either pending or `sending` under an expired worker lease. */
-const claimable = (now: Date, leaseMs: number) => {
-  const leaseExpiredAt = new Date(now.getTime() - leaseMs);
+/** Due, and either pending or `sending` under an expired lease. */
+const claimable = (now: Date) => {
+  const leaseExpiredAt = new Date(now.getTime() - LEASE_MS);
   return and(
     lte(reminders.availableAt, now),
     or(
@@ -123,27 +120,59 @@ const claimable = (now: Date, leaseMs: number) => {
   );
 };
 
-/** Due pending reminders plus sending rows whose worker lease expired, in a bounded order. */
-export async function listDue(
-  db: Db,
-  now: Date,
-  leaseMs = 5 * 60_000,
-  batchSize = 50,
-): Promise<ReminderRow[]> {
-  return db
-    .select()
+/** What the scan needs about a due reminder's PR. */
+export interface DuePr {
+  githubPrId: number;
+  repoFullName: string;
+  number: number;
+  currentState: PrState;
+  channelId: string | null;
+  headSha: string | null;
+}
+
+export interface DueReminder {
+  reminder: ReminderRow;
+  pr: DuePr;
+  /** The reviewer's Slack user from the identity map; no email fallback. */
+  reviewerSlackUserId: string | undefined;
+}
+
+/**
+ * Claimable reminders with their PR and reviewer identity, in one query and a
+ * bounded order: availableAt, then createdAt, then id.
+ */
+export async function listDueWithContext(db: Db, now: Date, limit: number): Promise<DueReminder[]> {
+  const rows = await db
+    .select({
+      reminder: reminders,
+      pr: {
+        githubPrId: pullRequests.githubPrId,
+        repoFullName: pullRequests.repoFullName,
+        number: pullRequests.number,
+        currentState: pullRequests.currentState,
+        channelId: pullRequests.channelId,
+        headSha: pullRequests.headSha,
+      },
+      reviewerSlackUserId: identities.slackUserId,
+    })
     .from(reminders)
-    .where(claimable(now, leaseMs))
+    .innerJoin(pullRequests, eq(pullRequests.id, reminders.prId))
+    .leftJoin(identities, eq(identities.githubUserId, reminders.reviewerGithubId))
+    .where(claimable(now))
     .orderBy(asc(reminders.availableAt), asc(reminders.createdAt), asc(reminders.id))
-    .limit(batchSize);
+    .limit(limit);
+  return rows.map((row) => ({
+    reminder: row.reminder,
+    pr: row.pr,
+    reviewerSlackUserId: row.reviewerSlackUserId ?? undefined,
+  }));
 }
 
 /** Atomically claim a due reminder and record this delivery attempt. */
 export async function claimReminder(
   db: Db,
   id: string,
-  now = new Date(),
-  leaseMs = 5 * 60_000,
+  now: Date,
 ): Promise<ReminderRow | undefined> {
   const [row] = await db
     .update(reminders)
@@ -152,7 +181,7 @@ export async function claimReminder(
       claimedAt: now,
       attempts: sql`${reminders.attempts} + 1`,
     })
-    .where(and(eq(reminders.id, id), claimable(now, leaseMs)))
+    .where(and(eq(reminders.id, id), claimable(now)))
     .returning();
   return row;
 }
@@ -168,17 +197,12 @@ export async function deferReminder(
   listed: ReminderRow,
   availableAt: Date,
   now: Date,
-  leaseMs = 5 * 60_000,
 ): Promise<void> {
   await db
     .update(reminders)
     .set({ status: "pending", claimedAt: null, availableAt })
     .where(
-      and(
-        eq(reminders.id, listed.id),
-        eq(reminders.generation, listed.generation),
-        claimable(now, leaseMs),
-      ),
+      and(eq(reminders.id, listed.id), eq(reminders.generation, listed.generation), claimable(now)),
     );
 }
 
@@ -206,19 +230,20 @@ export async function markReminderSent(db: Db, claim: ReminderRow): Promise<bool
   return rows.length > 0;
 }
 
-/** Reschedule one failed attempt, or terminally fail it after the retry budget. */
+/** Reschedule one failed attempt with backoff, or fail it once the attempts run out. */
 export async function rescheduleOrFailReminder(
   db: Db,
   claim: ReminderRow,
-  options: { maxAttempts: number; retryAt: Date },
+  now: Date,
 ): Promise<"pending" | "failed" | "superseded"> {
-  const terminal = claim.attempts >= options.maxAttempts;
+  const terminal = claim.attempts >= MAX_ATTEMPTS;
+  const retryAt = new Date(now.getTime() + RETRY_BASE_MS * 2 ** Math.max(0, claim.attempts - 1));
   const rows = await db
     .update(reminders)
     .set(
       terminal
         ? { status: "failed", claimedAt: null }
-        : { status: "pending", claimedAt: null, availableAt: options.retryAt },
+        : { status: "pending", claimedAt: null, availableAt: retryAt },
     )
     .where(currentClaim(claim))
     .returning({ id: reminders.id });
@@ -238,19 +263,18 @@ export async function cancelForReviewer(
   db: Db,
   prId: PrId,
   reviewerGithubId: number,
-  sourceUpdatedAt = new Date(),
-  sourceVersion = "",
+  stamp: SourceStamp,
 ): Promise<ReminderRow> {
   const id = reminderId(prId, reviewerGithubId);
-  const source = normalizedSource({ sourceUpdatedAt, sourceVersion });
+  const source = stampColumns(stamp);
   const [row] = await db
     .insert(reminders)
     .values({
       id,
       prId,
       reviewerGithubId,
-      dueAt: sourceUpdatedAt,
-      availableAt: sourceUpdatedAt,
+      dueAt: stamp.updatedAt,
+      availableAt: stamp.updatedAt,
       ...source,
       status: "cancelled",
       attempts: 0,
@@ -264,7 +288,7 @@ export async function cancelForReviewer(
         claimedAt: null,
         generation: sql`${reminders.generation} + 1`,
       },
-      setWhere: incomingIsNewer(source),
+      setWhere: incomingIsNewer(stamp),
     })
     .returning();
   if (row) return row;
@@ -273,20 +297,14 @@ export async function cancelForReviewer(
   return existing;
 }
 
-export async function cancelForPr(
-  db: Db,
-  prId: PrId,
-  sourceUpdatedAt = new Date(),
-  sourceVersion = "",
-): Promise<void> {
-  const source = normalizedSource({ sourceUpdatedAt, sourceVersion });
+export async function cancelForPr(db: Db, prId: PrId, stamp: SourceStamp): Promise<void> {
   await db
     .update(reminders)
     .set({
-      ...source,
+      ...stampColumns(stamp),
       status: "cancelled",
       claimedAt: null,
       generation: sql`${reminders.generation} + 1`,
     })
-    .where(and(eq(reminders.prId, prId), incomingIsNewer(source)));
+    .where(and(eq(reminders.prId, prId), incomingIsNewer(stamp)));
 }

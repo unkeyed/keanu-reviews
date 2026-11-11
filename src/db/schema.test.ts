@@ -13,7 +13,7 @@ import {
   cancelForReviewer,
   claimReminder,
   isReminderClaimCurrent,
-  listDue,
+  listDueWithContext,
   scheduleReminder,
 } from "#reminders";
 import {
@@ -186,6 +186,8 @@ describe("dedupe", () => {
 });
 
 describe("reminders", () => {
+  const LEASE_MS = 5 * 60_000;
+  const stamp = (updatedAt: Date, version = "") => ({ updatedAt, version });
   const seedPr = () =>
     applyPullRequestSource(db, {
       repoFullName: "unkey/api",
@@ -200,8 +202,10 @@ describe("reminders", () => {
       prId: prId("unkey/api", 1),
       reviewerGithubId: 7,
       dueAt: new Date(Date.now() - 1000),
+      stamp: stamp(new Date(0)),
     });
-    const [a, b] = await Promise.all([claimReminder(db, r.id), claimReminder(db, r.id)]);
+    const now = new Date();
+    const [a, b] = await Promise.all([claimReminder(db, r.id, now), claimReminder(db, r.id, now)]);
     const winners = [a, b].filter(Boolean);
     expect(winners).toHaveLength(1);
     expect(winners[0]?.status).toBe("sending");
@@ -213,12 +217,13 @@ describe("reminders", () => {
       prId: prId("unkey/api", 1),
       reviewerGithubId: 7,
       dueAt: new Date(1_000),
+      stamp: stamp(new Date(0)),
     });
-    const claimed = await claimReminder(db, r.id, new Date(2_000), 5_000);
+    const claimed = await claimReminder(db, r.id, new Date(2_000));
     expect(claimed).toBeDefined();
     if (!claimed) throw new Error("expected reminder claim");
 
-    await cancelForReviewer(db, prId("unkey/api", 1), 7);
+    await cancelForReviewer(db, prId("unkey/api", 1), 7, stamp(new Date()));
 
     expect(await isReminderClaimCurrent(db, claimed)).toBe(false);
     const [row] = await db.select().from(reminders).where(eq(reminders.id, r.id));
@@ -231,11 +236,13 @@ describe("reminders", () => {
       prId: prId("unkey/api", 1),
       reviewerGithubId: 7,
       dueAt: new Date(1_000),
+      stamp: stamp(new Date(0)),
     });
-    await claimReminder(db, r.id, new Date(2_000), 5_000);
-    expect(await listDue(db, new Date(6_999), 5_000)).toHaveLength(0);
-    expect(await listDue(db, new Date(7_000), 5_000)).toHaveLength(1);
-    expect(await claimReminder(db, r.id, new Date(7_000), 5_000)).toBeDefined();
+    await claimReminder(db, r.id, new Date(2_000));
+    const expiry = 2_000 + LEASE_MS;
+    expect(await listDueWithContext(db, new Date(expiry - 1), 50)).toHaveLength(0);
+    expect(await listDueWithContext(db, new Date(expiry), 50)).toHaveLength(1);
+    expect(await claimReminder(db, r.id, new Date(expiry))).toBeDefined();
   });
 
   it("cancel flips a pending reminder so it no longer lists as due", async () => {
@@ -244,21 +251,70 @@ describe("reminders", () => {
       prId: prId("unkey/api", 1),
       reviewerGithubId: 7,
       dueAt: new Date(Date.now() - 1000),
+      stamp: stamp(new Date(0)),
     });
-    await cancelForReviewer(db, prId("unkey/api", 1), 7);
-    expect(await listDue(db, new Date())).toHaveLength(0);
+    await cancelForReviewer(db, prId("unkey/api", 1), 7, stamp(new Date()));
+    expect(await listDueWithContext(db, new Date(), 50)).toHaveLength(0);
+  });
+
+  it("lists a due reminder with its PR and the reviewer's linked Slack user", async () => {
+    await seedPr();
+    await upsertIdentity(db, {
+      githubUserId: 7,
+      githubLogin: "flo",
+      slackUserId: "U7",
+      source: "self-link",
+    });
+    for (const reviewer of [7, 8]) {
+      await scheduleReminder(db, {
+        prId: prId("unkey/api", 1),
+        reviewerGithubId: reviewer,
+        dueAt: new Date(1_000),
+        stamp: stamp(new Date(0)),
+      });
+    }
+    await applyPullRequestSource(db, {
+      repoFullName: "unkey/api",
+      number: 2,
+      githubPrId: 2,
+      currentState: "draft",
+      channelId: "C2",
+      headSha: "sha-2",
+    });
+    await scheduleReminder(db, {
+      prId: prId("unkey/api", 2),
+      reviewerGithubId: 7,
+      dueAt: new Date(1_000),
+      stamp: stamp(new Date(0)),
+    });
+
+    const due = await listDueWithContext(db, new Date(2_000), 50);
+
+    expect(due.map((d) => [d.reminder.id, d.pr?.githubPrId, d.reviewerSlackUserId])).toEqual([
+      ["unkey/api#1::7", 1, "U7"],
+      ["unkey/api#1::8", 1, undefined],
+      ["unkey/api#2::7", 2, "U7"],
+    ]);
+    expect(due[0]?.pr).toEqual({
+      githubPrId: 1,
+      repoFullName: "unkey/api",
+      number: 1,
+      currentState: "pr",
+      channelId: null,
+      headSha: null,
+    });
+    expect(due[2]?.pr).toMatchObject({ currentState: "draft", channelId: "C2", headSha: "sha-2" });
   });
 
   it("persists cancellation tombstones so stale requests cannot resurrect", async () => {
     await seedPr();
     const pr = prId("unkey/api", 1);
-    await cancelForReviewer(db, pr, 7, new Date(20_000), "v2");
+    await cancelForReviewer(db, pr, 7, stamp(new Date(20_000), "v2"));
     const stale = await scheduleReminder(db, {
       prId: pr,
       reviewerGithubId: 7,
       dueAt: new Date(100_000),
-      sourceUpdatedAt: new Date(10_000),
-      sourceVersion: "v1",
+      stamp: stamp(new Date(10_000), "v1"),
     });
     expect(stale.status).toBe("cancelled");
     expect(stale.generation).toBe(1);
@@ -267,8 +323,7 @@ describe("reminders", () => {
       prId: pr,
       reviewerGithubId: 7,
       dueAt: new Date(200_000),
-      sourceUpdatedAt: new Date(30_000),
-      sourceVersion: "v3",
+      stamp: stamp(new Date(30_000), "v3"),
     });
     expect(current.status).toBe("pending");
     expect(current.generation).toBe(2);

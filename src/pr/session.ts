@@ -35,7 +35,8 @@ export type PrSource =
 /** A PR row whose channel and root message exist. */
 export type ReadyPr = PrRow & { channelId: string; rootMessageTs: string };
 
-type ChannelPr = PrRow & { channelId: string };
+/** A PR row whose channel exists. */
+export type ChannelPr = PrRow & { channelId: string };
 
 /** Work inside a session writes to the PR's channel only through it. */
 export interface PrSession {
@@ -47,9 +48,12 @@ export interface PrSession {
    */
   ready(): Promise<ReadyPr>;
   /**
-   * The PR channel's writer: a snapshot's ready channel, or an existing PR's
-   * stored channel, which needs no root. A missing channel means retry later.
+   * The PR whose channel this session writes: a snapshot's ready PR, or an
+   * existing PR's stored row, which needs no root. A missing channel means
+   * retry later.
    */
+  channelPr(): Promise<ChannelPr>;
+  /** The writer for the channel of `channelPr()`. */
   channel(): Promise<PrChannel>;
   /** Post into the PR channel at most once per key. */
   deliver<B extends Outgoing | null>(
@@ -126,6 +130,7 @@ function prSession(
 ): PrSession {
   const ledger = createLedger(deps.db);
   let readyPr: Promise<ReadyPr> | undefined;
+  let channelPr: Promise<ChannelPr> | undefined;
   let channel: Promise<PrChannel> | undefined;
   const s: PrSession = {
     converged,
@@ -133,8 +138,12 @@ function prSession(
       readyPr ??= find.ready();
       return readyPr;
     },
+    channelPr: () => {
+      channelPr ??= find.channel();
+      return channelPr;
+    },
     channel: () => {
-      channel ??= find.channel().then((row) => prChannel(deps, row.channelId));
+      channel ??= s.channelPr().then((row) => prChannel(deps, row.channelId));
       return channel;
     },
     deliver: (async (key, build, opts) =>

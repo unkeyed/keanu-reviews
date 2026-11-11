@@ -71,6 +71,7 @@
     "#reminders": "./src/reminders/index.ts",
     "#pr": "./src/pr/index.ts",
     "#mirror": "./src/mirror/index.ts",
+    "#reviews": "./src/reviews/index.ts",
     "#queue": "./src/queue/index.ts",
     "#ingest": "./src/ingest/index.ts",
     "#app": "./src/app/index.ts"

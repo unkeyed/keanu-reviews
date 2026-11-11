@@ -22,7 +22,6 @@ export type GithubUserFetcher = (
 
 /** Mergeability facts read from a pull request. Used to stop reminders once a PR is ready to merge. */
 export interface PullRequestMergeability {
-  mergeable: boolean | null;
   mergeableState: string;
   draft: boolean;
   /** Present when the pull-request read included the current requested reviewers. */
@@ -96,14 +95,12 @@ export function createPullRequestFetcher(
   return async (repoFullName: string, number: number) => {
     const path = `/repos/${encodedRepoPath(repoFullName)}/pulls/${number}`;
     const body = await githubGetJson<{
-      mergeable?: unknown;
       mergeable_state?: unknown;
       draft?: unknown;
       requested_reviewers?: unknown;
     }>(auth, installationId, path, options);
     if (body === undefined) return undefined;
     return {
-      mergeable: typeof body.mergeable === "boolean" ? body.mergeable : null,
       mergeableState: typeof body.mergeable_state === "string" ? body.mergeable_state : "unknown",
       draft: body.draft === true,
       requestedReviewers: requestedReviewersFrom(body.requested_reviewers),

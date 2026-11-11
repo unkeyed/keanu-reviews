@@ -115,6 +115,7 @@ describe("closed pull request reconciliation", () => {
       prId: prId("unkey/api", 1),
       reviewerGithubId: 7,
       dueAt: new Date("2026-08-13T00:00:00Z"),
+      stamp: { updatedAt: new Date(0), version: "" },
     });
     const fetchSnapshot = vi.fn<PullRequestSnapshotFetcher>(async () => ({
       snapshot: snapshot(1, 101, { merged: true }),
