@@ -1,6 +1,6 @@
 import type { GithubActor } from "#events";
 import type { ImageEmbedder, PullRequestSnapshotFetcher } from "#github";
-import { resolveSlackUser } from "#identity";
+import { profileOrNone, resolveSlackUser } from "#identity";
 import { errMessage } from "#lib";
 import type { PrDeps, PrSession } from "#pr";
 import {
@@ -76,7 +76,7 @@ export async function authorFor(deps: MirrorDeps, actor: GithubActor): Promise<A
     });
     return { kind: "unlinked", login };
   }
-  const profile = await deps.slack.profile(slackUserId);
+  const profile = await profileOrNone(deps, slackUserId);
   const token = deps.authorPoster ? await deps.authorPoster.getUserToken(slackUserId) : undefined;
   // hasUserToken=false means the token lookup missed (no chat:write scope,
   // team mismatch, or no token row for this Slack user), so the bot posts.

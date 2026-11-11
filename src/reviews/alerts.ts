@@ -302,7 +302,7 @@ async function sendAlert(
         message: {
           kind: "review_request",
           reviewerLogin: reviewer.login,
-          reviewerLabel: await displayName(deps.slack, slackUserId, reviewer.login),
+          reviewerLabel: await displayName(deps, slackUserId, reviewer.login),
         },
         beforePost: () => channel.invite([slackUserId], { prId, role: "reviewer" }),
       };

@@ -4,7 +4,7 @@ export {
   type LinkDeps,
   importIdentities,
 } from "./link.ts";
-export { displayName, resolveSlackUser } from "./resolve.ts";
+export { displayName, profileOrNone, resolveSlackUser } from "./resolve.ts";
 export {
   deleteSlackUserToken,
   findSlackUsersByGithubLogins,

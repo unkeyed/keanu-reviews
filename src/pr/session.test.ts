@@ -144,6 +144,21 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
     expect(blocks).not.toContain("<@U100>"); // broadcast channel: no ping
   });
 
+  it("labels #shipped with the login when Slack's profile read fails", async () => {
+    await upsertIdentity(db, {
+      githubUserId: 100,
+      githubLogin: "oz",
+      slackUserId: "U100",
+      source: "self-link",
+    });
+    const d = { ...deps(), shippedChannel: "C0SHIPPED" };
+    await convergePullRequest(d, pullRequestEvent(payload("opened")));
+    vi.spyOn(slack, "profile").mockRejectedValue(new SlackApiError("users.info", "ratelimited"));
+    await convergePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
+    const shipped = slack.messages.find((m) => m.channel === "C0SHIPPED");
+    expect(JSON.stringify(shipped?.blocks)).toContain("oz");
+  });
+
   it("archives and cancels reminders on merge even if the #shipped post fails", async () => {
     const d = { ...deps(), shippedChannel: "C0SHIPPED" };
     await convergePullRequest(d, pullRequestEvent(payload("opened"))); // creates the PR row + channel C1

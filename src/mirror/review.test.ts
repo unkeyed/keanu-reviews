@@ -1,10 +1,11 @@
 import { eq } from "drizzle-orm";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type HandlerDeps, handlers } from "#app";
 import { type ReviewEvent, jobArrivalKey, parseEvent } from "#events";
 import { upsertIdentity } from "#identity";
 import { scheduleReminder } from "#reminders";
 import { onCheckRun, onPullRequest } from "#reviews";
+import { SlackApiError } from "#slack";
 import type { Db } from "../db/client.ts";
 import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
@@ -124,6 +125,20 @@ describe("review job (U6, R5)", () => {
     const blocks = JSON.stringify(slack.messages.at(-1)?.blocks);
     expect(blocks).toContain("flo");
     expect(blocks).not.toContain("<@");
+  });
+
+  it("labels the review with the login when Slack's profile read fails", async () => {
+    await upsertIdentity(db, {
+      githubUserId: 7,
+      githubLogin: "flo",
+      slackUserId: "U7",
+      source: "self-link",
+    });
+    vi.spyOn(slack, "profile").mockRejectedValue(new SlackApiError("users.info", "ratelimited"));
+    await handleReview(deps(), reviewEvent(review("approved")));
+    const blocks = JSON.stringify(slack.messages.at(-1)?.blocks);
+    expect(blocks).toContain("approved");
+    expect(blocks).toContain("flo");
   });
 
   it("authors the review summary AS the reviewer via their token (no name label)", async () => {

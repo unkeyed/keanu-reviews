@@ -160,7 +160,7 @@ async function execute(
           message: {
             kind: "author_invite",
             authorLogin: snapshot.author.login,
-            authorLabel: await displayName(slack, slackUserId, snapshot.author.login),
+            authorLabel: await displayName(deps, slackUserId, snapshot.author.login),
           },
           beforePost: () => sink.invite([slackUserId], { prId: row.id, role: "author" }),
         }));
@@ -195,7 +195,7 @@ async function execute(
           await notifyShipped(deps, {
             prId: row.id,
             pr: { ...view, repo: row.repoFullName, number: row.number },
-            authorLabel: () => displayName(slack, authorSlackId, snapshot.author.login),
+            authorLabel: () => displayName(deps, authorSlackId, snapshot.author.login),
           });
         } catch (err) {
           logger.warn("merge announcement to #shipped failed", {

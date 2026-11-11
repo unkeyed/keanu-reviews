@@ -4,6 +4,7 @@ import type { HandlerDeps } from "#app";
 import { jobArrivalKey } from "#events";
 import { upsertIdentity } from "#identity";
 import { createLogger } from "#lib";
+import { SlackApiError } from "#slack";
 import type { Db } from "../db/client.ts";
 import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
@@ -141,6 +142,24 @@ describe("review requests (U5)", () => {
     await handle(deps({ fetchGithubEmail }), pullRequestEvent(payload()), nextJob());
     expect(slack.invites).toHaveLength(0);
     expect(slack.messages.at(-1)?.text).toContain("flo");
+  });
+
+  it("labels the alert with the login when Slack's profile read fails", async () => {
+    await linkFlo();
+    vi.spyOn(slack, "profile").mockRejectedValue(new SlackApiError("users.info", "ratelimited"));
+    await handle(deps(), pullRequestEvent(payload()), nextJob());
+    expect(slack.invites).toEqual([{ channelId: "C1", userIds: ["U7"] }]);
+    expect(JSON.stringify(slack.messages.at(-1)?.blocks)).toContain("Review requested from flo");
+  });
+
+  it("retries the alert when the reviewer's email lookup fails", async () => {
+    const fetchGithubEmail = vi.fn(async () => {
+      throw new Error("GitHub 502");
+    });
+    await expect(
+      handle(deps({ fetchGithubEmail }), pullRequestEvent(payload()), nextJob()),
+    ).rejects.toThrow("GitHub 502");
+    expect(slack.messages).toHaveLength(0);
   });
 
   it("skips user lookup for a team request", async () => {
