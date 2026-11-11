@@ -1,11 +1,3 @@
-/**
- * Minimal structured logger with secret redaction (KTD12).
- *
- * Any field whose key is a registered secret name, or whose string value equals
- * a registered secret, is replaced with "[redacted]" before serialization. This
- * is the last line of defense against a raw payload or token reaching a log sink.
- */
-
 type LogLevel = "debug" | "info" | "warn" | "error";
 const LEVEL_ORDER: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 
@@ -13,10 +5,6 @@ const REDACTED = "[redacted]";
 const secretKeys = new Set<string>();
 const secretValues = new Set<string>();
 
-/**
- * Register secret field names and concrete secret values. Values are redacted
- * even when nested under an innocent key. Call once at boot, before logging.
- */
 export function registerSecrets(secrets: {
   keys: Iterable<string>;
   values?: Iterable<string | undefined>;

@@ -70,7 +70,6 @@ describe("createDispatcher", () => {
       handlerDeps(db, slack, { fetchCiReadiness: async () => "absent" }),
     );
 
-    // No check runs yet: attempts below the absent-CI budget retry.
     await expect(
       dispatch(job("pull_request", pullRequest("review_requested"), 1), live),
     ).rejects.toThrow(Retry);

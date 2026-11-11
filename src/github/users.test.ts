@@ -136,19 +136,19 @@ describe("GitHub API fetchers", () => {
   it("counts current approvals: latest decision per reviewer, ignoring comments", async () => {
     const auth = createAuth();
     const reviews = [
-      { user: { id: 1 }, state: "COMMENTED" }, // ignored
-      { user: { id: 1 }, state: "APPROVED" }, // 1 → approved
+      { user: { id: 1 }, state: "COMMENTED" },
+      { user: { id: 1 }, state: "APPROVED" },
       { user: { id: 2 }, state: "CHANGES_REQUESTED" },
-      { user: { id: 2 }, state: "APPROVED" }, // 2 → latest approved
+      { user: { id: 2 }, state: "APPROVED" },
       { user: { id: 3 }, state: "APPROVED" },
-      { user: { id: 3 }, state: "COMMENTED" }, // ignored → 3 stays approved
+      { user: { id: 3 }, state: "COMMENTED" },
       { user: { id: 4 }, state: "APPROVED" },
-      { user: { id: 4 }, state: "DISMISSED" }, // 4 → dismissed, not counted
+      { user: { id: 4 }, state: "DISMISSED" },
     ];
     const fetchFn = vi.fn(async () => jsonResponse(200, reviews));
     const fetchApprovals = createReviewApprovalFetcher(auth, "42", { fetch: fetchFn });
 
-    await expect(fetchApprovals("unkey/api", 7)).resolves.toBe(3); // reviewers 1, 2, 3
+    await expect(fetchApprovals("unkey/api", 7)).resolves.toBe(3);
   });
 
   it("stops paging reviews after 10 full pages instead of counting a partial history", async () => {

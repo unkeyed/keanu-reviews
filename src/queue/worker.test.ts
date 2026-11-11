@@ -131,7 +131,6 @@ describe("worker retry hints", () => {
     const r = await row(id);
     return { status: r?.status, at: r?.availableAt.getTime() };
   };
-  // Run the job at each retry time it asks for until it stops retrying.
   const settle = async (worker: ReturnType<typeof createWorker>, id: string) => {
     for (;;) {
       await drainQueue(worker);
@@ -297,7 +296,6 @@ describe("worker retry hints", () => {
 });
 
 describe("worker concurrency", () => {
-  /** Enqueue jobs due in the given order, each keyed to a PR number or to none. */
   const queued = async (...specs: [id: string, pr: number | undefined][]) => {
     const base = Date.now() - 60_000;
     for (const [i, [id, pr]] of specs.entries()) {
@@ -311,7 +309,6 @@ describe("worker concurrency", () => {
       await db.update(jobs).set({ createdAt: at, availableAt: at }).where(eq(jobs.id, id));
     }
   };
-  /** Handlers that each run until the test releases them by job id. */
   const heldJobs = () => {
     const started: string[] = [];
     const releases = new Map<string, () => void>();
@@ -437,7 +434,6 @@ describe("worker concurrency", () => {
   });
 });
 
-/** A handler that runs until the test releases it, recording the signal it got. */
 function heldHandler() {
   let started!: () => void;
   const running = new Promise<void>((resolve) => {
@@ -456,7 +452,6 @@ function heldHandler() {
   return { dispatch, running, finish, signal: () => signal };
 }
 
-/** Fake the clock and the lease and timeout timers, but not the I/O PGlite needs. */
 const fakeLeaseTimers = () =>
   vi.useFakeTimers({
     toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
@@ -537,7 +532,6 @@ describe("worker lease", () => {
 });
 
 describe("worker loop", () => {
-  /** A worker whose claims and jobs finish when the test says. */
   const pendingClaims = () => {
     const finishers: ((more: boolean) => void)[] = [];
     let finishJob: () => void = () => {};

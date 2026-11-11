@@ -9,16 +9,10 @@ import {
   rateLimitOf,
 } from "./http.ts";
 
-/**
- * GitHub's REST view of a PR: the snapshot a webhook also carries, plus the
- * facts the reconciliation job needs to replay a close or merge.
- */
 export type PullRequestSnapshot = PrSnapshot & { state: "open" | "closed"; merged: boolean };
 
 export interface PullRequestSnapshotFetch {
-  /** Undefined when GitHub returns 404. */
   snapshot: PullRequestSnapshot | undefined;
-  /** `x-ratelimit-remaining` after this response, when GitHub sent it. */
   remaining?: number;
 }
 
@@ -84,11 +78,6 @@ function parseSnapshot(
   };
 }
 
-/**
- * Read one PR from GitHub. A rate limit throws `RateLimited` at once with
- * GitHub's wait: a job retries at the reset, and the daily reconcile decides
- * itself whether to wait or stop.
- */
 export function createPullRequestSnapshotFetcher(
   auth: InstallationAuth,
   installationId: string,

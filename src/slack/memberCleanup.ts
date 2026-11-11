@@ -4,9 +4,7 @@ import type { SlackGateway } from "./gateway.ts";
 export interface MemberCleanupDeps {
   slack: SlackGateway;
   logger: Logger;
-  /** Decrypted Slack user tokens for the members that have one, keyed by Slack user id. */
   getUserTokens: (slackUserIds: readonly string[]) => Promise<Map<string, string>>;
-  /** Drop a token Slack reported dead so it isn't retried on future archives. */
   onInvalidToken: (slackUserId: string) => Promise<void>;
 }
 
@@ -19,14 +17,6 @@ export interface MemberCleanupSummary {
   failed: number;
 }
 
-/**
- * Make every channel member who has authorized us leave the channel using their
- * own token, so the subsequent archive is silent (no Slackbot "archived the
- * channel" ping). Best-effort by design: a member we can't move — no token, a
- * dead token, or a transient error — is simply left in place. They receive the
- * one archive notification, and archiving is never blocked. As more people run
- * `/link-slack`, the archive gets quieter, matching Axolo's model.
- */
 export async function quietlyRemoveMembers(
   deps: MemberCleanupDeps,
   channelId: string,
@@ -44,7 +34,6 @@ export async function quietlyRemoveMembers(
   try {
     members = await deps.slack.members(channelId);
   } catch (err) {
-    // If we can't even list members, skip cleanup and let the archive proceed.
     deps.logger.warn("quiet archive: listing members failed; archiving with members present", {
       channelId,
       err: errMessage(err),

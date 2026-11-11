@@ -269,8 +269,6 @@ describe("CI events release review alerts", () => {
     await seedPr("stored-sha");
     ci = "failing";
     await requestReview();
-    // The held alert is for sha-1, which is not the stored head, so a fallback
-    // that finds PR 1 still must not alert on the stale SHA.
     const fetchPrForSha = vi.fn(async () => [1]);
     ci = "passing";
     await handleCheckRun(deps({ fetchPrForSha }), checkRunEvent(payload({ head_sha: "fork-sha" })));

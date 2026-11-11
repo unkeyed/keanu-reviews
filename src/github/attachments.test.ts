@@ -13,7 +13,6 @@ const served =
   async () =>
     new Response(bytes, { status, headers: { "content-type": contentType } });
 
-// The path the bot handed Slack while GitHub still served the attachment.
 async function mintedPath(url = attachment, mintSecret = secret): Promise<string> {
   const mirror = createGithubAttachmentMirror({
     publicUrl,

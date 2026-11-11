@@ -24,57 +24,30 @@ import {
   renewPullRequestLifecycle,
 } from "./store.ts";
 
-/**
- * Which PR a session is for. A snapshot is GitHub's view of the PR and why the
- * work runs. An existing PR is only locked: nothing converges, and a missing
- * channel stays missing.
- */
 export type PrSource =
   | { kind: "snapshot"; snapshot: PrSnapshot; cause: ConvergeCause }
   | { kind: "existing"; githubPrId: number };
 
-/** A PR row whose channel and root message exist. */
 export type ReadyPr = PrRow & { channelId: string; rootMessageTs: string };
 
-/** A PR row whose channel exists. */
 export type ChannelPr = PrRow & { channelId: string };
 
-/** Work inside a session writes to the PR's channel only through it. */
 export interface PrSession {
-  /** The channel convergence this session ran on entry; undefined for a child event or an existing PR. */
   readonly converged: ConvergeOutcome | undefined;
-  /**
-   * The PR with its channel and root. For a snapshot, a missing one is built
-   * as a child event would; still missing means retry later.
-   */
   ready(): Promise<ReadyPr>;
-  /**
-   * The PR whose channel this session writes: a snapshot's ready PR, or an
-   * existing PR's stored row, which needs no root. A missing channel means
-   * retry later.
-   */
   channelPr(): Promise<ChannelPr>;
-  /** The writer for the channel of `channelPr()`. */
   channel(): Promise<PrChannel>;
-  /** Post into the PR channel at most once per key. */
   deliver<B extends Outgoing | null>(
     key: EffectKey,
     build: () => Promise<B>,
     opts?: DeliverOptions,
   ): Promise<Delivered<B>>;
   state(key: EffectKey): Promise<EffectState>;
-  /** The Slack ts of an effect already posted, else undefined. */
   sentTs(key: EffectKey): Promise<string | undefined>;
-  /** Keep an effect from ever posting; returns the ts of one that already posted. */
   tombstone(key: EffectKey): Promise<string | undefined>;
-  /**
-   * Invite the Slack users linked to the GitHub logins @-mentioned in `body`,
-   * except `excludeLogin`. A lookup or invite failure is logged, not thrown.
-   */
   inviteMentions(body: string, excludeLogin: string | undefined): Promise<void>;
 }
 
-/** Another replica holds the PR; a retry waits until a crashed holder's lease can be taken over. */
 export class PullRequestLifecycleBusyError extends Retry {
   constructor(githubPrId: number, retryAfterMs?: number) {
     super(`GitHub PR ${githubPrId} is already being reconciled`, { githubPrId }, retryAfterMs);
@@ -84,20 +57,9 @@ export class PullRequestLifecycleBusyError extends Retry {
 
 const RENEW_EVERY_MS = PULL_REQUEST_LIFECYCLE_LEASE_MS / 3;
 
-/** Session tails per GitHub PR id, so work on one PR in this process runs in arrival order. */
 const lanes = new Map<number, Promise<void>>();
 const inSession = new AsyncLocalStorage<number>();
 
-/**
- * The one way to work on a PR. Work on the same PR runs one at a time: first
- * in this process's queue for the PR, then under the cross-replica lifecycle
- * lease, which is renewed while the work runs. A `pull_request` or
- * `reconcile` cause converges the channel before `body` runs; a child event
- * follows a strictly newer title or draft flag of an open PR's channel, and
- * builds a missing channel only when the body asks for a ready PR. Sessions do not nest,
- * since a nested one would wait on its own queue. Once `signal` aborts, the
- * session stops renewing its lease and starts no further Slack delivery.
- */
 export async function session<T>(
   deps: PrDeps,
   source: PrSource,
@@ -128,7 +90,6 @@ export async function session<T>(
   );
 }
 
-/** Each lookup runs at most once: under the lease, nothing else changes the row it reads. */
 function prSession(
   deps: PrDeps,
   signal: AbortSignal | undefined,

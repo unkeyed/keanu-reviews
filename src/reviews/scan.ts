@@ -20,31 +20,20 @@ import { deliverAlert } from "./alerts.ts";
 import type { ReviewDeps } from "./deps.ts";
 import { isWithinWindow } from "./window.ts";
 
-/** Reminders read per scan; the rest wait for the next one. */
 const BATCH = 50;
-/** How long a held PR's reminders wait before the next check. */
 const HOLD_MS = 15 * 60_000;
-/** `mergeable_state` values that mean the PR is ready to merge. */
 const READY_TO_MERGE_STATES = new Set(["clean", "has_hooks"]);
 
 type HoldReason = "draft" | "no_channel" | "ci";
 
-/** One PR's due reminders, in listed order. */
 interface DueGroup {
   prId: string;
   pr: DuePr;
   rows: DueReminder[];
 }
 
-/**
- * Post due review reminders and return how many posted. A held PR's
- * reminders are deferred; every other PR's run in its session, so they
- * serialize with its lifecycle. A PR another replica holds is skipped and
- * stays due for the next scan.
- */
 export async function scanDue(deps: ReviewDeps): Promise<number> {
   const now = deps.clock.now();
-  // Before any DB work, so a reminder due off-hours stays pending.
   if (!isWithinWindow(now, deps.reminderWindow)) return 0;
   let posted = 0;
   for (const group of groupByPr(await listDueWithContext(deps.db, now, BATCH))) {
@@ -69,8 +58,6 @@ async function remindPr(deps: ReviewDeps, group: DueGroup, now: Date): Promise<n
   if (!isTerminal(pr.currentState)) {
     const hold = await holdReason(deps, group.prId, pr);
     if (hold) {
-      // Deferred, not claimed: a claim would spend an attempt, and rows left
-      // due would fill every batch.
       const until = new Date(now.getTime() + HOLD_MS);
       for (const { reminder } of group.rows) {
         await deferReminder(deps.db, reminder, until, now);
@@ -102,7 +89,7 @@ async function remind(
   let posted = 0;
   for (const { reminder, reviewerSlackUserId } of rows) {
     const claim = await claimReminder(db, reminder.id, now);
-    if (!claim) continue; // another scanner took it
+    if (!claim) continue;
     try {
       if (isTerminal(pr.currentState)) {
         await cancelReminderClaim(db, claim);
@@ -141,12 +128,6 @@ async function remind(
   return posted;
 }
 
-/**
- * The reviewer's review alert never posted: the check run that would have
- * released it was lost. They were never invited, so the scan posts that alert
- * in place of the nudge, and the alert restarts the reminder clock. A reviewer
- * GitHub no longer lists was removed or already reviewed, so the reminder ends.
- */
 async function healAlert(
   deps: ReviewDeps,
   s: PrSession,
@@ -173,7 +154,6 @@ async function healAlert(
   });
 }
 
-/** Why an open PR's due reminders cannot be claimed yet, if anything. */
 async function holdReason(
   deps: ReviewDeps,
   prId: string,
@@ -185,7 +165,6 @@ async function holdReason(
   return undefined;
 }
 
-/** Fails closed: a lookup error must not ping reviewers while CI might be red. */
 async function ciHolds(
   deps: ReviewDeps,
   prId: string,
@@ -206,11 +185,6 @@ async function ciHolds(
   }
 }
 
-/**
- * Whether a PR no longer needs reminders: it is ready to merge or approved
- * enough. Fails open: a failed read delivers anyway rather than silently drop
- * a needed nudge.
- */
 async function noLongerNeeded(
   deps: ReviewDeps,
   prId: string,

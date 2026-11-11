@@ -3,7 +3,6 @@ import type { PrSession } from "#pr";
 import { cleanGithubMarkdown, keys } from "#slack";
 import { type MirrorDeps, reviewPresentation, upsertAuthored } from "./author.ts";
 
-/** Mirror a submitted review into the PR channel of the caller's session. */
 export async function mirrorReview(deps: MirrorDeps, s: PrSession, ev: ReviewEvent): Promise<void> {
   const pr = await s.ready();
   const r = ev.review;
@@ -23,7 +22,6 @@ export async function mirrorReview(deps: MirrorDeps, s: PrSession, ev: ReviewEve
     const { poster, label } = reviewPresentation(author);
     return {
       poster,
-      // Bot reviews thread under the PR root to keep the channel readable.
       threadTs: r.author.isBot ? pr.rootMessageTs : undefined,
       message: {
         kind: "review",
@@ -36,6 +34,5 @@ export async function mirrorReview(deps: MirrorDeps, s: PrSession, ev: ReviewEve
       },
     };
   });
-  // The PR author is already a member of their own channel.
   await s.inviteMentions(r.body, ev.pr.author.login);
 }

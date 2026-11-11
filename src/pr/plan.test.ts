@@ -24,7 +24,6 @@ const snapshot = (over: Partial<PrSnapshot> = {}): PrSnapshot => ({
   ...over,
 });
 
-/** An open PR whose channel, root, and name are all applied. */
 const record = (over: Partial<PlanRecord> = {}): PlanRecord => ({
   repoFullName: "unkey/api",
   number: 1423,

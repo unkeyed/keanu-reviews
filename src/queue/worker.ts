@@ -11,44 +11,24 @@ import {
   rescheduleJob,
 } from "./store.ts";
 
-// 2s doubling over 8 attempts spans about 4 minutes, which outlasts a crashed
-// holder's message-effect lease after a redeploy.
 export const MAX_ATTEMPTS = 8;
 const RETRY_BASE_MS = 2_000;
-// Lease errors can ask for the full 5-minute PR lifecycle lease. Nothing waits longer.
 const MAX_RETRY_DELAY_MS = 5 * 60_000;
-// GitHub's hourly quota can reset most of an hour out; retry at the reset, but
-// check back at least every 15 minutes.
 const MAX_RATE_LIMIT_DELAY_MS = 15 * 60_000;
 const RENEW_EVERY_MS = LEASE_MS / 3;
 
-/**
- * A handler running this long is aborted and its job retried. It stays under
- * the 2-minute message-effect lease, so no Slack effect a live handler claimed
- * can be taken over by another worker, with one renewal period to spare for
- * the abort to land. Healthy handlers finish in seconds; the slowest, a close
- * that walks every member out of the channel, makes a few dozen Slack calls.
- */
 export const HANDLER_TIMEOUT_MS = 100_000;
 
-// The idle poll finds jobs another replica enqueued and retries that come due.
-// A nudge from this process's webhook wakes the worker at once.
 const IDLE_MIN_MS = 1_000;
 const IDLE_MAX_MS = 5_000;
 
 export type Dispatch = (job: JobRow, signal: AbortSignal) => Promise<void>;
 
-/** A claimed job. `settled` resolves once it is settled, handed back, or lost. */
 export interface Claimed {
   settled: Promise<void>;
 }
 
 export interface Worker {
-  /**
-   * Claim the next due job and start it once every earlier job claimed here
-   * for the same PR has finished. A job still waiting when `draining` aborts
-   * is handed back without running. Undefined when nothing is due.
-   */
   claim(draining?: AbortSignal): Promise<Claimed | undefined>;
 }
 
@@ -60,20 +40,9 @@ type Outcome =
 
 const NEVER = new AbortController().signal;
 
-/**
- * Settle claimed jobs (KTD10). Success purges the raw payload (KTD13);
- * failures retry with exponential backoff before becoming terminal.
- */
 export function createWorker(db: Db, logger: Logger, dispatch: Dispatch): Worker {
-  // Per PR, the last job claimed in this process; the next one starts after it.
   const tails = new Map<string, Promise<void>>();
 
-  /**
-   * Hold the lease from the claim on, renewing it while the job waits its
-   * turn and while its handler runs; each renewal moves the claim fence. The
-   * handler timeout starts with the handler. Losing the lease or running past
-   * the timeout aborts the handler's signal and stops waiting for it.
-   */
   const runLeased = async (
     job: JobRow,
     turn: Promise<void>,
@@ -134,14 +103,11 @@ export function createWorker(db: Db, logger: Logger, dispatch: Dispatch): Worker
   };
 
   const settle = async (job: JobRow, turn: Promise<void>, draining: AbortSignal) => {
-    // A crashed worker may have consumed the final attempt before its lease
-    // expired. Reclaim the row for cleanup, but never execute the handler again.
     if (job.attempts > MAX_ATTEMPTS) {
       await failJob(db, job);
       return;
     }
     const outcome = await runLeased(job, turn, draining);
-    // Lost: another worker owns the job now; its settlement is not ours to write.
     if (outcome.kind !== "ran") return;
     const { claim } = outcome;
     if (outcome.ok) {
@@ -169,8 +135,6 @@ export function createWorker(db: Db, logger: Logger, dispatch: Dispatch): Worker
     const maxDelayMs = error instanceof RateLimited ? MAX_RATE_LIMIT_DELAY_MS : MAX_RETRY_DELAY_MS;
     const retryDelay = Math.min(maxDelayMs, Math.max(backoffMs, retryAfterMs));
     if (error instanceof Retry) {
-      // Expected transient condition (e.g. out-of-order delivery). Retry
-      // quietly; only escalate to warn once it stops being transient.
       const fields = {
         jobId: job.id,
         event: job.event,
@@ -193,8 +157,6 @@ export function createWorker(db: Db, logger: Logger, dispatch: Dispatch): Worker
   const claim = async (draining = NEVER): Promise<Claimed | undefined> => {
     const job = await claimNextJob(db);
     if (!job) return undefined;
-    // Chain behind this PR's previous job before anything awaits, so jobs
-    // for one PR start in claim order.
     const keys = jobPrKeys(job.event, job.raw);
     const turn = Promise.all(keys.map((key) => tails.get(key))).then(() => undefined);
     const settled = settle(job, turn, draining);
@@ -209,14 +171,6 @@ export function createWorker(db: Db, logger: Logger, dispatch: Dispatch): Worker
   return { claim };
 }
 
-/**
- * Claim jobs whenever woken, and poll while idle: every second after work,
- * backing off to every five seconds, so a retry comes due at most five
- * seconds late. Up to `concurrency` claimed jobs are in flight at once; jobs
- * for the same PR wait for each other in claim order and count against it
- * while they wait. `stop` claims no further jobs, hands back the ones still
- * waiting their turn, and resolves once the running ones settle.
- */
 export function startWorker(worker: Worker, logger: Logger, concurrency = 1): Loop {
   const draining = new AbortController();
   const inFlight = new Set<Promise<void>>();
@@ -253,7 +207,6 @@ export function startWorker(worker: Worker, logger: Logger, concurrency = 1): Lo
   };
 }
 
-/** The work's outcome, or the abort reason as soon as the signal fires. */
 function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => reject(signal.reason);

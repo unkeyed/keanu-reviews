@@ -7,13 +7,8 @@ export interface CliIo {
   stderr(message: string): void;
 }
 
-/** Builds the context a command runs against, after its arguments parse. */
 export type OpenContext = () => AppContext;
 
-/**
- * Run a command when its file is the Node entrypoint, against the service's
- * own context, and exit with the code it returns.
- */
 export async function runAsMain(
   moduleUrl: string,
   command: (args: string[], io: CliIo, open: OpenContext) => Promise<number>,

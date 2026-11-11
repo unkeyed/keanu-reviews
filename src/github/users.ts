@@ -13,23 +13,18 @@ import {
   githubGetJson,
 } from "./http.ts";
 
-/** Fetch a GitHub user's public email (read-only; does not cross the one-way boundary). */
 export type GithubEmailFetcher = (login: string) => Promise<string | undefined>;
 
-/** Resolve a GitHub login to its immutable numeric id (read-only). */
 export type GithubUserFetcher = (
   login: string,
 ) => Promise<{ id: number; login: string } | undefined>;
 
-/** Mergeability facts read from a pull request. Used to stop reminders once a PR is ready to merge. */
 export interface PullRequestMergeability {
   mergeableState: string;
   draft: boolean;
-  /** Present when the pull-request read included the current requested reviewers. */
   requestedReviewers?: { id: number; login: string }[];
 }
 
-/** Read a PR's current mergeability (a GitHub read; within the one-way boundary). */
 export type PullRequestFetcher = (
   repoFullName: string,
   number: number,
@@ -38,7 +33,6 @@ export type PullRequestFetcher = (
 const EMAIL_CACHE_MS = 5 * 60_000;
 const EMAIL_CACHE_ENTRIES = 5_000;
 
-/** Most pages (of 100) read from one paged GitHub list. */
 const PAGE_LIMIT = 10;
 
 type GithubUserResponse = { id?: unknown; login?: unknown };
@@ -51,13 +45,6 @@ function invalidResponse(path: string): GithubApiError {
   });
 }
 
-/**
- * Production GitHub email fetcher (U5). Reads a user's public profile via
- * `GET /users/{login}`. This is a read — it never writes to GitHub, so it stays
- * within the one-way boundary (R10). Returns undefined when the email is private.
- * Each login is read at most once per five minutes; an unlinked author with a
- * private email is otherwise read on every event of their PR.
- */
 export function createGithubEmailFetcher(
   auth: InstallationAuth,
   installationId: string,
@@ -78,7 +65,6 @@ export function createGithubEmailFetcher(
     });
 }
 
-/** Production GitHub user fetcher (U9): resolve a login to its immutable id. */
 export function createGithubUserFetcher(
   auth: InstallationAuth,
   installationId: string,
@@ -95,7 +81,6 @@ export function createGithubUserFetcher(
   };
 }
 
-/** Read a PR's mergeability via `GET /repos/{owner}/{repo}/pulls/{number}` (read-only). */
 export function createPullRequestFetcher(
   auth: InstallationAuth,
   installationId: string,
@@ -117,7 +102,6 @@ export function createPullRequestFetcher(
   };
 }
 
-/** Count of a PR's current distinct approvals, from the reviews list. */
 export type ReviewApprovalFetcher = (
   repoFullName: string,
   number: number,
@@ -139,7 +123,6 @@ export function createReviewApprovalFetcher(
     const latestByUser = new Map<number, string>();
     for (let page = 1; ; page++) {
       if (page > PAGE_LIMIT) {
-        // A partial history can miss a later dismissal, so don't report a count.
         throw new GithubApiError(`GitHub reviews list exceeded ${PAGE_LIMIT} pages`, {
           kind: "invalid_response",
           url: `https://api.github.com${reviews}`,
@@ -154,10 +137,10 @@ export function createReviewApprovalFetcher(
         const userId = (review as { user?: { id?: unknown } }).user?.id;
         const state = (review as { state?: unknown }).state;
         if (!Number.isInteger(userId) || typeof state !== "string") continue;
-        if (state === "COMMENTED" || state === "PENDING") continue; // not a decision
+        if (state === "COMMENTED" || state === "PENDING") continue;
         latestByUser.set(userId as number, state);
       }
-      if (body.length < 100) break; // last page
+      if (body.length < 100) break;
     }
     let approvals = 0;
     for (const state of latestByUser.values()) if (state === "APPROVED") approvals += 1;
@@ -178,7 +161,6 @@ function requestedReviewersFrom(value: unknown): { id: number; login: string }[]
   return reviewers;
 }
 
-/** Read whether the commit's check runs are passing, failing, still running, or absent. */
 export type CiReadinessFetcher = (repoFullName: string, sha: string) => Promise<CiReadiness>;
 
 interface CheckRunList {
@@ -186,10 +168,6 @@ interface CheckRunList {
   check_runs?: unknown;
 }
 
-/**
- * Page check runs. Stops after {@link PAGE_LIMIT} pages and the caller treats a
- * truncated list as still pending so a missing later failure cannot look green.
- */
 async function listCheckRuns(
   load: (page: number) => Promise<{ total: number; items: CiCheckRun[] }>,
 ): Promise<{ items: CiCheckRun[]; truncated: boolean }> {
@@ -212,11 +190,6 @@ function stringField(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
-/**
- * Production CI aggregate (read-only). Uses only the check-runs API, which the
- * existing Checks: Read permission already allows. Legacy commit statuses are
- * not consulted.
- */
 export function createCiReadinessFetcher(
   auth: InstallationAuth,
   installationId: string,
@@ -254,7 +227,6 @@ export function createCiReadinessFetcher(
   };
 }
 
-/** Production fallback PR resolver (U7): the PR a commit heads, via the Checks-safe read API. */
 export function createPrForShaFetcher(
   auth: InstallationAuth,
   installationId: string,

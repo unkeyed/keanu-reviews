@@ -27,10 +27,10 @@ afterEach(() => close());
 describe("importIdentities (U9 admin bulk-import)", () => {
   it("imports valid rows and skips malformed / unknown ones", async () => {
     const result = await importIdentities({ db, slack, fetchGithubUser }, [
-      { github_login: "octocat", slack_user_id: "U1" }, // direct id
-      { github_login: "flo", slack_email: "flo@unkey.com" }, // email -> lookup
-      { github_login: "ghost", slack_user_id: "U9" }, // unknown login -> skip
-      { slack_user_id: "U5" }, // missing github_login -> skip
+      { github_login: "octocat", slack_user_id: "U1" },
+      { github_login: "flo", slack_email: "flo@unkey.com" },
+      { github_login: "ghost", slack_user_id: "U9" },
+      { slack_user_id: "U5" },
     ]);
     expect(result.imported).toBe(2);
     expect(result.skipped).toHaveLength(2);

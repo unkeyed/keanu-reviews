@@ -31,7 +31,6 @@ describe("quietlyRemoveMembers", () => {
 
     expect(summary).toMatchObject({ members: 3, left: 2, noToken: 1, invalidToken: 0, failed: 0 });
     expect(slack.leftMembers.map((m) => m.userId).sort()).toEqual(["U_AUTH", "U_REVIEWER"]);
-    // The tokenless member is still present, so the archive would still notify them only.
     expect(await slack.members(channelId)).toEqual(["U_NOTOKEN"]);
   });
 

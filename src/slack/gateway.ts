@@ -9,11 +9,6 @@ import {
 import { SlackApiError } from "./errors.ts";
 import { type SleepFn, createPacer, withRateLimitRetry } from "./pacer.ts";
 
-/**
- * Every Slack Web API method this service calls, split by the credential that
- * makes the call. A new method can need a new bot or user scope, which forces
- * every workspace to reinstall or relink, so architecture.test.ts pins it.
- */
 export const SLACK_METHODS = {
   bot: [
     "chat.delete",
@@ -39,18 +34,12 @@ export const SLACK_METHODS = {
 type BotMethod = (typeof SLACK_METHODS.bot)[number];
 type UserMethod = (typeof SLACK_METHODS.user)[number];
 
-/** What a message looks like on the wire: notification text, blocks, then images. */
 export interface RenderedMessage {
   text: string;
   blocks?: SlackBlock[];
   images?: readonly MessageImage[];
 }
 
-/**
- * Who a post is made as. `bot-as` overrides the bot's name and avatar, which
- * needs chat:write.customize; without that scope it falls back to a plain bot
- * post. `user` posts with the person's own token.
- */
 export type Poster =
   | { kind: "bot" }
   | { kind: "bot-as"; username?: string; iconUrl?: string }
@@ -63,32 +52,23 @@ export interface SlackProfile {
   iconUrl?: string;
 }
 
-/** A user Slack will not add to a channel for a reason retrying cannot fix. */
 export interface RefusedInvite {
   userId?: string;
   error: string;
 }
 
-/**
- * Result of a user leaving a channel with their own token. `invalid_token`
- * means the stored token is dead and the caller should drop it.
- */
 export type LeaveOutcome = "left" | "already_out" | "invalid_token";
 
 export interface SlackGateway {
   createChannel(name: string): Promise<string>;
   findChannelByName(name: string): Promise<string | undefined>;
-  /** A channel id passes through; a name is looked up once per gateway and the hit kept. */
   resolveChannel(idOrName: string): Promise<string | undefined>;
   rename(channel: string, name: string): Promise<void>;
   setTopic(channel: string, topic: string): Promise<void>;
   archive(channel: string): Promise<void>;
   unarchive(channel: string): Promise<void>;
-  /** undefined when the channel cannot be read. */
   isArchived(channel: string): Promise<boolean | undefined>;
-  /** Invites every user Slack accepts and returns the ones it permanently refused. */
   invite(channel: string, users: readonly string[]): Promise<RefusedInvite[]>;
-  /** All member ids, bot included. */
   members(channel: string): Promise<string[]>;
   leave(channel: string, userToken: string): Promise<LeaveOutcome>;
   post(
@@ -103,13 +83,11 @@ export interface SlackGateway {
   profile(user: string): Promise<SlackProfile | undefined>;
 }
 
-/** The one Web API entry point the gateway uses; WebClient's named methods all bind to it. */
 export interface SlackWebApi {
   apiCall(method: string, options?: Record<string, unknown>): Promise<unknown>;
 }
 
 export interface SlackGatewayOptions {
-  /** Injected by offline tests; production builds the official WebClient. */
   web?: SlackWebApi;
   webFactory?: (token: string, options: WebClientOptions) => SlackWebApi;
   userWebFactory?: (token: string) => SlackWebApi;
@@ -123,11 +101,6 @@ export interface SlackGatewayOptions {
 }
 
 const REQUEST_TIMEOUT_MS = 10_000;
-/**
- * Profiles, email matches and #shipped misses are read again after five
- * minutes, so a new Slack account, a renamed user or a newly created #shipped
- * shows up that late. Errors are never kept.
- */
 const LOOKUP_CACHE_MS = 5 * 60_000;
 const LOOKUP_CACHE_ENTRIES = 5_000;
 const MAX_RATE_LIMIT_RETRIES = 1;
@@ -145,7 +118,6 @@ const UNINVITABLE_USER_ERRORS: ReadonlySet<string> = new Set([
   "no_external_invite_permission",
 ]);
 
-/** Per-user failures in a `conversations.invite` response, minus users already present. */
 function refusedInvites(response: unknown): RefusedInvite[] {
   const errors = (response as { errors?: unknown })?.errors;
   if (!Array.isArray(errors)) return [];
@@ -171,8 +143,6 @@ function toSlackApiError(method: string, e: unknown): SlackApiError {
   }
   const code = err?.data?.error;
   if (code) {
-    // The default SDK message drops which scope is missing, so lift it into the
-    // message the worker logs.
     const parts = [`Slack API error: ${code}`];
     if (err.data?.needed) parts.push(`needed scope: ${err.data.needed}`);
     if (err.data?.provided) parts.push(`provided scopes: ${err.data.provided}`);
@@ -198,7 +168,6 @@ async function callApi(web: SlackWebApi, method: string, args: Record<string, un
   }
 }
 
-/** `fn`'s result, or undefined when Slack answers with `code`. */
 async function tolerating<T>(code: string, fn: () => Promise<T>): Promise<T | undefined> {
   try {
     return await fn();
@@ -229,7 +198,6 @@ function nextCursor(result: Page, method: string) {
   return next?.trim() || undefined;
 }
 
-/** Walks every page until `onPage` returns true, refusing a cursor it has already seen. */
 async function paginate<R extends Page>(
   method: string,
   page: (cursor: string | undefined) => Promise<R>,
@@ -264,8 +232,6 @@ function clipLabel(alt: string): string {
     : alt;
 }
 
-// Slack rejects the whole message when one text object passes its limit, so a
-// link that would push the row over it is counted in "+N more" instead.
 function linkRow(links: readonly MessageImage[]): string {
   let text = links.length > 1 ? "Images: " : "Image: ";
   let shown = 0;
@@ -323,12 +289,6 @@ async function sendWithImageFallback<T>(
 
 const looksLikeChannelId = (value: string): boolean => /^[CGD][A-Z0-9]{5,}$/.test(value);
 
-/**
- * Slack Web API edge (KTD9). Durable jobs own retries, so the SDK makes none;
- * a short 429 is slept through once, a longer one becomes a Retry. Posts are
- * paced to one per second per channel and channel creation to one per three
- * seconds, inside Slack's Tier-2 limit.
- */
 export function createSlackGateway(token: string, options: SlackGatewayOptions = {}): SlackGateway {
   const clientOptions: WebClientOptions = {
     // SDK defaults can otherwise retry for roughly 30 minutes, far beyond the
@@ -359,11 +319,6 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
       sleep: options.sleep,
     });
 
-  // Two states block a bot write and are each fixed once, then retried:
-  // `not_in_channel` (the bot was removed, or recovered a channel by name) by
-  // rejoining, and `is_archived` by unarchiving, since a write to an archived
-  // channel would otherwise poison every future job for that PR. The daily
-  // reconcile re-archives a merged PR's channel a late write reopened.
   const withWritableChannel = async <T>(
     channel: string,
     op: () => Promise<T>,
@@ -421,10 +376,6 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
     }
   };
 
-  // Posting as a user requires channel membership and an unarchived channel,
-  // so the bot invites them on `not_in_channel` and unarchives on
-  // `is_archived`, with the same two recoveries a bot write gets. Any other
-  // error, a dead token included, propagates so the caller can post as the bot.
   const postAsUser = (poster: Extract<Poster, { kind: "user" }>, args: PostArgs) => {
     const { channel } = args;
     const inviteUser = () =>
@@ -448,8 +399,6 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
             cursor,
             exclude_archived: false,
             limit: 999,
-            // This service creates public channels, so recovery needs only
-            // channels:read and never enumerates private conversations.
             types: "public_channel",
           }),
         ) as Promise<Page & { channels?: unknown }>,
@@ -495,9 +444,6 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
       if (looksLikeChannelId(idOrName)) return idOrName;
       const cached = resolvedChannels.get(idOrName);
       if (cached) return cached;
-      // A name lookup pages through every public channel, archived PR channels
-      // included, so a hit is kept for the life of the gateway and a miss for
-      // five minutes.
       const channelId = await channelLookups.get(idOrName, () =>
         findChannelByName(idOrName.replace(/^#/, "")),
       );
@@ -538,16 +484,12 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
       call(async () => {
         if (users.length === 0) return [];
         try {
-          // `force` keeps inviting the valid users when another one in the list
-          // is already present or cannot be invited.
           const result = await withWritableChannel(channel, () =>
             bot("conversations.invite", { channel, users: users.join(","), force: true }),
           );
           return refusedInvites(result);
         } catch (error) {
           if (!(error instanceof SlackApiError)) throw error;
-          // An ambiguous earlier invite may have succeeded. Slack's
-          // already-present response is the idempotent success it represents.
           if (error.code === "already_in_channel") return refusedInvites(error.data);
           if (!UNINVITABLE_USER_ERRORS.has(error.code)) throw error;
           const refused = refusedInvites(error.data);
@@ -608,8 +550,6 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
                 blocks,
                 thread_ts: opts.threadTs,
                 client_msg_id: opts.clientMsgId,
-                // The block already links out; a preview card is noise.
-                // User-token posts unfurl by default, so they say so too.
                 unfurl_links: false,
                 unfurl_media: false,
               };
@@ -648,7 +588,6 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
     lookupByEmail: (email) =>
       emailLookups.get(email, () =>
         call(() =>
-          // A legitimate miss; every other error is operational.
           tolerating("users_not_found", async () => {
             const result = (await bot("users.lookupByEmail", { email })) as {
               user?: { id?: unknown };

@@ -55,7 +55,7 @@ describe("notifyShipped (R12)", () => {
   });
 
   it("resolves a channel name to its id", async () => {
-    await slack.createChannel("shipped"); // -> C1
+    await slack.createChannel("shipped");
     await notifyShipped(deps("#shipped"), input());
     expect(slack.messages.at(-1)?.channel).toBe("C1");
   });

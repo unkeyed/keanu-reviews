@@ -16,7 +16,6 @@ const FIXTURES = join(
   "../../.claude/skills/verify-keanu-reviews/fixtures/payloads",
 );
 
-/** Fixture names start with the event they replay. Longest prefix wins. */
 const EVENT_BY_PREFIX: [string, string][] = [
   ["review-comment", "pull_request_review_comment"],
   ["issue-comment", "issue_comment"],

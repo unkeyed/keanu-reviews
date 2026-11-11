@@ -30,7 +30,7 @@ describe("withRateLimitRetry (429 Retry-After, KTD9)", () => {
     const rejection = withRateLimitRetry(fn, { ...limits, maxRetries: 2, sleep });
     await expect(rejection).rejects.toBeInstanceOf(Retry);
     await expect(rejection).rejects.toMatchObject({ retryAfterMs: 1_000 });
-    expect(fn).toHaveBeenCalledTimes(3); // initial + 2 retries
+    expect(fn).toHaveBeenCalledTimes(3);
   });
 
   it("does not hold a caller lease for an excessive Retry-After", async () => {

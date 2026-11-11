@@ -7,15 +7,9 @@ export type ShippedDeps = Pick<PrDeps, "db" | "slack" | "logger" | "shippedChann
 export interface ShippedInput {
   prId: PrId;
   pr: PrView;
-  /** The author's plain Slack display name, else login. Looked up only when posting. */
   authorLabel: () => Promise<string>;
 }
 
-/**
- * Announce a merged PR in the shared #shipped channel (R12). Fires only on
- * merge (the caller gates on the merged transition) and is idempotent per PR,
- * so a redelivered merge event does not double-post.
- */
 export async function notifyShipped(deps: ShippedDeps, input: ShippedInput): Promise<void> {
   if (!deps.shippedChannel) return;
   const ledger = createLedger(deps.db);

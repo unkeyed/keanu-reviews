@@ -22,10 +22,10 @@ describe("loadConfig", () => {
     expect(cfg.GITHUB_APP_ID).toBe("123456");
     expect(cfg.GITHUB_INSTALLATION_ID).toBe("42");
     expect(cfg.PUBLIC_URL).toBe("https://bot.example.com");
-    expect(cfg.PORT).toBe(3000); // default
-    expect(cfg.REMINDER_HOURS).toBe(12); // plan default
+    expect(cfg.PORT).toBe(3000);
+    expect(cfg.REMINDER_HOURS).toBe(12);
     expect(cfg.REMINDER_SUPPRESS_APPROVALS).toBe(1);
-    expect(cfg.THREAD_COMMENTS).toBe(true); // threading on by default
+    expect(cfg.THREAD_COMMENTS).toBe(true);
   });
 
   it("parses REMINDER_SUPPRESS_APPROVALS and rejects a non-positive value", () => {
@@ -82,7 +82,6 @@ describe("loadConfig", () => {
   });
 
   it("enumerates every secret key so the logger can redact them", () => {
-    // Guard against a new secret being added to the schema without redaction.
     expect(SECRET_KEYS).toContain("GITHUB_APP_PRIVATE_KEY");
     expect(SECRET_KEYS).toContain("SLACK_BOT_TOKEN");
     expect(SECRET_KEYS).toContain("SLACK_SIGNING_SECRET");

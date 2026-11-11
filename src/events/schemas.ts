@@ -2,9 +2,6 @@ import { z } from "zod";
 import { Permanent } from "#lib";
 import type { DomainEvent, GithubActor, PrSnapshot } from "./types.ts";
 
-// Only the fields a handler reads are required. Everything else GitHub sends is
-// ignored, so a new or missing optional field never fails a delivery.
-
 const actor = z
   .object({ id: z.number(), login: z.string(), type: z.string().nullish() })
   .transform((u): GithubActor => ({ id: u.id, login: u.login, isBot: u.type === "Bot" }));
@@ -178,7 +175,6 @@ type Envelope = z.output<typeof envelope>;
 
 interface EventParser {
   schema: z.ZodType<DomainEvent>;
-  /** Why a delivery this handler never acts on is dropped, checked before full validation. */
   skip?: (raw: Envelope) => string | undefined;
 }
 
@@ -186,7 +182,6 @@ const MIRRORED: ReadonlySet<string> = new Set(mirrorAction.options);
 const unhandledMirrorAction = (raw: Envelope) =>
   raw.action && MIRRORED.has(raw.action) ? undefined : "unhandled action";
 
-/** The single list of GitHub events this app subscribes to. */
 const EVENT_PARSERS: Readonly<Record<string, EventParser>> = {
   pull_request: { schema: pullRequestEvent },
   pull_request_review_comment: { schema: reviewCommentEvent, skip: unhandledMirrorAction },
@@ -198,18 +193,12 @@ const EVENT_PARSERS: Readonly<Record<string, EventParser>> = {
     schema: issueCommentEvent,
     skip: (raw) => unhandledMirrorAction(raw) ?? (raw.issue?.pull_request ? undefined : "not a PR"),
   },
-  // In-progress runs are ignored; their completion event is the trigger.
   check_run: {
     schema: checkRunEvent,
     skip: (raw) => (raw.check_run?.status === "completed" ? undefined : "check run not completed"),
   },
 };
 
-/**
- * Turn a stored webhook payload into a DomainEvent. Unknown events and actions
- * no handler acts on become `ignored`. A known event missing a field a handler
- * reads throws Permanent: redelivering the same bytes can never succeed.
- */
 export function parseEvent(event: string, raw: unknown): DomainEvent {
   const parser = Object.hasOwn(EVENT_PARSERS, event) ? EVENT_PARSERS[event] : undefined;
   const head = envelope.safeParse(raw);

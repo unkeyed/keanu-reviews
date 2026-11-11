@@ -26,14 +26,13 @@ describe("cleanGithubMarkdown", () => {
     const out = cleanGithubMarkdown(body);
     expect(out).toContain("No critical issues");
     expect(out).toContain("**Reviewed changes**");
-    // None of the HTML noise survives.
     expect(out).not.toContain("<!--");
     expect(out).not.toContain("PULLFROG_DIVIDER");
     expect(out).not.toContain("<sup>");
     expect(out).not.toContain("<img");
     expect(out).not.toContain("pullfrog.com/logos");
     expect(out).not.toContain("&nbsp;");
-    expect(out).not.toContain("Using GPT"); // the whole footer block is gone
+    expect(out).not.toContain("Using GPT");
   });
 
   it("keeps the link text when unwrapping an <a> tag", () => {
@@ -100,7 +99,6 @@ describe("extractEmbeddedImages", () => {
 });
 
 describe("GitHub body parsing on hostile input", () => {
-  // GitHub's 65,536-character comment limit, filled with openers that never close.
   const hostile = (unit: string, tail = "") =>
     unit.repeat(Math.floor((65_536 - tail.length) / unit.length)) + tail;
   const bodies: [string, string][] = [

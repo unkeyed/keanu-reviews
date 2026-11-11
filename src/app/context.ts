@@ -43,23 +43,17 @@ import {
 } from "#slack";
 import type { HandlerDeps } from "./handlers.ts";
 
-/** Everything the service, and each admin command, runs against. */
 export interface AppContext {
   config: Config;
   logger: Logger;
   db: Db;
-  /** What every webhook handler, the reminder scan and the daily reconcile read. */
   deps: HandlerDeps;
-  /** GitHub's view of one PR, for the daily reconcile; the same reader as `deps.fetchSnapshot`. */
   fetchSnapshot: PullRequestSnapshotFetcher;
-  /** GitHub user by login, for the identity import. */
   fetchGithubUser: GithubUserFetcher;
-  /** Routes beside health and the webhook: attachments, OAuth and the Slack command. */
   routes: readonly Hono[];
   close(): Promise<void>;
 }
 
-/** Build every client once, from config. The only place concrete clients are made. */
 export function createContext(config: Config): AppContext {
   registerSecrets({ keys: SECRET_KEYS, values: SECRET_KEYS.map((k) => config[k]) });
   const logger = createLogger(config.LOG_LEVEL, { service: "keanu-reviews" });
@@ -72,7 +66,6 @@ export function createContext(config: Config): AppContext {
   );
   const installationId = config.GITHUB_INSTALLATION_ID;
   const teamId = config.SLACK_TEAM_ID;
-  // Config enforces that the three Slack user-OAuth settings come together.
   const slackOAuth =
     config.SLACK_OAUTH_CLIENT_ID &&
     config.SLACK_OAUTH_CLIENT_SECRET &&
@@ -87,7 +80,6 @@ export function createContext(config: Config): AppContext {
     publicUrl: config.PUBLIC_URL,
     secret: config.OAUTH_STATE_SECRET,
   });
-  // Open the pool last so a failure while building clients cannot strand it.
   const { db, close } = createDb(config.DATABASE_URL);
   const userTokens =
     slackOAuth && userTokenAccess({ db, slack, logger, teamId, cipher: slackOAuth.cipher });
@@ -109,7 +101,6 @@ export function createContext(config: Config): AppContext {
       endHour: config.REMINDER_WINDOW_END_HOUR,
       timeZone: config.REMINDER_WINDOW_TZ,
     },
-    // Don't remind once the PR is ready to merge or has this many approvals.
     suppressApprovals: config.REMINDER_SUPPRESS_APPROVALS,
     shippedChannel: config.SLACK_SHIPPED_CHANNEL,
     postPrComment: config.GITHUB_COMMENT_ON_MERGE
@@ -180,11 +171,6 @@ export function createContext(config: Config): AppContext {
   };
 }
 
-/**
- * Post-as-user and quiet archiving, from the tokens members granted through
- * Slack user OAuth. A token that no longer decrypts falls back to the bot but
- * is kept: a misconfigured key at deploy would otherwise wipe every stored token.
- */
 export function userTokenAccess(input: {
   db: Db;
   slack: HandlerDeps["slack"];

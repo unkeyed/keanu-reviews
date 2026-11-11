@@ -3,11 +3,6 @@ import type { InstallationAuth } from "./auth.ts";
 
 const GITHUB_API_BASE = "https://api.github.com";
 
-/**
- * Every GitHub request this service makes. Adding a route can require a new
- * GitHub App permission, which forces every install to re-approve, so
- * architecture.test.ts pins this list and fails on any path literal not in it.
- */
 export const GITHUB_ROUTES = [
   "GET /repos/{owner}/{repo}/pulls/{number}",
   "GET /repos/{owner}/{repo}/pulls/{number}/reviews",
@@ -41,7 +36,6 @@ export class GithubApiError extends Error {
   }
 }
 
-/** A non-negative numeric header, or undefined when absent or malformed. */
 export function headerNumber(headers: Headers, name: string): number | undefined {
   const raw = headers.get(name)?.trim();
   if (!raw) return undefined;
@@ -79,7 +73,6 @@ export function rateLimitOf(
   return new RateLimited(`GitHub rate limit exceeded (HTTP ${status})`, { url }, retryAfterMs);
 }
 
-/** `owner/repo` as a URL path, each segment encoded and the separator kept. */
 export function encodedRepoPath(repoFullName: string): string {
   return repoFullName.split("/").map(encodeURIComponent).join("/");
 }
@@ -91,15 +84,9 @@ export interface GithubRequestOptions {
 
 export interface GithubRequestOptionsWithBody extends GithubRequestOptions {
   method?: "GET" | "POST";
-  /** JSON body for POST. Omit for GET. */
   jsonBody?: unknown;
 }
 
-/**
- * Authenticated GitHub request with one 401 retry. Returns the final response,
- * including non-2xx statuses, so callers can read rate-limit headers themselves.
- * Network failures and timeouts throw {@link GithubApiError}.
- */
 export async function githubRequest(
   auth: InstallationAuth,
   installationId: string,
@@ -148,10 +135,6 @@ export async function githubRequest(
   return response;
 }
 
-/**
- * Perform an authenticated GitHub JSON GET with bounded latency and consistent
- * error semantics. A 404 is the only HTTP response represented as absence.
- */
 export async function githubGetJson<T>(
   auth: InstallationAuth,
   installationId: string,
@@ -200,12 +183,6 @@ export async function githubGetJson<T>(
   }
 }
 
-/**
- * Perform an authenticated GitHub JSON POST. This is the ONLY write path in the
- * service and is used exclusively behind the opt-in merge-comment feature; the
- * one-way boundary otherwise holds. A 403 typically means the GitHub App lacks
- * the write permission (grant it and reinstall).
- */
 export async function githubPostJson(
   auth: InstallationAuth,
   installationId: string,

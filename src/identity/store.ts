@@ -16,7 +16,6 @@ export interface UpsertIdentityInput {
   source: "self-link" | "admin-import" | "email-match";
 }
 
-/** Idempotent on githubUserId (KTD6): re-linking updates the row, never duplicates. */
 export async function upsertIdentity(db: Db, input: UpsertIdentityInput): Promise<IdentityRow> {
   const [row] = await db
     .insert(identities)
@@ -46,12 +45,6 @@ export async function findByGithubId(
   return row;
 }
 
-/**
- * Resolve @-mentioned GitHub logins to linked Slack users, keyed by the
- * lowercased login. GitHub logins are case-insensitive, so they match
- * case-folded; if a login was ever reused across ids the most recently linked
- * row wins. The identity map is people-sized, so the case-folded scan needs no index.
- */
 export async function findSlackUsersByGithubLogins(
   db: Db,
   githubLogins: readonly string[],
@@ -77,11 +70,6 @@ export type SelfLinkIdentityResult =
   | { outcome: "linked" | "refreshed"; identity: IdentityRow }
   | { outcome: "conflict" };
 
-/**
- * Link an OAuth-verified GitHub identity without ever transferring ownership
- * from another Slack user. The conflict insert plus Slack-scoped update makes
- * the decision safe when two callbacks race for the same GitHub id.
- */
 async function linkSelfIdentity(
   db: Db,
   input: Omit<UpsertIdentityInput, "source">,
@@ -113,7 +101,6 @@ function secretHash(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("base64url");
 }
 
-/** Record a signed OAuth state's nonce as used. False when it was used before. */
 async function consumeNonce(db: Db, nonce: string, expiresAt: Date): Promise<boolean> {
   const consumed = await db
     .insert(oauthStateNonces)
@@ -142,7 +129,6 @@ export type CreateGithubLinkConfirmationResult =
   | { outcome: "pending"; expiresAt: Date }
   | { outcome: "state_expired" | "state_replayed" };
 
-/** Consume signed OAuth state once and persist a browser-to-Slack confirmation. */
 export async function createGithubLinkConfirmation(
   db: Db,
   input: {
@@ -168,7 +154,6 @@ export async function createGithubLinkConfirmation(
       return { outcome: "state_replayed" as const };
     }
 
-    // Only the newest completed OAuth flow for a Slack identity remains valid.
     await tx
       .delete(githubLinkConfirmations)
       .where(
@@ -191,7 +176,6 @@ export async function createGithubLinkConfirmation(
 
 export type ConfirmGithubLinkResult = SelfLinkIdentityResult | { outcome: "invalid_or_expired" };
 
-/** Atomically bind, consume, and apply one Slack-user-owned confirmation code. */
 export async function confirmGithubLink(
   db: Db,
   input: {
@@ -226,11 +210,6 @@ export async function confirmGithubLink(
   });
 }
 
-/**
- * Persist (or refresh) one participant's encrypted Slack user token. Re-running
- * the OAuth flow overwrites the prior token for that user, so a re-authorized
- * user or a rotated scope set is always the newest row.
- */
 export async function upsertSlackUserToken(
   db: Db,
   input: {
@@ -267,12 +246,6 @@ export type CompleteSlackTokenAuthorizationResult =
   | { outcome: "stored" }
   | { outcome: "state_expired" | "state_replayed" };
 
-/**
- * Consume the signed OAuth-state nonce exactly once and persist the encrypted
- * token in the same transaction. Mirrors the GitHub flow's replay protection
- * (KTD-style single-use state) so a captured callback URL cannot be replayed to
- * overwrite a token or mint a duplicate.
- */
 export async function completeSlackTokenAuthorization(
   db: Db,
   input: {
@@ -305,11 +278,6 @@ export async function completeSlackTokenAuthorization(
   });
 }
 
-/**
- * The encrypted token + granted scopes for a Slack user in this workspace, if one
- * is stored. Callers decrypt the token and inspect `scopes` to decide which
- * user-token operations (leave, post-as-user) it's actually authorized for.
- */
 export async function getSlackUserTokenRow(
   db: Db,
   slackTeamId: string,
@@ -328,7 +296,6 @@ export async function getSlackUserTokenRow(
   return row;
 }
 
-/** Stored tokens for several Slack users in one read, keyed by Slack user id. */
 export async function getSlackUserTokenRows(
   db: Db,
   slackTeamId: string,
@@ -351,10 +318,6 @@ export async function getSlackUserTokenRows(
   return new Map(rows.map(({ slackUserId, ...row }) => [slackUserId, row]));
 }
 
-/**
- * Drop a stored token — used when Slack reports it invalid (`token_revoked` /
- * `invalid_auth`) so we don't keep retrying a dead token on every archive.
- */
 export async function deleteSlackUserToken(
   db: Db,
   slackTeamId: string,

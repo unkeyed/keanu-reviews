@@ -1,19 +1,8 @@
 import { createCipheriv, createDecipheriv, randomBytes as cryptoRandomBytes } from "node:crypto";
 
-/**
- * Authenticated encryption for Slack user tokens at rest. Unlike the GitHub
- * OAuth flow — which only reads an identity and discards the token — the silent
- * archive feature must persist each participant's `xoxp-` token to call
- * `conversations.leave` on their behalf later. Those tokens are secrets, so we
- * never store them in plaintext.
- *
- * Format: `v1.<iv>.<tag>.<ciphertext>` with each segment base64url. AES-256-GCM
- * gives confidentiality plus tamper detection (a modified ciphertext fails the
- * auth tag on decrypt rather than yielding garbage).
- */
 const VERSION = "v1";
-const IV_BYTES = 12; // 96-bit nonce, the GCM standard
-const KEY_BYTES = 32; // AES-256
+const IV_BYTES = 12;
+const KEY_BYTES = 32;
 const TAG_BYTES = 16;
 
 export interface TokenCipher {
@@ -21,11 +10,6 @@ export interface TokenCipher {
   decrypt(payload: string): string;
 }
 
-/**
- * Accept the configured key as hex (64 chars), base64, or base64url and require
- * it to decode to exactly 32 bytes so a truncated/mistyped key fails at boot,
- * not on the first archive.
- */
 function decodeKey(keyMaterial: string): Buffer {
   const trimmed = keyMaterial.trim();
   const candidates: Buffer[] = [];

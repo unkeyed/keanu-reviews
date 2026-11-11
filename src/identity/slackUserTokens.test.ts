@@ -32,7 +32,6 @@ describe("Slack user tokens", () => {
       scopes: "channels:write",
     });
     expect(await getSlackUserTokenRow(db, "T1", "U2")).toBeUndefined();
-    // A different workspace must not read another team's token.
     expect(await getSlackUserTokenRow(db, "TOTHER", "U1")).toBeUndefined();
   });
 
@@ -51,7 +50,7 @@ describe("Slack user tokens", () => {
     });
     expect(await getSlackUserTokenRow(db, "T1", "U1")).toEqual({
       encryptedToken: "cipher-new",
-      scopes: "channels:write,chat:write", // broadened scope on re-authorization
+      scopes: "channels:write,chat:write",
     });
   });
 

@@ -15,18 +15,12 @@ export interface SlackCommandDeps {
   oauthStateSecret: string;
   githubOauthClientId: string;
   githubOauthCallbackUrl: string;
-  /** Slack user-token OAuth for `/link-slack`; omit to disable quiet archiving. */
   slackOauthClientId?: string;
   slackOauthCallbackUrl?: string;
   now?: () => number;
   randomBytes?: (size: number) => Buffer;
 }
 
-/**
- * Start proof-of-ownership linking for `/link-github`. After local signature
- * and workspace checks this returns immediately; GitHub and DB I/O happen only
- * in the browser callback, outside Slack's acknowledgement window.
- */
 export function createSlackCommandRoute(deps: SlackCommandDeps): Hono {
   const app = new Hono();
 
@@ -75,9 +69,6 @@ export function createSlackCommandRoute(deps: SlackCommandDeps): Hono {
         randomBytes: deps.randomBytes,
       });
 
-    // `/link-slack` grants the user token that lets us (a) post your mirrored
-    // comments/reviews as you, and (b) make you leave PR channels quietly before
-    // archive (no Slackbot "archived the channel" ping).
     if ((params.get("command") ?? "").trim() === "/link-slack") {
       if (!deps.slackOauthClientId || !deps.slackOauthCallbackUrl) {
         return c.json({

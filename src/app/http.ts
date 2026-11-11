@@ -4,7 +4,6 @@ import { createGithubWebhookRoute } from "#ingest";
 import type { AppContext } from "./context.ts";
 import { createHealthRoutes } from "./health.ts";
 
-/** The service's HTTP surface: health, the GitHub webhook, then the context's routes. */
 export function createHttpApp(ctx: AppContext, nudge: () => void): Hono {
   const { config, db, logger } = ctx;
   const app = new Hono();

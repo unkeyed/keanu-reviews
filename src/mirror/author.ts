@@ -16,23 +16,9 @@ import {
 
 export interface MirrorDeps extends PrDeps {
   embedImages: ImageEmbedder;
-  /** Bot logins (normalized) whose comments/reviews should be mirrored anyway. */
   allowedBots: ReadonlySet<string>;
-  /**
-   * When true, a reply within a GitHub review thread is posted as a Slack
-   * threaded reply under the original comment's message. When false, every
-   * comment posts top-level (flat). Thread-starting comments and PR conversation
-   * comments are always top-level regardless.
-   */
   threadComments: boolean;
-  /** GitHub's view of one PR, for a conversation comment that arrives before its channel exists. */
   fetchSnapshot: PullRequestSnapshotFetcher;
-  /**
-   * Post-as-user, when Slack user OAuth is configured (undefined otherwise):
-   * mirrored comments/reviews are authored with the linked user's own token
-   * instead of the bot. `getUserToken` returns a decrypted token ONLY when the
-   * user granted `chat:write`; `onInvalidToken` drops a token Slack reports dead.
-   */
   authorPoster:
     | {
         getUserToken: (slackUserId: string) => Promise<string | undefined>;
@@ -41,11 +27,6 @@ export interface MirrorDeps extends PrDeps {
     | undefined;
 }
 
-/**
- * Who wrote a mirrored GitHub item, as Slack sees them: a linked user whose
- * own token can post (`user`), a linked user the bot posts for (`linked`), or
- * nobody Slack knows (`unlinked`).
- */
 export type Author =
   | {
       kind: "user";
@@ -61,7 +42,6 @@ type UserAuthor = Extract<Author, { kind: "user" }>;
 
 export interface Presentation {
   poster: Poster;
-  /** "by <label>" under the message; undefined when the post already shows who wrote it. */
   label: string | undefined;
 }
 
@@ -78,8 +58,6 @@ async function authorFor(deps: MirrorDeps, actor: GithubActor): Promise<Author> 
   }
   const profile = await profileOrNone(deps, slackUserId);
   const token = deps.authorPoster ? await deps.authorPoster.getUserToken(slackUserId) : undefined;
-  // hasUserToken=false means the token lookup missed (no chat:write scope,
-  // team mismatch, or no token row for this Slack user), so the bot posts.
   deps.logger.debug("resolved message author", {
     login,
     githubId: actor.id,
@@ -99,11 +77,6 @@ const userPoster = (author: UserAuthor): Poster => ({
   token: author.token,
 });
 
-/**
- * A comment posts as its author: with their own token, else as the bot
- * wearing their Slack name and avatar. The label depends only on the profile
- * name, so a user-token post by someone without one still reads "by <login>".
- */
 export function commentPresentation(author: Author): Presentation {
   const label = author.kind !== "unlinked" && author.profile?.name ? undefined : author.login;
   switch (author.kind) {
@@ -123,10 +96,6 @@ export function commentPresentation(author: Author): Presentation {
   }
 }
 
-/**
- * A review never wears its author's face: it posts with their own token, or as
- * the bot labelled with their plain Slack name, never a ping.
- */
 export function reviewPresentation(author: Author): Presentation {
   switch (author.kind) {
     case "user":
@@ -138,7 +107,6 @@ export function reviewPresentation(author: Author): Presentation {
   }
 }
 
-/** Images a comment embeds, mirrored through the attachment proxy. Bot comments show none. */
 export async function commentImages(
   deps: { embedImages: ImageEmbedder },
   body: string,
@@ -157,15 +125,6 @@ export interface AuthoredItem {
 
 type Present = (author: Author, images: readonly MessageImage[]) => Outgoing | null;
 
-/**
- * Post a mirrored item as its author, or apply an edit to the message already
- * posted for it. The author and images are resolved only when something will
- * be written. When Slack refuses the author's own token for a reason a retry
- * cannot fix, the item posts as the bot under the same key and client_msg_id;
- * a dead token is also dropped. A rate limit or transient failure retries the
- * job. An edit is best-effort: one Slack cannot apply (message gone) leaves
- * the original standing.
- */
 export async function upsertAuthored(
   deps: MirrorDeps,
   s: PrSession,
@@ -224,12 +183,6 @@ export async function upsertAuthored(
   }
 }
 
-/**
- * Delete a mirrored item's Slack message, if it was posted, with the token
- * that would post as its author now. One not yet posted is tombstoned, so a
- * retried or late create never posts it. The Slack delete is best-effort: a
- * failure (already gone, authorship changed, transient) is logged, not thrown.
- */
 export async function removeMirror(
   deps: MirrorDeps,
   s: PrSession,

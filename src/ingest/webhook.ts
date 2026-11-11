@@ -9,17 +9,10 @@ export interface WebhookDeps {
   db: Db;
   logger: Logger;
   webhookSecret: string;
-  /** Numeric installation ids allowed to reach this service (U3 allowlist). */
   allowedInstallationIds: string[];
-  /** Wakes this process's worker for a newly stored job. */
   nudge: () => void;
 }
 
-/**
- * GitHub webhook receiver (U3). ACK-fast, process-async (KTD3): verify, authorize,
- * dedupe, persist a job, and return 2xx well within GitHub's ~10s window. A worker
- * (U4) processes the job later so slow Slack calls never trigger GitHub retries.
- */
 export function createGithubWebhookRoute(deps: WebhookDeps): Hono {
   const app = new Hono();
 
@@ -47,8 +40,6 @@ export function createGithubWebhookRoute(deps: WebhookDeps): Hono {
       return c.json({ error: "invalid_json" }, 400);
     }
 
-    // Authorize: a valid signature proves authenticity, not that this is the
-    // expected installation. Enforce the allowlist (KTD-driven, U3).
     const installationId = payload.installation?.id;
     if (
       installationId === undefined ||
@@ -64,7 +55,6 @@ export function createGithubWebhookRoute(deps: WebhookDeps): Hono {
       return c.json({ error: "missing_headers" }, 400);
     }
 
-    // Dedupe: delivery is at-least-once; retries/redeliveries reuse the GUID (KTD4).
     const accepted = await enqueueDeliveryJob(deps.db, {
       deliveryId,
       event,

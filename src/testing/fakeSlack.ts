@@ -11,7 +11,6 @@ import {
   type SlackProfile,
 } from "#slack";
 
-/** One recorded post, flattened so tests read the poster's fields directly. */
 export interface FakePost {
   channel: string;
   ts: string;
@@ -37,7 +36,6 @@ export interface FakeUpdate {
 
 const fail = (method: string, code: string) => new SlackApiError(method, code);
 
-/** In-memory Slack gateway for offline tests. Records every call for assertions. */
 export class FakeSlackGateway implements SlackGateway {
   channels: { id: string; name: string; archived: boolean; topic?: string }[] = [];
   messages: FakePost[] = [];
@@ -47,11 +45,8 @@ export class FakeSlackGateway implements SlackGateway {
   leftMembers: { channelId: string; userId: string }[] = [];
   emailToUser = new Map<string, string>();
   profiles = new Map<string, SlackProfile>();
-  /** Slack user id -> the (decrypted) token leave calls expect. */
   userTokens = new Map<string, string>();
-  /** Tokens the fake treats as revoked. */
   invalidTokens = new Set<string>();
-  /** Slack user id -> the error Slack returns when inviting that user (e.g. a guest). */
   uninvitableUsers = new Map<string, string>();
   private memberships = new Map<string, Set<string>>();
   private resolved = new Map<string, string>();
@@ -135,8 +130,6 @@ export class FakeSlackGateway implements SlackGateway {
     const existing = this.clientMessageIds.get(opts.clientMsgId);
     if (existing) return existing;
     const { poster } = opts;
-    // Posting as the user: a revoked token fails (so callers drop it and fall
-    // back to the bot), and a non-member is invited first, as the gateway does.
     if (poster.kind === "user") {
       if (this.invalidTokens.has(poster.token)) throw fail("chat.postMessage", "token_revoked");
       const members = this.memberships.get(channel) ?? new Set<string>();
@@ -175,7 +168,6 @@ export class FakeSlackGateway implements SlackGateway {
     }
     const posted = this.messages.find((m) => m.ts === ts && m.channel === channel);
     if (!posted) throw fail("chat.update", "message_not_found");
-    // Slack lets only the token that posted a message edit it.
     if (posted.authorUserToken !== authorUserToken)
       throw fail("chat.update", "cant_update_message");
     this.updates.push({ channel, ts, ...msg, authorUserToken });

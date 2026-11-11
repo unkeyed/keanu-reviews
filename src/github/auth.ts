@@ -1,21 +1,11 @@
-/**
- * Installation token provider (U3). GitHub installation tokens live ~1h and have
- * no refresh endpoint — you re-mint. This caches per installation and refreshes
- * on expiry (with a safety skew) or when a caller reports a 401.
- *
- * The actual mint (JWT -> installation token) is injected so the core cache logic
- * is testable offline; production wires `@octokit/auth-app` via `octokitMintFn`.
- */
-
 export interface MintedToken {
   token: string;
-  /** Absolute expiry. */
   expiresAt: Date;
 }
 
 export type MintFn = (installationId: string) => Promise<MintedToken>;
 
-const REFRESH_SKEW_MS = 5 * 60_000; // refresh 5 min before expiry
+const REFRESH_SKEW_MS = 5 * 60_000;
 /** auth-app's request takes no AbortSignal, so a stalled mint is bounded here. */
 const MINT_TIMEOUT_MS = 10_000;
 
@@ -40,7 +30,6 @@ export function createInstallationAuth(
   now: () => number = Date.now,
 ): InstallationAuth {
   const cache = new Map<string, MintedToken>();
-  // Concurrent callers share one mint instead of each spending a JWT exchange.
   const minting = new Map<string, Promise<MintedToken>>();
 
   return {

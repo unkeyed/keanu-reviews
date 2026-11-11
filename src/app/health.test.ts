@@ -10,7 +10,7 @@ describe("health route", () => {
     const body = (await res.json()) as { status: string; service: string; version: string };
     expect(body.status).toBe("ok");
     expect(body.service).toBe("keanu-reviews");
-    expect(typeof body.version).toBe("string"); // build SHA (or "unknown") for deploy verification
+    expect(typeof body.version).toBe("string");
   });
 
   it("returns ready after the dependency check succeeds", async () => {

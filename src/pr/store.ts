@@ -7,7 +7,6 @@ import type { ArrivalKey, PrId } from "#lib";
 export const prId = (repoFullName: string, number: number): PrId =>
   `${repoFullName}#${number}` as PrId;
 
-/** A pull_requests row whose id is known to be a PrId. */
 export type PrRow = Omit<PullRequestRow, "id"> & { id: PrId };
 
 export interface PrSourceInput {
@@ -25,10 +24,6 @@ interface SourceResult {
   sourceAccepted: boolean;
 }
 
-/**
- * Apply a versioned GitHub snapshot, rejecting one older than the stored source
- * version. Idempotent on GitHub's immutable PR id; preserves the stable row id.
- */
 export async function applyPullRequestSource(db: Db, input: PrSourceInput): Promise<SourceResult> {
   const id = prId(input.repoFullName, input.number);
   const now = new Date();
@@ -74,7 +69,6 @@ export async function applyPullRequestSource(db: Db, input: PrSourceInput): Prom
         ...(input.sourceArrivalKey !== undefined
           ? { sourceArrivalKey: values.sourceArrivalKey }
           : {}),
-        // Only overwrite headSha when a new one is supplied (synchronize/opened).
         ...(input.headSha !== undefined ? { headSha: input.headSha } : {}),
         updatedAt: now,
       },
@@ -96,10 +90,6 @@ export interface PullRequestLifecycleClaim {
   claimedAt: Date;
 }
 
-/**
- * Acquire a cross-replica lifecycle lease. The random token fences a stale
- * holder from releasing a lease that has since been reclaimed.
- */
 export async function claimPullRequestLifecycle(
   db: Db,
   githubPrId: number,
@@ -131,7 +121,6 @@ export async function claimPullRequestLifecycle(
   return reclaimed;
 }
 
-/** When the current holder claimed a PR's lifecycle, if anyone holds it. */
 export async function pullRequestLifecycleClaimedAt(
   db: Db,
   githubPrId: number,
@@ -143,7 +132,6 @@ export async function pullRequestLifecycleClaimedAt(
   return held?.claimedAt;
 }
 
-/** Restart a held lease's clock. False once another holder has taken the lease over. */
 export async function renewPullRequestLifecycle(
   db: Db,
   claim: PullRequestLifecycleClaim,
@@ -178,12 +166,6 @@ export async function releasePullRequestLifecycle(
   return rows.length > 0;
 }
 
-/**
- * Delete lifecycle claims nobody renewed since `before`. A live holder renews
- * every 100 seconds and releases its claim when done, so a claim this old was
- * left by a crash. Any claimer could already take it over; this only stops
- * such rows piling up.
- */
 export async function deleteLifecycleClaimsBefore(db: Db, before: Date): Promise<number> {
   const rows = await db
     .delete(pullRequestLifecycleClaims)
@@ -204,19 +186,12 @@ export async function setChannel(
     .set({
       channelId,
       rootMessageTs,
-      // Stamp the naming scheme only when supplied (first channel creation); a
-      // later root-post reconciliation must not overwrite an existing version.
       ...(channelNameVersion !== undefined ? { channelNameVersion } : {}),
       updatedAt: new Date(),
     })
     .where(eq(pullRequests.id, id));
 }
 
-/**
- * Atomically claim the right to post the one merge comment (opt-in GitHub write).
- * Returns true for exactly one caller; the loser skips. Release on failure so a
- * retry can re-attempt.
- */
 export async function claimMergeComment(db: Db, id: PrId, now: Date): Promise<boolean> {
   const rows = await db
     .update(pullRequests)
@@ -255,7 +230,6 @@ export async function findByRepoNumber(
   return row as PrRow | undefined;
 }
 
-/** Resolve repository-scoped PR numbers in caller order with one query. */
 export async function findAllByRepoNumbers(
   db: Db,
   repoFullName: string,
@@ -287,12 +261,6 @@ export async function findById(db: Db, id: string): Promise<PrRow | undefined> {
   return row as PrRow | undefined;
 }
 
-/**
- * PRs the app still treats as open: database state is draft or pr, and the Slack
- * channel has not been archived (applied state is missing or non-terminal).
- * A row the database already marks closed or merged is omitted — reconciliation
- * does not touch it again.
- */
 export async function listOpenPullRequestsForReconciliation(db: Db): Promise<PrRow[]> {
   const rows = await db
     .select()
@@ -310,15 +278,8 @@ export async function listOpenPullRequestsForReconciliation(db: Db): Promise<PrR
   return rows as PrRow[];
 }
 
-/** The most terminal PRs one re-archive sweep checks. */
 const RE_ARCHIVE_LIMIT = 500;
 
-/**
- * Recently closed/merged PRs that still have a channel, for the re-archive sweep.
- * A late write (CI/comment/review) can unarchive a terminal PR's channel via the
- * Slack client's `is_archived` recovery; this bounds the sweep to PRs that went
- * terminal since `since`, where such drift happens, instead of all history.
- */
 export async function listRecentlyClosedPullRequests(db: Db, since: Date): Promise<PrRow[]> {
   const rows = await db
     .select()
@@ -336,7 +297,6 @@ export async function listRecentlyClosedPullRequests(db: Db, since: Date): Promi
   return rows as PrRow[];
 }
 
-/** CI mapping (U7): resolve a repository-scoped head SHA to every tracked PR. */
 export async function findAllByRepoHeadSha(
   db: Db,
   repoFullName: string,

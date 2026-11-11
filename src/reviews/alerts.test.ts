@@ -69,7 +69,6 @@ const readyPayload = (over: Partial<PullRequestPayload["pull_request"]> = {}) =>
 });
 
 const deps = (over: Partial<HandlerDeps> = {}) => handlerDeps(db, slack, over);
-/** The job a step runs in; ids sort in call order, as arrival keys do. */
 const work = (id: string, attempt = 1) => ({
   arrivalKey: jobArrivalKey(new Date(0), id),
   attempt,
@@ -109,7 +108,6 @@ describe("review requests (U5)", () => {
     const fetchGithubEmail = vi.fn(async () => "flo@unkey.com");
     await handle(deps({ fetchGithubEmail }), pullRequestEvent(payload()), nextJob());
     expect(slack.invites).toEqual([{ channelId: "C1", userIds: ["U9"] }]);
-    // cached: a second request needs no email lookup
     await handle(
       deps({ fetchGithubEmail }),
       pullRequestEvent(payload({ requested_reviewer: { id: 7, login: "flo" } })),
@@ -250,9 +248,9 @@ describe("review requests (U5)", () => {
       pullRequestEvent(payload({ pull_request: { ...payload().pull_request, draft: true } })),
       nextJob(),
     );
-    expect(slack.invites).toHaveLength(0); // not pulled in yet
-    expect(slack.messages).toHaveLength(0); // no "Review requested" note
-    expect(await reminderRows()).toEqual([]); // no reminder scheduled
+    expect(slack.invites).toHaveLength(0);
+    expect(slack.messages).toHaveLength(0);
+    expect(await reminderRows()).toEqual([]);
   });
 
   it("invites reviewers assigned while draft once the PR is marked ready", async () => {
@@ -431,7 +429,6 @@ describe("review requests (U5)", () => {
       work("delivery-remove-1"),
     );
 
-    // Model the reviewer no longer being in the channel after the first request.
     slack.invites.length = 0;
     await handle(
       deps(),
@@ -484,7 +481,7 @@ describe("review requests (U5)", () => {
     const d = deps({ fetchCiReadiness: async () => ci, clock: { now: () => alertedAt } });
     await handle(d, pullRequestEvent(payload()), nextJob());
     const [held] = await reminderRows();
-    expect(held?.dueAt).toEqual(new Date("2026-08-12T00:00:00Z")); // request + 12h
+    expect(held?.dueAt).toEqual(new Date("2026-08-12T00:00:00Z"));
 
     ci = "passing";
     await handle(
@@ -499,7 +496,7 @@ describe("review requests (U5)", () => {
 
     expect(slack.invites).toEqual([{ channelId: "C1", userIds: ["U7"] }]);
     const [alerted] = await reminderRows();
-    expect(alerted?.dueAt).toEqual(new Date("2026-08-12T03:00:00Z")); // alert + 12h
+    expect(alerted?.dueAt).toEqual(new Date("2026-08-12T03:00:00Z"));
     expect(alerted?.generation).toBe(held?.generation);
   });
 
@@ -515,7 +512,6 @@ describe("review requests (U5)", () => {
       repository: { full_name: "unkey/api" },
       pull_request: { ...payload().pull_request, requested_reviewers: [{ id: 7, login: "flo" }] },
     });
-    // Attempt 1 with no check runs would retry if CI were read.
     await handle(deps({ fetchCiReadiness }), push, nextJob(1));
 
     expect(fetchCiReadiness).not.toHaveBeenCalled();

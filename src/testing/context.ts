@@ -5,7 +5,6 @@ import { createLogger } from "#lib";
 import { handlerDeps } from "./deps.ts";
 import type { FakeSlackGateway } from "./fakeSlack.ts";
 
-/** A complete service config whose secrets are test values. */
 export const TEST_ENV = {
   GITHUB_APP_ID: "123456",
   GITHUB_APP_PRIVATE_KEY: "-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----",
@@ -21,10 +20,6 @@ export const TEST_ENV = {
   DATABASE_URL: "postgres://user:pass@localhost:5432/db",
 };
 
-/**
- * The app context over a test database and fake Slack, with GitHub reads that
- * find nothing unless overridden. `closed` reports whether `close` ran.
- */
 export function testContext(
   db: Db,
   slack: FakeSlackGateway,

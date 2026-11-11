@@ -1,12 +1,6 @@
 import type { Logger } from "#lib";
 import { type ChannelSink, type Message, SlackApiError, type SlackGateway, render } from "#slack";
 
-/**
- * The writer for one PR's channel: posts, edits, deletes and invites. Healing
- * a write the channel refused (bot removed, channel archived) stays in the
- * Slack gateway, which applies it to every bot write, lifecycle calls and the
- * #shipped post included, so it has one owner.
- */
 export interface PrChannel extends ChannelSink {
   /**
    * Slack only lets a message be edited or deleted with the token that posted
@@ -15,11 +9,6 @@ export interface PrChannel extends ChannelSink {
    */
   update(ts: string, message: Message, userToken?: string): Promise<void>;
   remove(ts: string, userToken?: string): Promise<void>;
-  /**
-   * A user Slack permanently refuses, such as a guest or a deactivated
-   * account, is logged and skipped so that one user cannot block the channel
-   * lifecycle or the message that follows the invite.
-   */
   invite(userIds: readonly string[], context: Record<string, unknown>): Promise<void>;
 }
 

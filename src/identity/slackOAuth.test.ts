@@ -70,7 +70,7 @@ describe("Slack OAuth callback", () => {
 
     const [row] = await db.select().from(slackUserTokens);
     expect(row?.slackUserId).toBe("U7");
-    expect(row?.encryptedToken).not.toContain("xoxp-user-token"); // encrypted at rest
+    expect(row?.encryptedToken).not.toContain("xoxp-user-token");
     expect(cipher.decrypt(row?.encryptedToken ?? "")).toBe("xoxp-user-token");
     expect(await db.select().from(oauthStateNonces)).toHaveLength(1);
   });

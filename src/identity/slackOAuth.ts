@@ -49,8 +49,6 @@ export function createSlackOAuthRoute(deps: SlackOAuthRouteDeps): Hono {
       return c.html(page("Slack authorization failed. Please return to Slack and try again."), 502);
     }
 
-    // The user who authorized must be the one who started the flow, in this
-    // workspace, and must have granted the scope we need to make them leave.
     if (result.authedUserId !== state.slackUserId || result.teamId !== state.slackTeamId) {
       deps.logger.warn("slack oauth identity mismatch");
       return c.html(page("This authorization did not match the request. Please try again."), 400);

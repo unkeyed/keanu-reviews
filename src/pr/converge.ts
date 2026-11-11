@@ -31,35 +31,19 @@ export interface PrDeps {
   db: Db;
   slack: SlackGateway;
   logger: Logger;
-  /** GitHub email lookup, so the author resolves past the identity map. */
   fetchGithubEmail: GithubEmailFetcher;
-  /** #shipped channel (id or name) that announces merges; undefined disables it. */
   shippedChannel: string | undefined;
-  /** Opt-in: comments the Slack channel URL on the PR when it merges; undefined when off. */
   postPrComment: PrCommenter | undefined;
-  /** Slack workspace id for the merge comment's channel deep link. */
   slackTeamId: string;
-  /**
-   * Members who authorized us leave on their own token before an archive, so
-   * Slack sends no "archived the channel" notice. Best-effort; never throws.
-   * Undefined when Slack user OAuth is not configured.
-   */
   quietArchive: ((channelId: string) => Promise<void>) | undefined;
 }
 
 export interface ConvergeOutcome {
-  /** False when a newer snapshot was already applied, so nothing ran. */
   accepted: boolean;
-  /** A configured #shipped note was not posted. */
   skippedShipped: boolean;
-  /** A configured merge comment was not posted. */
   skippedMergeComment: boolean;
 }
 
-/**
- * Store the snapshot behind the source-order guard, then bring the channel to
- * the stored state. Runs under the PR lifecycle lease.
- */
 export async function converge(
   deps: PrDeps,
   snapshot: PrSnapshot,
@@ -91,20 +75,10 @@ export async function converge(
   return execute(deps, source.row, snapshot, cause, steps);
 }
 
-/**
- * Bring an open PR's channel to the title and draft flag of a review's or
- * review comment's embedded PR, when GitHub's `updated_at` on it is strictly
- * newer than the stored source. A stale view never flips a PR back. It never
- * revives or closes a PR. The stored source time and arrival key stay put, so
- * a lifecycle event GitHub sent earlier still applies when it arrives late,
- * with its note and review work. A failure is logged, not thrown, so the
- * review itself is still mirrored; the next event tries again.
- */
 export async function followNewerSnapshot(deps: PrDeps, snapshot: PrSnapshot): Promise<void> {
   const { db, logger } = deps;
   const row = await findByGithubPrId(db, snapshot.githubPrId);
   if (!row?.channelId || !row.rootMessageTs || isTerminal(row.currentState)) return;
-  // Without a stored source time there is nothing to be newer than.
   if (!row.sourceUpdatedAt || Date.parse(snapshot.updatedAt) <= row.sourceUpdatedAt.getTime()) {
     return;
   }
@@ -271,7 +245,6 @@ async function execute(
   return outcome;
 }
 
-/** Create the channel and persist its id at once, so a later failure cannot orphan it. */
 async function createChannel(
   deps: PrDeps,
   row: PrRow,
@@ -283,10 +256,6 @@ async function createChannel(
   try {
     channelId = await slack.createChannel(name);
   } catch (error) {
-    // conversations.create can succeed remotely and fail locally, or a retry
-    // can receive name_taken. The exact deterministic name recovers only the
-    // intended PR channel. The lookup pages through every public channel, so it
-    // runs only when the channel may exist.
     if (!createMayHaveSucceeded(error)) throw error;
     const recovered = await slack.findChannelByName(name);
     if (!recovered) throw error;
@@ -296,7 +265,6 @@ async function createChannel(
   await setChannel(db, row.id, channelId, null, CURRENT_CHANNEL_NAME_VERSION);
   logger.info("channel created", { prId: row.id, channelId, state: row.currentState });
 
-  // A topic failure (e.g. a missing scope) must not block the channel.
   try {
     await slack.setTopic(channelId, channelTopic(view));
   } catch (error) {
@@ -305,19 +273,10 @@ async function createChannel(
   return channelId;
 }
 
-/**
- * Slack may have created the channel when it said `name_taken` or when no
- * usable response arrived. A rate limit or any other Slack error means it did not.
- */
 function createMayHaveSucceeded(error: unknown): boolean {
   return error instanceof SlackApiError && (error.ambiguous || error.code === "name_taken");
 }
 
-/**
- * The one write back to GitHub: the channel URL as a PR comment, claimed so it
- * posts at most once and released on failure so a retry can post it.
- * Best-effort: a failure never blocks the archive that already happened.
- */
 async function commentOnMerge(deps: PrDeps, row: PrRow, channelId: string): Promise<void> {
   const { db, logger, postPrComment, slackTeamId } = deps;
   if (!postPrComment) return;

@@ -5,7 +5,6 @@ import { type CliIo, type OpenContext, runAsMain } from "./cli.ts";
 
 const USAGE = "Usage: pnpm jobs:replay <failed-job-id>";
 
-/** Put one failed job back in the queue, when its payload was kept for replay. */
 export async function runReplayJobCli(
   args: string[],
   io: CliIo,

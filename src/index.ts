@@ -3,7 +3,6 @@ import { createContext, createHttpApp, startBackground } from "#app";
 import { type Config, ConfigError, loadConfig } from "#config";
 import { errMessage } from "#lib";
 
-// Most platforms send SIGKILL 30s after SIGTERM. Finish inside that window.
 const SHUTDOWN_DEADLINE_MS = 20_000;
 
 function boot(): void {
@@ -43,8 +42,6 @@ function boot(): void {
     const deadline = new Promise<"timeout">((resolve) => {
       setTimeout(resolve, SHUTDOWN_DEADLINE_MS, "timeout");
     });
-    // Past the deadline an unfinished job keeps its lease and is reclaimed
-    // after restart, so exiting cannot lose it.
     if ((await Promise.race([settled, deadline])) === "timeout") {
       logger.warn("shutdown deadline reached with work in flight", {
         deadlineMs: SHUTDOWN_DEADLINE_MS,
@@ -59,9 +56,6 @@ function boot(): void {
   };
   process.on("SIGTERM", () => void shutdown("SIGTERM", 0));
   process.on("SIGINT", () => void shutdown("SIGINT", 0));
-  // After an error nothing caught, the process state is unknown. Log it, then
-  // drain like a SIGTERM and exit 1 so the supervisor restarts a clean process;
-  // durable jobs and leases make the restart lose nothing.
   const fatal = (kind: string) => (err: unknown) => {
     logger.error(kind, {
       err: errMessage(err),

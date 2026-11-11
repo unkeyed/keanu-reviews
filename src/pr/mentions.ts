@@ -9,7 +9,6 @@ import type { PrDeps } from "./converge.ts";
 // — without `[-a-z\d/]` the engine would backtrack `@unkey/api` to `unke`.
 const MENTION_RE = /(?<![\w@/])@([a-z\d](?:-?[a-z\d]){0,38})(?![-a-z\d/])/gi;
 
-/** Unique, lowercased GitHub logins @-mentioned in a comment/review body. */
 export function extractGithubMentions(body: string): string[] {
   const found = new Set<string>();
   for (const match of body.matchAll(MENTION_RE)) {
@@ -19,13 +18,6 @@ export function extractGithubMentions(body: string): string[] {
   return [...found];
 }
 
-/**
- * Best-effort: pull the Slack users linked to any @-mentioned GitHub logins into
- * the PR channel, so "hey @dave-hawkins" adds dave to the conversation. Only
- * already-linked users can be resolved; unknown logins (unlinked users, teams,
- * bots) are silently ignored. Never throws: a lookup or invite failure must not
- * block comment mirroring.
- */
 export async function inviteMentions(
   deps: PrDeps,
   channel: PrChannel,

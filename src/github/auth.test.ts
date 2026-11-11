@@ -22,7 +22,7 @@ describe("createInstallationAuth", () => {
     const mint = vi.fn(async () => ({ token: `tok-${t}`, expiresAt: new Date(t + 6 * 60_000) }));
     const auth = createInstallationAuth(mint, now);
     const first = await auth.getToken("42");
-    t += 2 * 60_000; // now within the 5-min refresh skew of the 6-min token
+    t += 2 * 60_000;
     const second = await auth.getToken("42");
     expect(second).not.toBe(first);
     expect(mint).toHaveBeenCalledTimes(2);

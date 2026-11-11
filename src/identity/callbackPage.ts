@@ -1,6 +1,5 @@
 import type { MiddlewareHandler } from "hono";
 
-/** An OAuth callback page is never cached, framed, sniffed, or sent on as a referrer. */
 export const callbackHeaders: MiddlewareHandler = async (c, next) => {
   c.header("cache-control", "no-store");
   c.header("pragma", "no-cache");
@@ -14,7 +13,6 @@ export const callbackHeaders: MiddlewareHandler = async (c, next) => {
   await next();
 };
 
-/** A one-message HTML page titled `title`. */
 export const callbackPage =
   (title: string) =>
   (message: string): string =>

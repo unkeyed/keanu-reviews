@@ -19,7 +19,7 @@ describe("shouldSkipActor", () => {
 
   it("skips bots that are not allow-listed", () => {
     expect(shouldSkipActor({ isBot: true, login: "vercel[bot]" }, allow)).toBe(true);
-    expect(shouldSkipActor({ isBot: true, login: "dependabot[bot]" })).toBe(true); // empty allowlist
+    expect(shouldSkipActor({ isBot: true, login: "dependabot[bot]" })).toBe(true);
   });
 
   it("mirrors an allow-listed bot regardless of the [bot] suffix or case", () => {

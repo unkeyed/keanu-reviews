@@ -3,11 +3,9 @@ export type PrState = "draft" | "pr" | "closed" | "merged";
 export interface GithubActor {
   id: number;
   login: string;
-  /** GitHub marks automation accounts (Vercel, Dependabot, our own App) with `type: "Bot"`. */
   isBot: boolean;
 }
 
-/** What GitHub says about a PR, from a webhook's pull_request object or GET /pulls/{n}. */
 export interface PrSnapshot {
   repo: string;
   number: number;
@@ -19,12 +17,10 @@ export interface PrSnapshot {
   headSha: string;
   headRef: string | undefined;
   baseRef: string | undefined;
-  /** GitHub's `updated_at`, verbatim: lifecycle message keys embed the exact string. */
   updatedAt: string;
   requestedReviewers: readonly GithubActor[];
 }
 
-/** A PR fact change: what one source asserts about the PR's lifecycle. */
 export interface PrChange {
   action: string;
   pr: PrSnapshot;
@@ -35,12 +31,10 @@ export type MirrorAction = "created" | "edited" | "deleted";
 
 export interface ReviewComment {
   id: number;
-  /** Set when this comment replies within an existing review thread. */
   inReplyTo: number | undefined;
   path: string;
   line: number | null;
   body: string;
-  /** The PR discussion permalink, not the file/line blob view. */
   url: string;
   author: GithubActor;
 }
@@ -63,7 +57,6 @@ export interface Review {
 
 export interface PullRequestEvent extends PrChange {
   kind: "pull_request";
-  /** review_requested / review_request_removed: a team-only request has no reviewer. */
   requestedReviewer: GithubActor | undefined;
   requestedTeam: string | undefined;
 }
@@ -82,7 +75,6 @@ export interface ReviewEvent {
   review: Review;
 }
 
-/** issue_comment carries no PR object, only the issue's number and opener. */
 export interface IssueCommentEvent {
   kind: "issue_comment";
   action: MirrorAction;
@@ -92,7 +84,6 @@ export interface IssueCommentEvent {
   comment: IssueComment;
 }
 
-/** A completed check run. `prNumbers` empty means "resolve by head sha". */
 export interface CheckRunEvent {
   kind: "check_run";
   repo: string;

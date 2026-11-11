@@ -1,10 +1,3 @@
-/**
- * The one "try again later" signal. GitHub delivery is at-least-once and
- * unordered, so a child event routinely arrives before the PR channel exists;
- * the worker retries these with backoff and logs them quietly instead of at
- * `error`. `retryAfterMs` is the earliest point a retry can succeed, such as a
- * Slack Retry-After or the time left on a lease a crashed holder left.
- */
 export class Retry extends Error {
   readonly details?: Record<string, unknown>;
   readonly retryAfterMs?: number;
@@ -17,11 +10,6 @@ export class Retry extends Error {
   }
 }
 
-/**
- * An upstream API's rate limit. `retryAfterMs` is when the limit resets, which
- * can be most of an hour away, so the worker waits longer for it than for any
- * other retry.
- */
 export class RateLimited extends Retry {
   constructor(message: string, details?: Record<string, unknown>, retryAfterMs?: number) {
     super(message, details, retryAfterMs);
@@ -29,10 +17,6 @@ export class RateLimited extends Retry {
   }
 }
 
-/**
- * A job that can never succeed, such as a payload missing a field a handler
- * reads. The worker fails it at once instead of retrying the same bytes.
- */
 export class Permanent extends Error {
   readonly details?: Record<string, unknown>;
 
@@ -43,12 +27,8 @@ export class Permanent extends Error {
   }
 }
 
-// Live holders release a claim within seconds, so backoff finds it free. A
-// claim older than a job lease was most likely orphaned by a crash, and only
-// its own lease expiry frees it.
 const LIVE_HOLDER_MS = 60_000;
 
-/** How long to wait for another holder's claim, or undefined to just back off. */
 export function leaseWaitMs(
   claimedAt: Date | null | undefined,
   leaseMs: number,

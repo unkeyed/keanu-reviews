@@ -55,7 +55,6 @@ const enqueueInto = (target: Db, deliveryId: string) =>
 const enqueue = (deliveryId: string, raw: unknown = {}) =>
   enqueueTestJob(db, { deliveryId, event: "pull_request", action: "opened", raw });
 
-/** Seed a pending job due at `availableAt`, created at `createdAt`. */
 async function due(id: string, availableAt: Date, createdAt = availableAt): Promise<void> {
   await enqueue(id);
   await db.update(jobs).set({ availableAt, createdAt }).where(eq(jobs.id, id));

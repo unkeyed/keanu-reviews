@@ -9,12 +9,6 @@ import { TEST_ENV, testContext } from "./testing/context.ts";
 import { FakeSlackGateway } from "./testing/fakeSlack.ts";
 import { drainQueue } from "./testing/queue.ts";
 
-/**
- * Offline end-to-end smoke (Verification Contract). Replays signed webhook
- * fixtures through the service's HTTP app -> job queue -> worker -> handlers,
- * with a fake Slack client. The live gate (real Slack workspace + GitHub App)
- * still needs credentials; this proves the wiring end to end.
- */
 const SECRET = TEST_ENV.GITHUB_WEBHOOK_SECRET;
 const REPO = "unkey/api";
 let db: Db;
@@ -74,12 +68,10 @@ const pr = (over: object = {}) => ({
 
 describe("end-to-end webhook -> Slack smoke", () => {
   it("drives a full PR lifecycle through the real ingestion path", async () => {
-    // 1. opened -> channel created
     await deliver("pull_request", { action: "opened", pull_request: pr() });
     expect(slack.channels).toHaveLength(1);
     expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
 
-    // 2. inline review comment -> threaded with an Open-at-line permalink
     await deliver("pull_request_review_comment", {
       action: "created",
       pull_request: pr(),
@@ -94,12 +86,11 @@ describe("end-to-end webhook -> Slack smoke", () => {
       },
     });
     const comment = slack.messages.at(-1);
-    expect(comment?.threadTs).toBeUndefined(); // thread-starting comment posts top-level
+    expect(comment?.threadTs).toBeUndefined();
     expect(JSON.stringify(comment?.blocks)).toContain(
-      "https://github.com/unkey/api/pull/1423#r55|Open", // links to the discussion
+      "https://github.com/unkey/api/pull/1423#r55|Open",
     );
 
-    // 3. CI completion does not post merge or check status into the channel.
     const beforeCi = slack.messages.length;
     await deliver("check_run", {
       action: "completed",
@@ -116,12 +107,10 @@ describe("end-to-end webhook -> Slack smoke", () => {
     expect(JSON.stringify(slack.messages)).not.toContain("Ready to merge");
     expect(JSON.stringify(slack.messages)).not.toContain("checks are failing");
 
-    // 4. merged -> rename to merged then archive
     await deliver("pull_request", { action: "closed", pull_request: pr({ merged: true }) });
     expect(slack.channel("C1")?.name).toBe("merged-oz-unkey-api-1423-add-auth");
     expect(slack.channel("C1")?.archived).toBe(true);
 
-    // Still exactly one channel throughout, and each delivery woke the worker.
     expect(slack.channels).toHaveLength(1);
     expect(nudges).toBe(delivery);
   });

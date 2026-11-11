@@ -13,7 +13,6 @@ type Handler<K extends DomainEvent["kind"]> = (
   work: Work,
 ) => Promise<void>;
 
-/** One entry per DomainEvent kind; a missing entry does not compile. */
 export type HandlerTable = { [K in DomainEvent["kind"]]: Handler<K> };
 
 export const handlers: HandlerTable = {
@@ -38,8 +37,6 @@ export const handlers: HandlerTable = {
       deps,
       { kind: "snapshot", snapshot: ev.pr, cause: { kind: "child" } },
       async (s) => {
-        // Cancel before any Slack I/O, so a failed post cannot leave the
-        // reminder live for a later check run to alert.
         await onReviewSubmitted(deps, s, ev, work);
         await mirrorReview(deps, s, ev);
       },
@@ -53,7 +50,6 @@ export const handlers: HandlerTable = {
   },
 };
 
-/** Run a persisted job's event through its handler. */
 export function createDispatcher(deps: HandlerDeps): Dispatch {
   return async (job, signal) => {
     const event = parseEvent(job.event, job.raw);
@@ -62,7 +58,6 @@ export function createDispatcher(deps: HandlerDeps): Dispatch {
       attempt: job.attempts,
       signal,
     };
-    // The mapped type pairs each kind with its handler; TS cannot correlate the two lookups.
     const handle = handlers[event.kind] as Handler<DomainEvent["kind"]>;
     return handle(deps, event, work);
   };

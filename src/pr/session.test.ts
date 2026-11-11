@@ -70,7 +70,6 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
     });
     await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
     expect(slack.invites).toEqual([{ channelId: "C1", userIds: ["U100"] }]);
-    // Idempotent: a second event does not re-invite the author.
     await convergePullRequest(deps(), pullRequestEvent(payload("synchronize")));
     expect(slack.invites).toHaveLength(1);
   });
@@ -86,7 +85,7 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
     await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
     const blocks = JSON.stringify(slack.messages);
     expect(blocks).toContain("👤 Opened by Oz Perkins");
-    expect(blocks).not.toContain("<@U100>"); // never tag the author
+    expect(blocks).not.toContain("<@U100>");
   });
 
   it("archives a merged PR and warns when Slack refuses to invite its author", async () => {
@@ -141,7 +140,7 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
     const shipped = slack.messages.find((m) => m.channel === "C0SHIPPED");
     const blocks = JSON.stringify(shipped?.blocks);
     expect(blocks).toContain("Oz Perkins");
-    expect(blocks).not.toContain("<@U100>"); // broadcast channel: no ping
+    expect(blocks).not.toContain("<@U100>");
   });
 
   it("labels #shipped with the login when Slack's profile read fails", async () => {
@@ -161,7 +160,7 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
 
   it("archives and cancels reminders on merge even if the #shipped post fails", async () => {
     const d = { ...deps(), shippedChannel: "C0SHIPPED" };
-    await convergePullRequest(d, pullRequestEvent(payload("opened"))); // creates the PR row + channel C1
+    await convergePullRequest(d, pullRequestEvent(payload("opened")));
     await scheduleReminder(db, {
       prId: prId("unkey/api", 1423),
       reviewerGithubId: 7,
@@ -176,12 +175,12 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
 
     await convergePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
 
-    expect(slack.channel("C1")?.archived).toBe(true); // archived despite shipped failure
+    expect(slack.channel("C1")?.archived).toBe(true);
     const [rem] = await db
       .select()
       .from(reminders)
       .where(eq(reminders.id, `${prId("unkey/api", 1423)}::7`));
-    expect(rem?.status).toBe("cancelled"); // reminder cancelled despite shipped failure
+    expect(rem?.status).toBe("cancelled");
   });
 
   it("does not announce a plain close (not merged)", async () => {
@@ -307,7 +306,6 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
   it("heals a stuck draft channel when ready_for_review was missed (state follows facts)", async () => {
     await convergePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })));
     expect(slack.channel("C1")?.name).toBe("draft-oz-unkey-api-1423-add-auth");
-    // ready_for_review never applied; a later synchronize carries draft: false.
     await convergePullRequest(
       deps(),
       pullRequestEvent(
@@ -330,7 +328,6 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
     await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
     await convergePullRequest(deps(), pullRequestEvent(payload("closed", { merged: true })));
     expect(slack.channel("C1")?.name).toBe("merged-oz-unkey-api-1423-add-auth");
-    // A late, non-lifecycle event must not flip it back to an open state.
     await convergePullRequest(
       deps(),
       pullRequestEvent(
@@ -383,9 +380,6 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
     await convergePullRequest(deps(), pullRequestEvent(payload("closed", { merged: true })));
     expect(slack.channel("C1")?.archived).toBe(true);
 
-    // The author links their Slack account only AFTER the merge. A subsequent
-    // pull_request event must NOT try to post the author-invite into the now
-    // archived channel (that would throw is_archived and poison the job).
     await upsertIdentity(db, {
       githubUserId: 100,
       githubLogin: "oz",
@@ -404,15 +398,13 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
       skippedShipped: false,
       skippedMergeComment: false,
     });
-    expect(slack.channel("C1")?.archived).toBe(true); // stays archived
-    expect(slack.messages.length).toBe(before); // nothing posted to the archived channel
+    expect(slack.channel("C1")?.archived).toBe(true);
+    expect(slack.messages.length).toBe(before);
   });
 
   it("does not resolve the author for a later event on an archived merged PR (B12)", async () => {
     await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
     await convergePullRequest(deps(), pullRequestEvent(payload("closed", { merged: true })));
-    // The author's GitHub email now matches a Slack user, so resolving them
-    // would read GitHub and Slack and record an email-match identity.
     const fetchGithubEmail = vi.fn(async () => "oz@example.com");
     slack.emailToUser.set("oz@example.com", "U100");
 
@@ -429,7 +421,6 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
   it("unarchives before writing when a merged PR is reopened after the author links late", async () => {
     await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
     await convergePullRequest(deps(), pullRequestEvent(payload("closed", { merged: true })));
-    // Author links after the archive; reopen must unarchive before the invite.
     await upsertIdentity(db, {
       githubUserId: 100,
       githubLogin: "oz",
@@ -449,8 +440,8 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
     });
     expect(slack.channel("C1")?.archived).toBe(false);
     const blocks = JSON.stringify(slack.messages);
-    expect(blocks).toContain("👤 Opened by"); // author-invite note posted to the live channel
-    expect(blocks).not.toContain("<@U100>"); // plain name, never a ping
+    expect(blocks).toContain("👤 Opened by");
+    expect(blocks).not.toContain("<@U100>");
     expect(slack.invites).toContainEqual({ channelId: "C1", userIds: ["U100"] });
   });
 
@@ -820,8 +811,6 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
   });
 
   it("keeps a legacy (v1) channel on its author-less scheme across renames (backwards compat)", async () => {
-    // A channel created before the v2 (author) scheme: stored with
-    // channelNameVersion = 1 and a v1 applied name.
     slack.channels.push({ id: "C-LEGACY", name: "pr-unkey-api-1423-add-auth", archived: false });
     await db.insert(pullRequests).values({
       id: prId("unkey/api", 1423),
@@ -837,8 +826,6 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
       sourceUpdatedAt: new Date("2026-08-10T12:00:00Z"),
     });
 
-    // A title edit forces a rename; a state change would too. Either way the new
-    // name must stay in the v1 scheme — no author injected.
     await convergePullRequest(
       deps(),
       pullRequestEvent(

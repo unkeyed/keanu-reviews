@@ -3,12 +3,6 @@ import type { Db } from "#db";
 import { createLogger, systemClock } from "#lib";
 import type { FakeSlackGateway } from "./fakeSlack.ts";
 
-/**
- * Handler deps whose GitHub reads say: CI passing, the PR blocked with no
- * requested reviewers, no approvals, no public emails, and no PRs at an
- * unknown head. The reminder window is open every weekday. Optional features
- * (#shipped, merge comment, user tokens) are off; comments thread.
- */
 export function handlerDeps(
   db: Db,
   slack: FakeSlackGateway,

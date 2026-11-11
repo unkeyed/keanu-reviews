@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createTokenCipher } from "./tokenCipher.ts";
 
-// 32-byte key expressed three ways; all must be accepted.
 const HEX_KEY = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
 const cipher = createTokenCipher(HEX_KEY);
 
@@ -9,7 +8,7 @@ describe("Slack token cipher", () => {
   it("round-trips a token through encrypt/decrypt", () => {
     const token = "xoxp-123456789012-abcdefghijklmnop";
     const payload = cipher.encrypt(token);
-    expect(payload).not.toContain(token); // never stored in plaintext
+    expect(payload).not.toContain(token);
     expect(payload.startsWith("v1.")).toBe(true);
     expect(cipher.decrypt(payload)).toBe(token);
   });
@@ -25,8 +24,6 @@ describe("Slack token cipher", () => {
   it("rejects a tampered ciphertext instead of returning garbage", () => {
     const payload = cipher.encrypt("xoxp-secret");
     const [v, iv, tag, ct] = payload.split(".") as [string, string, string, string];
-    // Flip a real byte of the ciphertext (not a base64 char, which can be
-    // non-canonical and decode unchanged) so GCM authentication must fail.
     const bytes = Buffer.from(ct, "base64url");
     bytes.writeUInt8(bytes.readUInt8(0) ^ 0xff, 0);
     const flipped = bytes.toString("base64url");

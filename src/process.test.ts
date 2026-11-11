@@ -10,7 +10,6 @@ interface Run {
   lines: { level: string; msg: string; [field: string]: unknown }[];
 }
 
-/** Boot the service with no reachable database, run `inject` after it listens, and wait for exit. */
 function boot(inject: string): Promise<Run> {
   const preload = `data:text/javascript,${encodeURIComponent(
     `setTimeout(() => { ${inject} }, 500);`,

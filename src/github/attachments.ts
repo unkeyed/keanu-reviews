@@ -59,8 +59,6 @@ export function createGithubAttachmentMirror(opts: {
   fetch?: AnonymousFetch;
 }): GithubAttachmentMirror {
   const fetchFn: AnonymousFetch = opts.fetch ?? ((url, init) => globalThis.fetch(url, init));
-  // Serving only URLs the bot minted keeps strangers from spending the bot's
-  // anonymous GitHub rate limit, which would break every image it has posted.
   const key = createHmac("sha256", opts.secret).update("github-attachments").digest();
   const sign = (id: AttachmentId) =>
     createHmac("sha256", key).update(id).digest("base64url").slice(0, SIGNATURE_CHARS);

@@ -35,17 +35,8 @@ export interface ReconciliationSummary {
   reArchived: number;
 }
 
-/**
- * Window for the re-archive sweep: only PRs that went terminal this recently are
- * checked, since channel drift happens from writes clustered around the merge.
- */
 const RE_ARCHIVE_WINDOW_MS = 7 * 24 * 60 * 60_000;
 
-/**
- * Wait at most this long for one rate-limit reset, at most this many times per
- * PR. Long enough to honor a short Retry-After; short enough to stop a daily
- * run, which is not a job and so has no retry of its own.
- */
 const MAX_BACKOFF_MS = 120_000;
 const MAX_RATE_LIMIT_RETRIES = 3;
 
@@ -73,14 +64,6 @@ function outcomeOf(snapshot: PullRequestSnapshot): "merged" | "closed" | undefin
   return undefined;
 }
 
-/**
- * Catch merges and closes whose webhooks never arrived. For each PR the app
- * still treats as open, read GitHub. When GitHub says merged or closed, converge
- * the channel in a PR session, so it is archived the way the webhook would.
- * One PR at a time. One failure is logged and the run continues. A second call
- * while this one is in progress returns without doing work; per-PR lifecycle
- * leases cover a second process.
- */
 export function createClosedPullRequestReconciliation(
   deps: PrDeps,
   fetchSnapshot: PullRequestSnapshotFetcher,
@@ -171,8 +154,6 @@ async function reconcile(
     }
   }
 
-  // Independent of the GitHub reads above (and of any rate-limit break): close
-  // back up any terminal channel a late write reopened.
   await reArchiveDriftedChannels(deps, result);
 
   logger.info("pull request reconciliation finished", { ...result });
@@ -203,15 +184,6 @@ async function fetchWaitingOutShortLimits(
   }
 }
 
-/**
- * Re-archive channels that drifted open. A CI check / comment / review that lands
- * just after a merge is delivered via the Slack client's `is_archived` recovery,
- * which unarchives the channel — and convergence won't re-close it because its
- * applied state already matches. So directly archive any recently-terminal
- * PR whose channel is currently open. Each check holds the PR's session, so it
- * never interleaves with a lifecycle job; a PR another replica holds waits for
- * the next run. Best-effort: one failure never stops the rest.
- */
 async function reArchiveDriftedChannels(
   deps: PrDeps,
   result: ReconciliationSummary,
@@ -226,8 +198,7 @@ async function reArchiveDriftedChannels(
     try {
       await session(deps, { kind: "existing", githubPrId: row.githubPrId }, async () => {
         const archived = await slack.isArchived(channelId);
-        if (archived !== false) return; // already archived, or unreadable — leave it
-        // Empty the channel first (silent) when quiet-archive is configured, then close.
+        if (archived !== false) return;
         if (deps.quietArchive) await deps.quietArchive(channelId);
         await slack.archive(channelId);
         result.reArchived += 1;
@@ -247,7 +218,6 @@ async function reArchiveDriftedChannels(
   }
 }
 
-/** Apply one GitHub snapshot. Rate-limit exhaustion is decided by the caller. */
 async function applySnapshot(
   deps: PrDeps,
   row: PrRow,
@@ -296,8 +266,6 @@ async function applySnapshot(
     return;
   }
 
-  // The reconcile arrival key wins an updated_at tie with any webhook. A newer
-  // stored snapshot is left alone (not accepted).
   const cause = {
     kind: "reconcile",
     merged: snapshot.merged,

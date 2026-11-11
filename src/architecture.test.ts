@@ -8,10 +8,8 @@ import { SLACK_METHODS } from "./slack/gateway.ts";
 
 const SRC = join(import.meta.dirname);
 
-/** Installs never relink, so the schema and every migration stay byte-identical. */
 const SCHEMA_HASH = "2c2b6a0f7f0173517327cf1789df3158cebc7ef9cf78e6021fbf3955de620279";
 
-/** Today's Slack surface. Growing it can need a new scope; shrinking it is fine. */
 const SLACK_BASELINE = {
   bot: [
     "chat.delete",
@@ -34,7 +32,6 @@ const SLACK_BASELINE = {
   oauth: ["oauth.v2.access"],
 };
 
-/** Today's GitHub surface. Growing it can need a new App permission. */
 const GITHUB_BASELINE = [
   "GET /repos/{owner}/{repo}/pulls/{number}",
   "GET /repos/{owner}/{repo}/pulls/{number}/reviews",
@@ -66,7 +63,6 @@ const sourceFiles = walk(SRC)
 
 const read = (file: string) => readFileSync(join(SRC, file), "utf8");
 
-/** Every string and template literal, substitutions written as `{}`. Comments are skipped. */
 function literals(file: string): string[] {
   const source = ts.createSourceFile(file, read(file), ts.ScriptTarget.Latest, true);
   const out: string[] = [];
@@ -81,7 +77,6 @@ function literals(file: string): string[] {
   return out;
 }
 
-/** Specifiers this file imports at runtime (type-only imports carry no surface). */
 function valueImports(file: string): string[] {
   const source = ts.createSourceFile(file, read(file), ts.ScriptTarget.Latest, true);
   return source.statements.flatMap((s) =>
@@ -151,7 +146,6 @@ const routePath = (route: string) =>
     .replace("{owner}/{repo}", "{}")
     .replace(/\{\w+\}/g, "{}");
 
-/** A GitHub request path or URL as written in source, or undefined for any other literal. */
 function githubPath(text: string): string | undefined {
   const path = text.split("?")[0] ?? "";
   if (path.startsWith("{}")) return undefined;
@@ -190,14 +184,12 @@ describe("GitHub surface", () => {
   });
 });
 
-/** Each brand is minted in one file, so a branded value always came from its minter. */
 const BRAND_MINTERS: Record<string, string> = {
   PrId: "pr/store.ts",
   ClientMsgId: "slack/ledger.ts",
   ArrivalKey: "events/arrival.ts",
 };
 
-/** `file: Brand` for every `x as Brand` or `<Brand>x` cast. */
 function brandCasts(): string[] {
   const out: string[] = [];
   for (const file of sourceFiles) {
@@ -232,12 +224,6 @@ describe("branded ids", () => {
   });
 });
 
-/**
- * Modules are directories under src/ (plus the process entry). A module imports
- * another only through its `#name` barrel, and at runtime only from a lower
- * layer. Type-only imports carry no runtime coupling, so they may reach a
- * module in the same layer.
- */
 const LAYERS: readonly (readonly string[])[] = [
   ["lib"],
   ["config", "db"],
@@ -275,7 +261,6 @@ const TABLE_OWNERS: Record<string, string> = {
   processedDeliveries: "queue/store.ts",
 };
 
-/** Files that read tables they do not own, and why. */
 const TABLE_READERS: Record<string, string> = {
   "db/readiness.ts": "probes every table's columns with a limit-0 select",
   "reminders/store.ts": "the due scan reads each reminder's PR and reviewer identity in one join",

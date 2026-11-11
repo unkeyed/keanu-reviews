@@ -232,7 +232,7 @@ describe("closed pull request reconciliation", () => {
     pull_request: {
       ...opened(number, githubId).pull_request,
       merged: true,
-      updated_at: new Date().toISOString(), // recent → inside the re-archive window
+      updated_at: new Date().toISOString(),
     },
   });
   const noSnapshots = vi.fn<PullRequestSnapshotFetcher>(async () => ({ snapshot: undefined }));
@@ -242,7 +242,6 @@ describe("closed pull request reconciliation", () => {
     await openPr(1, 101, deps);
     await convergePullRequest(deps, pullRequestEvent(merge(1, 101)));
     expect(slack.channel("C1")?.archived).toBe(true);
-    // A late CI/comment/review write would unarchive the channel to deliver.
     await slack.unarchive("C1");
     expect(slack.channel("C1")?.archived).toBe(false);
 
@@ -250,7 +249,7 @@ describe("closed pull request reconciliation", () => {
     const result = await run();
 
     expect(result.reArchived).toBe(1);
-    expect(slack.channel("C1")?.archived).toBe(true); // closed back up
+    expect(slack.channel("C1")?.archived).toBe(true);
     expect(events).toContainEqual(
       expect.objectContaining({
         msg: "re-archived PR channel that drifted open after a late write",
@@ -282,7 +281,7 @@ describe("closed pull request reconciliation", () => {
   it("leaves an already-archived terminal channel alone", async () => {
     const deps = handler();
     await openPr(1, 101, deps);
-    await convergePullRequest(deps, pullRequestEvent(merge(1, 101))); // archives C1 and leaves it archived
+    await convergePullRequest(deps, pullRequestEvent(merge(1, 101)));
 
     const run = createClosedPullRequestReconciliation(deps, noSnapshots);
     const result = await run();

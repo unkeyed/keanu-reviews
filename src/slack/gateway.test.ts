@@ -18,7 +18,6 @@ interface FlatPost {
   authorUserId?: string;
 }
 
-/** Post the way a caller does, from one flat description of the message and its poster. */
 async function postMessage(slack: SlackGateway, msg: FlatPost) {
   const poster = msg.authorUserToken
     ? { kind: "user" as const, userId: msg.authorUserId ?? "", token: msg.authorUserToken }
@@ -161,8 +160,8 @@ describe("Slack Web API adapter", () => {
 
     expect(userWebFactory).toHaveBeenCalledWith("xoxp-flo");
     expect(web.conversations.invite).toHaveBeenCalledWith({ channel: "C123", users: "U7" });
-    expect(userPost).toHaveBeenCalledTimes(2); // failed on not_in_channel, retried after invite
-    expect(web.chat).not.toHaveBeenCalled(); // never posted as the bot
+    expect(userPost).toHaveBeenCalledTimes(2);
+    expect(web.chat).not.toHaveBeenCalled();
   });
 
   it("unarchives with the bot and retries a user post that hits is_archived (B4)", async () => {
@@ -261,7 +260,7 @@ describe("Slack Web API adapter", () => {
 
     expect(userWebFactory).toHaveBeenCalledWith("xoxp-flo");
     expect(userUpdate).toHaveBeenCalledWith("chat.update", expect.objectContaining({ ts: "1.2" }));
-    expect(web.chat).not.toHaveBeenCalled(); // never touched the bot token
+    expect(web.chat).not.toHaveBeenCalled();
   });
 
   describe("images", () => {
@@ -664,8 +663,7 @@ describe("Slack Web API adapter", () => {
 
     await expect(slack.leave("C1", "xoxp-u1")).resolves.toBe("left");
     expect(userLeave).toHaveBeenCalledWith({ channel: "C1" });
-    expect(tokensSeen).toEqual(["xoxp-u1"]); // the user token, not the bot token
-    // The bot token must never be used to leave (that would be a kick path).
+    expect(tokensSeen).toEqual(["xoxp-u1"]);
     expect(web.conversations.leave).not.toHaveBeenCalled();
   });
 
@@ -813,8 +811,6 @@ describe("Slack Web API adapter", () => {
 
   it("falls back to a plain bot post when chat:write.customize is missing", async () => {
     const web = fakeWebApi();
-    // First attempt (with username) is rejected for the missing scope; the retry
-    // without author overrides succeeds so comment mirroring never breaks.
     web.chat
       .mockRejectedValueOnce({ data: { error: "missing_scope", needed: "chat:write.customize" } })
       .mockResolvedValueOnce({ ts: "171234.5678" });
@@ -823,7 +819,6 @@ describe("Slack Web API adapter", () => {
     await expect(
       postMessage(slack, { channel: "C123", text: "hi", username: "James" }),
     ).resolves.toEqual({ ts: "171234.5678" });
-    // The retry omitted the author override.
     expect(web.chat).toHaveBeenNthCalledWith(
       2,
       "chat.postMessage",

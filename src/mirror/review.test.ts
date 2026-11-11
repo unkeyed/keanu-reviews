@@ -31,7 +31,6 @@ import { onIssueComment } from "./comments.ts";
 
 const handleReviewRequest = inSession(onPullRequest);
 const reviewArrival = jobArrivalKey(new Date(0), "review");
-/** A review job as the worker runs it: reminder cancel, then the mirror. */
 const handleReview = (deps: HandlerDeps, ev: ReviewEvent, arrivalKey = reviewArrival) =>
   handlers.review(deps, ev, { arrivalKey, attempt: 1, signal: new AbortController().signal });
 
@@ -115,12 +114,11 @@ describe("review job (U6, R5)", () => {
       await handleReview(deps(), reviewEvent(review(state)));
       const blocks = JSON.stringify(slack.messages.at(-1)?.blocks);
       expect(blocks).toContain("James Perkins");
-      expect(blocks).not.toContain("<@U7>"); // never a mention = never a notification
+      expect(blocks).not.toContain("<@U7>");
     },
   );
 
   it("falls back to the GitHub login when the reviewer has no Slack name", async () => {
-    // No identity mapping and no display name available.
     await handleReview(deps(), reviewEvent(review("approved")));
     const blocks = JSON.stringify(slack.messages.at(-1)?.blocks);
     expect(blocks).toContain("flo");
@@ -155,11 +153,11 @@ describe("review job (U6, R5)", () => {
     };
     await handleReview(deps({ authorPoster }), reviewEvent(review("approved")));
     const msg = slack.messages.at(-1);
-    expect(msg?.authorUserToken).toBe("xoxp-flo"); // posted as the reviewer
+    expect(msg?.authorUserToken).toBe("xoxp-flo");
     const blocks = JSON.stringify(msg?.blocks);
     expect(blocks).toContain("approved");
-    expect(blocks).not.toContain("by James Perkins"); // authored as them, so no label
-    expect(blocks).not.toContain("<@"); // still never a mention
+    expect(blocks).not.toContain("by James Perkins");
+    expect(blocks).not.toContain("<@");
   });
 
   it("drops a dead token and posts the review as the bot with the reviewer's name", async () => {
@@ -184,7 +182,7 @@ describe("review job (U6, R5)", () => {
     expect(slack.messages).toHaveLength(1);
     const msg = slack.messages[0];
     expect(msg?.authorUserToken).toBeUndefined();
-    expect(msg?.username).toBeUndefined(); // a review never wears the reviewer's face
+    expect(msg?.username).toBeUndefined();
     expect(JSON.stringify(msg?.blocks)).toContain("James Perkins");
   });
 
@@ -232,10 +230,10 @@ describe("review job (U6, R5)", () => {
 
   it("suppresses the empty 'commented' wrapper but still cancels the reminder", async () => {
     const emptyCommented = review("commented");
-    emptyCommented.review.body = null; // inline-comments-only review, no summary text
+    emptyCommented.review.body = null;
     await handleReview(deps(), reviewEvent(emptyCommented));
-    expect(slack.messages).toHaveLength(0); // no "💬 commented by …" noise
-    expect((await reminderRow())?.status).toBe("cancelled"); // reminder still cancelled
+    expect(slack.messages).toHaveLength(0);
+    expect((await reminderRow())?.status).toBe("cancelled");
   });
 
   it("posts a 'commented' review whose body is only a pasted image, with the image", async () => {
@@ -254,7 +252,7 @@ describe("review job (U6, R5)", () => {
   });
 
   it("still posts a 'commented' review that has body text", async () => {
-    await handleReview(deps(), reviewEvent(review("commented"))); // body "looks good"
+    await handleReview(deps(), reviewEvent(review("commented")));
     expect(JSON.stringify(slack.messages.at(-1)?.blocks)).toContain("commented");
   });
 
@@ -274,7 +272,7 @@ describe("review job (U6, R5)", () => {
       "Looks good overall.\n<!-- pullfrog meta -->\n<sup>marketing footer</sup>";
     await handleReview(deps({ allowedBots: new Set(["pullfrog"]) }), reviewEvent(botReview));
     const msg = slack.messages.at(-1);
-    expect(msg?.threadTs).toBe("ts-root"); // threaded, not a top-level post
+    expect(msg?.threadTs).toBe("ts-root");
     const blocks = JSON.stringify(msg?.blocks);
     expect(blocks).toContain("Looks good overall.");
     expect(blocks).not.toContain("<!--");
@@ -397,7 +395,7 @@ describe("onIssueComment (U6)", () => {
     const msg = slack.messages.at(-1);
     expect(msg?.username).toBe("Flo Rider");
     expect(msg?.iconUrl).toBe("https://slack/a.png");
-    expect(JSON.stringify(msg?.blocks)).not.toContain("by flo"); // no redundant label
+    expect(JSON.stringify(msg?.blocks)).not.toContain("by flo");
   });
 
   it("ignores a comment on a non-PR issue", async () => {
@@ -435,7 +433,7 @@ describe("onIssueComment (U6)", () => {
     edited.comment.body = "second draft";
     await onIssueComment(deps(), issueCommentEvent(edited));
 
-    expect(slack.messages).toHaveLength(count); // no new message
+    expect(slack.messages).toHaveLength(count);
     expect(slack.updates).toHaveLength(1);
     const updated = slack.messages.find((m) => m.ts === original?.ts);
     expect(JSON.stringify(updated?.blocks)).toContain("second draft");

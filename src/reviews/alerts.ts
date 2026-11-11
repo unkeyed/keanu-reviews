@@ -21,11 +21,6 @@ import type { ReviewDeps } from "./deps.ts";
 
 export type Reviewer = Pick<GithubActor, "id" | "login">;
 
-/**
- * What released a review alert. A pull_request event names its reviewers and
- * the head it saw. A completed check run names neither: its reviewers are the
- * PR's current requested reviewers on GitHub, and its head is the stored one.
- */
 export type AlertTrigger =
   | {
       kind: "requested" | "ready_for_review" | "synchronize";
@@ -37,17 +32,8 @@ export type AlertTrigger =
   | { kind: "check_run" };
 
 interface AlertPolicy {
-  /** An ended reminder (see `ended`) may start a new generation. */
   revive: boolean;
-  /**
-   * While CI is not ready, record the request on a reminder row, so the alert
-   * that follows reuses its generation and a removal can cancel it.
-   */
   recordWhenHeld: boolean;
-  /**
-   * A commit with no check runs by attempt ABSENT_CI_ATTEMPTS has no CI
-   * (alert), rather than CI lagging the webhook (hold).
-   */
   absentMeansReady: boolean;
 }
 
@@ -58,30 +44,17 @@ const alertPolicy: Record<AlertTrigger["kind"], AlertPolicy> = {
   check_run: { revive: false, recordWhenHeld: false, absentMeansReady: false },
 };
 
-/**
- * Deliveries to wait for check runs on a commit that has none. The first
- * attempt is 1; attempts below this retry. In-progress runs do not use this
- * budget, since their check_run releases the alert.
- */
 const ABSENT_CI_ATTEMPTS = 4;
 
-/** A reviewer the trigger may still alert, with their reminder row if any. */
 interface Alertable {
   reviewer: Reviewer;
   reminder: ReminderRow | undefined;
-  /** The alert goes out on a new reminder generation: none yet, or a revived one. */
   restart: boolean;
 }
 
-/**
- * A request that ended without a review: removed, closed, reviewed, or out
- * of reminder attempts. A sent reminder has not ended, so a re-request after
- * the nudge stays quiet.
- */
 const ended = (reminder: ReminderRow) =>
   reminder.status === "cancelled" || reminder.status === "failed";
 
-/** pull_request actions after the session converged the channel. */
 export async function onPullRequest(
   deps: ReviewDeps,
   s: PrSession,
@@ -111,22 +84,14 @@ export async function onPullRequest(
       return releaseAlerts(deps, s, pr, trigger("requested", [reviewer]), work.attempt);
     }
     case "ready_for_review":
-      // GitHub keeps the reviewers requested while the PR was a draft.
       if (ev.pr.requestedReviewers.length === 0) return;
       return releaseAlerts(deps, s, await s.ready(), trigger("ready_for_review"), work.attempt);
     case "synchronize":
-      // A head with no check runs never gets a check_run, so the push itself
-      // releases alerts held on the previous head's CI.
       if (ev.pr.draft || ev.pr.requestedReviewers.length === 0) return;
       return releaseAlerts(deps, s, await s.ready(), trigger("synchronize"), work.attempt);
   }
 }
 
-/**
- * A submitted review, in any state, cancels the reviewer's reminder. Runs
- * before the review is mirrored, so a failed Slack post cannot leave the
- * reminder live for a later check run to alert.
- */
 export async function onReviewSubmitted(
   deps: ReviewDeps,
   s: PrSession,
@@ -141,12 +106,6 @@ export async function onReviewSubmitted(
   });
 }
 
-/**
- * Alert each reviewer the trigger names, once per reminder generation, while
- * the PR is open, not a draft, and CI on its head passes. A reviewer requested
- * while CI is held gets a reminder row and no post; the trigger that later
- * finds CI passing sends the alert on that row's generation.
- */
 export async function releaseAlerts(
   deps: ReviewDeps,
   s: PrSession,
@@ -181,12 +140,6 @@ export async function releaseAlerts(
   for (const one of pending) await sendAlert(deps, s, pr.id, one, stamp);
 }
 
-/**
- * The reviewers a trigger can still alert. One whose alert for the current
- * generation already posted, or whose request was cancelled when the trigger
- * cannot revive it, has nothing left to send, so they are left out before any
- * CI or GitHub read.
- */
 async function alertable(
   deps: ReviewDeps,
   s: PrSession,
@@ -207,7 +160,6 @@ async function alertable(
   return out;
 }
 
-/** A check run's reviewers: the PR's current requested reviewers, unless GitHub says it is a draft. */
 async function requestedOnGithub(
   deps: ReviewDeps,
   s: PrSession,
@@ -261,11 +213,6 @@ async function recordRequest(
   deps.logger.info("review alert held until CI passes", { prId, reviewer: reviewer.login });
 }
 
-/**
- * Post the alert keyed by the reminder generation, which changes only when a
- * request replaces an ended one, so every trigger for one request shares
- * one post. The reminder clock restarts in the transaction that records it.
- */
 async function sendAlert(
   deps: ReviewDeps,
   s: PrSession,
@@ -281,7 +228,6 @@ async function sendAlert(
       dueAt: hoursAfter(deps, stamp.updatedAt),
       stamp,
     });
-    // A request older than the reminder's end does not revive it.
     if (ended(current)) return;
   }
   await deliverAlert(deps, s, prId, reviewer, current.generation, (tx, dueAt) =>
@@ -289,12 +235,6 @@ async function sendAlert(
   );
 }
 
-/**
- * Post a reviewer's review-request alert for one reminder generation,
- * inviting them first when they resolve to a Slack user. `restartClock`
- * commits with the sent mark and moves the reminder due `reminderHours`
- * after the post.
- */
 export async function deliverAlert(
   deps: ReviewDeps,
   s: PrSession,

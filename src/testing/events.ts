@@ -1,6 +1,5 @@
 import { type DomainEvent, parseEvent } from "#events";
 
-/** The webhook JSON tests send, limited to the fields a handler reads. */
 export interface GithubUserJson {
   id: number;
   login: string;

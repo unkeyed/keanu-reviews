@@ -37,7 +37,6 @@ const HOLD_MS = 15 * 60_000;
 const RETRY_BASE_MS = 60_000;
 const BATCH = 50;
 const PR = prId("unkey/api", 1);
-// A Monday, so the default window (every weekday, all day) is open.
 const MONDAY = Date.parse("2026-08-10T00:00:00Z");
 
 beforeEach(async () => {
@@ -62,13 +61,11 @@ const scan = (over: Partial<ReviewDeps> = {}) =>
   scanDue(handlerDeps(db, slack, { clock: { now: () => new Date(clock) }, ...over }));
 
 let versions = 0;
-/** Each write sorts after the previous one at the same instant, as job arrival keys do. */
 const stamp = (at: number) => ({
   updatedAt: new Date(at),
   version: String(++versions).padStart(6, "0"),
 });
 
-/** A request recorded while CI held its alert, so the reviewer was never alerted. */
 const heldRequest = (pr: PrId, reviewer: number, at = clock) =>
   scheduleReminder(db, {
     prId: pr,
@@ -77,7 +74,6 @@ const heldRequest = (pr: PrId, reviewer: number, at = clock) =>
     stamp: stamp(at),
   });
 
-/** A request whose review alert posted, as every reminder's does unless its release was lost. */
 const request = async (pr: PrId, reviewer: number, at = clock) => {
   const row = await heldRequest(pr, reviewer, at);
   await createLedger(db).deliver(
@@ -112,14 +108,14 @@ const seedHeadSha = () =>
 describe("reminder scan (U8, R9)", () => {
   it("holds a due reminder outside the delivery window, delivers it inside", async () => {
     const window = { startHour: 5, endHour: 14, timeZone: "America/New_York" };
-    clock = Date.parse("2026-08-12T18:00:00Z"); // schedule -> due 2026-08-13T06:00:00Z
+    clock = Date.parse("2026-08-12T18:00:00Z");
     await request(PR, 7);
 
-    clock = Date.parse("2026-08-13T07:00:00Z"); // 03:00 ET — outside the window
+    clock = Date.parse("2026-08-13T07:00:00Z");
     expect(await scan({ reminderWindow: window })).toBe(0);
     expect(slack.messages).toHaveLength(0);
 
-    clock = Date.parse("2026-08-13T13:00:00Z"); // 09:00 ET — inside the window
+    clock = Date.parse("2026-08-13T13:00:00Z");
     expect(await scan({ reminderWindow: window })).toBe(1);
     expect(slack.messages).toHaveLength(1);
   });
@@ -128,7 +124,7 @@ describe("reminder scan (U8, R9)", () => {
     await request(PR, 7);
     const due = await listDueWithContext(db, new Date(clock + (HOURS + 0.1) * 60 * 60_000), BATCH);
     expect(due).toHaveLength(1);
-    expect(await listDueWithContext(db, new Date(clock), BATCH)).toHaveLength(0); // not yet due
+    expect(await listDueWithContext(db, new Date(clock), BATCH)).toHaveLength(0);
   });
 
   it("posts exactly once at due time and flips the row to sent", async () => {
@@ -136,7 +132,6 @@ describe("reminder scan (U8, R9)", () => {
     advanceHours(HOURS);
     expect(await scan()).toBe(1);
     expect(slack.messages).toHaveLength(1);
-    // second scan finds nothing pending
     expect(await scan()).toBe(0);
   });
 
@@ -317,7 +312,7 @@ describe("reminder scan (U8, R9)", () => {
     await request(PR, 8);
     advanceHours(HOURS);
     expect(await scan({ fetchPullRequest })).toBe(0);
-    expect(calls).toBe(1); // shared across both reviewers' reminders
+    expect(calls).toBe(1);
   });
 
   it("cancels on review_request_removed", async () => {
@@ -502,7 +497,6 @@ describe("reminder scan (U8, R9)", () => {
     await request(pending.id, 7);
     advanceHours(HOURS);
 
-    // More scans than the attempt budget: holding spends no attempt.
     for (let scans = 0; scans < 6; scans++) {
       expect(await scan()).toBe(0);
       clock += HOLD_MS;

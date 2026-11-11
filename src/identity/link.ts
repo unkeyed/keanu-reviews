@@ -20,7 +20,6 @@ export interface ImportResult {
   skipped: { row: ImportRow; reason: string }[];
 }
 
-/** Admin bulk-import of identity mappings (U9). Malformed rows are skipped, not fatal. */
 export async function importIdentities(deps: LinkDeps, rows: ImportRow[]): Promise<ImportResult> {
   const result: ImportResult = { imported: 0, skipped: [] };
   for (const row of rows) {

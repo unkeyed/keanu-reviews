@@ -21,7 +21,6 @@ const asUser = { kind: "user", userId: "U7", token: "xoxp-flo" };
 describe("commentPresentation", () => {
   it.each([
     ["a user token with a profile name", user(profile), asUser, undefined],
-    // Known quirk kept as is: the label follows the profile name, not the poster.
     ["a user token without a profile name", user(undefined), asUser, "flo"],
     [
       "a linked profile",

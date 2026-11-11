@@ -9,22 +9,11 @@ import type { ArrivalKey } from "#lib";
 import { CURRENT_CHANNEL_NAME_VERSION, channelName } from "#slack";
 import type { PrRow } from "./store.ts";
 
-/**
- * Why a PR's channel converges. Every per-trigger difference derives from it.
- * - `pull_request`: a lifecycle webhook. Its action may assert the state and
- *   post a lifecycle note, and a merge is announced.
- * - `child`: the PR object inside a review or review comment. It only hints at
- *   draft and carries no arrival key. It builds a missing channel or root, and
- *   an open PR's channel follows a strictly newer one's title and draft flag.
- * - `reconcile`: the daily catch-up of a close GitHub already reported. It
- *   archives like the webhook would but announces nothing.
- */
 export type ConvergeCause =
   | { kind: "pull_request"; action: string; merged: boolean; arrivalKey: ArrivalKey }
   | { kind: "child" }
   | { kind: "reconcile"; merged: boolean; arrivalKey: ArrivalKey };
 
-/** The action a cause stands for; lifecycle note keys embed it. */
 function causeAction(cause: ConvergeCause): string {
   switch (cause.kind) {
     case "pull_request":
@@ -41,7 +30,6 @@ export function causeClaim(cause: ConvergeCause, snapshot: PrSnapshot): StateCla
   return claimFromAction(causeAction(cause), snapshot.draft, merged);
 }
 
-/** One ordered step of channel convergence; the executor runs them in order. */
 export type ChannelStep =
   | { kind: "create"; name: string }
   | { kind: "unarchive" }
@@ -58,7 +46,6 @@ export type ChannelStep =
   | { kind: "skip-announcements"; shipped: boolean; mergeComment: boolean }
   | { kind: "mark-applied"; from: PrState | null; state: PrState; name: string };
 
-/** Configured features that add steps. */
 export interface ChannelFeatures {
   shipped: boolean;
   commentOnMerge: boolean;
@@ -77,14 +64,6 @@ export type PlanRecord = Pick<
   | "channelNameVersion"
 >;
 
-/**
- * The channel decision table for a stored PR whose snapshot was accepted.
- * An archived channel that stays terminal gets no writes; one the PR leaves
- * is unarchived first. The lifecycle note goes only to a channel that already
- * had its root, and before the archive inside a transition. A terminal PR
- * cancels its reminders before any Slack transition, and renames before it
- * archives.
- */
 export function planChannel(
   record: PlanRecord,
   snapshot: PrSnapshot,
@@ -93,7 +72,6 @@ export function planChannel(
 ): ChannelStep[] {
   const steps: ChannelStep[] = [];
   const create = !record.channelId;
-  // A channel keeps the naming scheme it was created with, so legacy v1 names never churn.
   const version = create ? CURRENT_CHANNEL_NAME_VERSION : record.channelNameVersion;
   const desired = record.currentState;
   const name = channelName({
@@ -139,17 +117,11 @@ export function planChannel(
   return resolveAuthorOnlyIfUsed(steps);
 }
 
-/**
- * Resolving the author can read GitHub and Slack and record an email-match
- * identity, so a plan resolves them only for a step that names them: the
- * invite, or the #shipped post. A channel that stays archived has neither.
- */
 function resolveAuthorOnlyIfUsed(steps: ChannelStep[]): ChannelStep[] {
   const used = steps.some((s) => s.kind === "invite-author" || s.kind === "announce-shipped");
   return used ? steps : steps.filter((s) => s.kind !== "resolve-author");
 }
 
-/** A late catch-up skips both merge announcements; the archive itself still happens. */
 function announcements(cause: ConvergeCause, features: ChannelFeatures): ChannelStep[] {
   const { shipped, commentOnMerge } = features;
   if (cause.kind === "reconcile") {

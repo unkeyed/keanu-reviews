@@ -1,21 +1,11 @@
-/**
- * Slack user-token OAuth (v2). The GitHub OAuth flow proves identity and throws
- * the token away; this flow instead persists each participant's user token so
- * the bot can call `conversations.leave` on their behalf and archive PR channels
- * silently. Signed CSRF state is shared with the GitHub flow (see github/oauth).
- */
 const AUTHORIZE_URL = "https://slack.com/oauth/v2/authorize";
 const ACCESS_TOKEN_URL = "https://slack.com/api/oauth.v2.access";
 const DEFAULT_TIMEOUT_MS = 10_000;
 
-/** User scope needed to leave a public channel via `conversations.leave`. */
 export const SLACK_LEAVE_USER_SCOPE = "channels:write";
-/** User scope needed to post a mirrored comment/review as the user themselves. */
 export const SLACK_POST_USER_SCOPE = "chat:write";
-/** All user scopes `/link-slack` requests: quiet-archive leave + authoring posts. */
 const SLACK_USER_SCOPES = `${SLACK_LEAVE_USER_SCOPE},${SLACK_POST_USER_SCOPE}`;
 
-/** True when a Slack-granted scope string (space/comma separated) contains `required`. */
 export function hasScope(granted: string, required: string): boolean {
   return granted
     .split(/[\s,]+/)
@@ -32,7 +22,6 @@ export function createSlackAuthorizeUrl(input: {
   url.searchParams.set("client_id", input.clientId);
   url.searchParams.set("redirect_uri", input.callbackUrl);
   url.searchParams.set("state", input.state);
-  // Request only user scopes — the bot token is provisioned separately at install.
   url.searchParams.set("user_scope", SLACK_USER_SCOPES);
   url.searchParams.set("scope", "");
   return url.toString();

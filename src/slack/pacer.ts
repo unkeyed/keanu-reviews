@@ -4,11 +4,6 @@ import { SlackApiError } from "./errors.ts";
 export type SleepFn = (ms: number) => Promise<void>;
 const realSleep: SleepFn = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/**
- * Retry bounded Slack 429s while honoring Retry-After. A wait too long to sleep
- * through, or one more 429 than allowed, becomes a Retry for the durable job,
- * so the process never holds a DB lease while doing no useful work.
- */
 export async function withRateLimitRetry<T>(
   fn: () => Promise<T>,
   opts: { maxRetries: number; maxRetryDelayMs: number; sleep?: SleepFn },
@@ -34,7 +29,6 @@ export async function withRateLimitRetry<T>(
   }
 }
 
-/** Serialize calls sharing a key, enforcing a minimum interval between them. */
 export function createPacer(
   minIntervalMs: number,
   sleep: SleepFn = realSleep,

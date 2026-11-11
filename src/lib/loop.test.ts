@@ -21,7 +21,6 @@ function captureLogger(): { logger: Logger; warns: string[]; errors: string[] } 
   return { logger, warns, errors };
 }
 
-/** A run that stays in flight until the test calls `finish`. */
 function heldRuns() {
   let finish: (() => void) | undefined;
   const run = vi.fn(

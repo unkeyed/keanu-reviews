@@ -10,13 +10,6 @@ import {
 import { releaseAlerts } from "./alerts.ts";
 import type { ReviewDeps } from "./deps.ts";
 
-/**
- * A completed check run may release the review alerts of every tracked PR its
- * commit heads: the PRs GitHub lists on the run, else the stored PRs at that
- * head, else the PRs GitHub says the commit heads (fork checks list none).
- * Each runs in its PR's session. An associated PR with no row or channel yet
- * makes the job retry, after the PRs that are ready have been handled.
- */
 export async function onCheckRun(deps: ReviewDeps, ev: CheckRunEvent, work: Work): Promise<void> {
   const { repo, headSha } = ev;
   const associated = new Set(ev.prNumbers);
