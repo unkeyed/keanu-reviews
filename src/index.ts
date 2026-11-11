@@ -32,7 +32,7 @@ function boot(): void {
   );
 
   let shuttingDown = false;
-  const shutdown = async (signal: NodeJS.Signals) => {
+  const shutdown = async (signal: string, exitCode: number) => {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info("shutting down", { signal });
@@ -55,10 +55,22 @@ function boot(): void {
     } catch (err) {
       logger.error("database close failed", { err: errMessage(err) });
     }
-    process.exit(0);
+    process.exit(exitCode);
   };
-  process.on("SIGTERM", () => void shutdown("SIGTERM"));
-  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM", 0));
+  process.on("SIGINT", () => void shutdown("SIGINT", 0));
+  // After an error nothing caught, the process state is unknown. Log it, then
+  // drain like a SIGTERM and exit 1 so the supervisor restarts a clean process;
+  // durable jobs and leases make the restart lose nothing.
+  const fatal = (kind: string) => (err: unknown) => {
+    logger.error(kind, {
+      err: errMessage(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    });
+    void shutdown(kind, 1);
+  };
+  process.on("unhandledRejection", fatal("unhandled rejection"));
+  process.on("uncaughtException", fatal("uncaught exception"));
 }
 
 boot();
