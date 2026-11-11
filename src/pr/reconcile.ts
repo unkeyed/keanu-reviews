@@ -1,5 +1,5 @@
 import { isTerminal, reconcileArrivalKey } from "#events";
-import { type PullRequestSnapshot, type PullRequestSnapshotFetcher, toPrSnapshot } from "#github";
+import type { PullRequestSnapshot, PullRequestSnapshotFetcher } from "#github";
 import { RateLimited, errMessage } from "#lib";
 import type { PrDeps } from "./converge.ts";
 import { PullRequestLifecycleBusyError, session } from "./session.ts";
@@ -279,11 +279,11 @@ async function applySnapshot(
     return;
   }
 
-  if (snapshot.id !== row.githubPrId || snapshot.number !== row.number) {
+  if (snapshot.githubPrId !== row.githubPrId || snapshot.number !== row.number) {
     result.failed += 1;
     logger.error("pull request reconciliation failed; GitHub identity did not match", {
       ...fields,
-      snapshotId: snapshot.id,
+      snapshotId: snapshot.githubPrId,
       snapshotNumber: snapshot.number,
     });
     return;
@@ -309,7 +309,7 @@ async function applySnapshot(
   } as const;
   const handled = await session(
     deps,
-    { kind: "snapshot", snapshot: toPrSnapshot(fresh.repoFullName, snapshot), cause },
+    { kind: "snapshot", snapshot: { ...snapshot, repo: fresh.repoFullName }, cause },
     async (s) => s.converged,
   );
   if (!handled?.accepted) {

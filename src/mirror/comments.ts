@@ -1,5 +1,5 @@
 import type { GithubActor, IssueCommentEvent, ReviewCommentEvent, Work } from "#events";
-import { shouldSkipActor, toPrSnapshot } from "#github";
+import { shouldSkipActor } from "#github";
 import { type PrId, Retry } from "#lib";
 import { type PrRow, type PrSession, type PrSource, findByRepoNumber, session } from "#pr";
 import { type EffectKey, keys } from "#slack";
@@ -152,7 +152,7 @@ export async function onIssueComment(
 async function fromGithub(deps: MirrorDeps, repo: string, number: number): Promise<PrSource> {
   const { snapshot } = await deps.fetchSnapshot(repo, number);
   if (!snapshot) throw new Retry(`PR channel is not ready for ${repo}#${number}`);
-  return { kind: "snapshot", snapshot: toPrSnapshot(repo, snapshot), cause: { kind: "child" } };
+  return { kind: "snapshot", snapshot, cause: { kind: "child" } };
 }
 
 /** A deletion never creates a channel or a PR row; without a row there is no key to tombstone. */

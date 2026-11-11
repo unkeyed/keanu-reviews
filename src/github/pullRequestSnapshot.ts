@@ -1,4 +1,4 @@
-import type { GithubActor, PrSnapshot } from "#events";
+import type { PrSnapshot } from "#events";
 import type { InstallationAuth } from "./auth.ts";
 import {
   GithubApiError,
@@ -9,39 +9,11 @@ import {
   rateLimitOf,
 } from "./http.ts";
 
-/** Pull request facts the reconciliation job needs to replay a close or merge. */
-export interface PullRequestSnapshot {
-  id: number;
-  number: number;
-  state: "open" | "closed";
-  merged: boolean;
-  draft: boolean;
-  title: string;
-  htmlUrl: string;
-  updatedAt: string;
-  user: GithubActor;
-  headSha: string;
-  headRef?: string;
-  baseRef?: string;
-}
-
-/** GitHub's REST view of a PR in `repo`, as the domain snapshot a webhook also carries. */
-export function toPrSnapshot(repo: string, snapshot: PullRequestSnapshot): PrSnapshot {
-  return {
-    repo,
-    number: snapshot.number,
-    githubPrId: snapshot.id,
-    title: snapshot.title,
-    url: snapshot.htmlUrl,
-    author: snapshot.user,
-    draft: snapshot.draft,
-    headSha: snapshot.headSha,
-    headRef: snapshot.headRef,
-    baseRef: snapshot.baseRef,
-    updatedAt: snapshot.updatedAt,
-    requestedReviewers: [],
-  };
-}
+/**
+ * GitHub's REST view of a PR: the snapshot a webhook also carries, plus the
+ * facts the reconciliation job needs to replay a close or merge.
+ */
+export type PullRequestSnapshot = PrSnapshot & { state: "open" | "closed"; merged: boolean };
 
 export interface PullRequestSnapshotFetch {
   /** Undefined when GitHub returns 404. */
@@ -62,7 +34,12 @@ function invalidResponse(path: string): GithubApiError {
   });
 }
 
-function parseSnapshot(body: unknown, path: string, expectedNumber: number): PullRequestSnapshot {
+function parseSnapshot(
+  body: unknown,
+  repo: string,
+  path: string,
+  expectedNumber: number,
+): PullRequestSnapshot {
   if (typeof body !== "object" || body === null) throw invalidResponse(path);
   const pr = body as {
     id?: unknown;
@@ -90,18 +67,20 @@ function parseSnapshot(body: unknown, path: string, expectedNumber: number): Pul
   }
   if (typeof pr.head?.sha !== "string" || pr.head.sha.length === 0) throw invalidResponse(path);
   return {
-    id: pr.id as number,
+    repo,
     number: expectedNumber,
-    state: pr.state,
-    merged: pr.merged,
-    draft: pr.draft === true,
+    githubPrId: pr.id as number,
     title: pr.title,
-    htmlUrl: pr.html_url,
-    updatedAt: pr.updated_at,
-    user: { id: pr.user.id as number, login: pr.user.login, isBot: pr.user.type === "Bot" },
+    url: pr.html_url,
+    author: { id: pr.user.id as number, login: pr.user.login, isBot: pr.user.type === "Bot" },
+    draft: pr.draft === true,
     headSha: pr.head.sha,
     headRef: typeof pr.head.ref === "string" ? pr.head.ref : undefined,
     baseRef: typeof pr.base?.ref === "string" ? pr.base.ref : undefined,
+    updatedAt: pr.updated_at,
+    requestedReviewers: [],
+    state: pr.state,
+    merged: pr.merged,
   };
 }
 
@@ -143,6 +122,6 @@ export function createPullRequestSnapshotFetcher(
         cause,
       });
     }
-    return { ...fetched, snapshot: parseSnapshot(body, path, number) };
+    return { ...fetched, snapshot: parseSnapshot(body, repoFullName, path, number) };
   };
 }

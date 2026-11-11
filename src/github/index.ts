@@ -18,7 +18,6 @@ export {
   createPullRequestSnapshotFetcher,
   type PullRequestSnapshot,
   type PullRequestSnapshotFetcher,
-  toPrSnapshot,
 } from "./pullRequestSnapshot.ts";
 export { createGithubAttachmentMirror, type ImageEmbedder } from "./attachments.ts";
 export type { PrForShaFetcher } from "./ci.ts";

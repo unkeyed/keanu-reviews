@@ -464,16 +464,20 @@ describe("onIssueComment (U6)", () => {
       fetched.push(`${repo}#${number}`);
       return {
         snapshot: {
-          id: 1,
+          repo,
           number: 1,
+          githubPrId: 1,
+          title: "Review me",
+          url: "https://github.com/unkey/api/pull/1",
+          author: { id: 100, login: "oz", isBot: false },
+          draft: false,
+          headSha: "sha-1",
+          headRef: undefined,
+          baseRef: undefined,
+          updatedAt: "2026-08-11T12:00:00Z",
+          requestedReviewers: [],
           state: "open" as const,
           merged: false,
-          draft: false,
-          title: "Review me",
-          htmlUrl: "https://github.com/unkey/api/pull/1",
-          updatedAt: "2026-08-11T12:00:00Z",
-          user: { id: 100, login: "oz", isBot: false },
-          headSha: "sha-1",
         },
         remaining: 4999,
       };

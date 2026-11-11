@@ -81,18 +81,20 @@ function snapshot(
   over: Partial<PullRequestSnapshot> = {},
 ): PullRequestSnapshot {
   return {
-    id: githubId,
+    repo: "unkey/api",
     number,
-    state: "closed",
-    merged: false,
-    draft: false,
+    githubPrId: githubId,
     title: `Change ${number}`,
-    htmlUrl: `https://github.com/unkey/api/pull/${number}`,
-    updatedAt: "2026-08-12T15:00:00Z",
-    user: { id: 100, login: "oz", isBot: false },
+    url: `https://github.com/unkey/api/pull/${number}`,
+    author: { id: 100, login: "oz", isBot: false },
+    draft: false,
     headSha: `sha${number}`,
     headRef: "feature",
     baseRef: "main",
+    updatedAt: "2026-08-12T15:00:00Z",
+    requestedReviewers: [],
+    state: "closed",
+    merged: false,
     ...over,
   };
 }
