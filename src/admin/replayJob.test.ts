@@ -44,6 +44,26 @@ describe("replay job CLI", () => {
     expect(ctx.closed()).toBe(true);
   });
 
+  it("reads the job id after pnpm's forwarded option separator", async () => {
+    await failedJob("job-2");
+    const { stdout, stderr } = io();
+    const ctx = testContext(db, new FakeSlackGateway());
+
+    await expect(runReplayJobCli(["--", "job-2"], { stdout, stderr }, () => ctx)).resolves.toBe(0);
+
+    expect(stdout).toHaveBeenCalledWith(JSON.stringify({ ok: true, jobId: "job-2" }));
+    expect(stderr).not.toHaveBeenCalled();
+    expect((await db.select().from(jobs).where(eq(jobs.id, "job-2")))[0]?.status).toBe("pending");
+  });
+
+  it("treats a lone option separator as a missing job id", async () => {
+    const { stdout, stderr } = io();
+    const open = vi.fn();
+    await expect(runReplayJobCli(["--"], { stdout, stderr }, open)).resolves.toBe(1);
+    expect(stderr).toHaveBeenCalledWith("Usage: pnpm jobs:replay <failed-job-id>");
+    expect(open).not.toHaveBeenCalled();
+  });
+
   it("exits 1 for a job that is not failed or kept no payload", async () => {
     await enqueueTestJob(db, {
       deliveryId: "pending-1",

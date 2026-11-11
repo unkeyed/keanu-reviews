@@ -11,7 +11,8 @@ export async function runReplayJobCli(
   io: CliIo,
   open: OpenContext,
 ): Promise<number> {
-  const jobId = args[0];
+  // pnpm forwards the conventional option separator to this Node entrypoint.
+  const jobId = args[0] === "--" ? args[1] : args[0];
   if (!jobId) {
     io.stderr(USAGE);
     return 1;
