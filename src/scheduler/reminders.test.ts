@@ -1,12 +1,12 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createLogger } from "#lib";
-import { applyPullRequestSource, prId, setChannel } from "#pr";
 import { claimReminder, deferReminder, listDue } from "#reminders";
 import type { Db } from "../db/client.ts";
 import { reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import type { CiReadiness } from "../github/ci.ts";
+import { applyPullRequestSource, prId, setChannel } from "../pr/store.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { setPrState } from "../testing/pr.ts";
 import { createReminderScheduler } from "./reminders.ts";

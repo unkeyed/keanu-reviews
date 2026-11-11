@@ -1,10 +1,10 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Retry } from "#lib";
-import { applyPullRequestSource, prId } from "#pr";
 import type { Db } from "../db/client.ts";
 import { messages, pullRequests } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
+import { applyPullRequestSource, prId } from "../pr/store.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { type EffectKey, keys } from "./catalog.ts";
 import { channelSink, claim, clientMsgId, complete, createLedger, naturalKey } from "./ledger.ts";

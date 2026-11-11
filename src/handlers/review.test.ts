@@ -3,10 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseEvent } from "#events";
 import { upsertIdentity } from "#identity";
 import { createLogger } from "#lib";
-import { applyPullRequestSource, prId, setChannel } from "#pr";
 import type { Db } from "../db/client.ts";
 import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
+import { applyPullRequestSource, prId, setChannel } from "../pr/store.ts";
 import { createReminderScheduler } from "../scheduler/reminders.ts";
 import {
   type IssueCommentPayload,
@@ -17,9 +17,12 @@ import {
   reviewEvent,
 } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
+import { inSession } from "../testing/pr.ts";
 import { handleCheckRun } from "./checks.ts";
 import { handleIssueComment, handleReview } from "./review.ts";
-import { handleReviewRequest } from "./reviewRequest.ts";
+import { handleReviewRequest as handleReviewRequestStep } from "./reviewRequest.ts";
+
+const handleReviewRequest = inSession(handleReviewRequestStep);
 
 let db: Db;
 let slack: FakeSlackGateway;

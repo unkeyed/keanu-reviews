@@ -14,7 +14,7 @@ import {
   extractEmbeddedImages,
   render,
 } from "#slack";
-import type { PrHandlerDeps } from "./pullRequest.ts";
+import type { PrHandlerDeps } from "./deps.ts";
 
 /**
  * Everything needed to attribute a mirrored message to its GitHub author:

@@ -147,6 +147,25 @@ export async function pullRequestLifecycleClaimedAt(
   return held?.claimedAt;
 }
 
+/** Restart a held lease's clock. False once another holder has taken the lease over. */
+export async function renewPullRequestLifecycle(
+  db: Db,
+  claim: PullRequestLifecycleClaim,
+  now: Date,
+): Promise<boolean> {
+  const rows = await db
+    .update(pullRequestLifecycleClaims)
+    .set({ claimedAt: now })
+    .where(
+      and(
+        eq(pullRequestLifecycleClaims.githubPrId, claim.githubPrId),
+        eq(pullRequestLifecycleClaims.claimToken, claim.claimToken),
+      ),
+    )
+    .returning({ githubPrId: pullRequestLifecycleClaims.githubPrId });
+  return rows.length > 0;
+}
+
 export async function releasePullRequestLifecycle(
   db: Db,
   claim: PullRequestLifecycleClaim,

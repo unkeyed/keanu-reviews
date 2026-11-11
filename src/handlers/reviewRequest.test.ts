@@ -2,15 +2,21 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertIdentity } from "#identity";
 import { createLogger } from "#lib";
-import { applyPullRequestSource, setChannel } from "#pr";
 import type { Db } from "../db/client.ts";
 import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
+import { applyPullRequestSource, setChannel } from "../pr/store.ts";
 import { createReminderScheduler } from "../scheduler/reminders.ts";
 import { type PullRequestPayload, pullRequestEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
-import { handlePullRequest } from "./pullRequest.ts";
-import { handleReadyForReview, handleReviewRequest } from "./reviewRequest.ts";
+import { convergePullRequest, inSession } from "../testing/pr.ts";
+import {
+  handleReadyForReview as handleReadyForReviewStep,
+  handleReviewRequest as handleReviewRequestStep,
+} from "./reviewRequest.ts";
+
+const handleReadyForReview = inSession(handleReadyForReviewStep);
+const handleReviewRequest = inSession(handleReviewRequestStep);
 
 let db: Db;
 let slack: FakeSlackGateway;
@@ -412,7 +418,7 @@ describe("handleReviewRequest (U5)", () => {
       repository: { full_name: "unkey/api" },
       pull_request: { ...payload().pull_request, requested_reviewers: [{ id: 7, login: "flo" }] },
     };
-    await handlePullRequest(
+    await convergePullRequest(
       deps(),
       pullRequestEvent({
         action: "converted_to_draft",
@@ -425,14 +431,14 @@ describe("handleReviewRequest (U5)", () => {
       }),
     );
 
-    const lifecycle = await handlePullRequest(deps(), pullRequestEvent(readyPayload));
+    const lifecycle = await convergePullRequest(deps(), pullRequestEvent(readyPayload));
     await handleReadyForReview(
       deps({ onReviewRequested }),
       pullRequestEvent(readyPayload),
       "delivery-stale-ready",
     );
 
-    expect(lifecycle.sourceAccepted).toBe(false);
+    expect(lifecycle?.accepted).toBe(false);
     expect(slack.invites).toHaveLength(0);
     expect(JSON.stringify(slack.messages)).not.toContain("Review requested");
     expect(onReviewRequested).not.toHaveBeenCalled();
@@ -452,14 +458,14 @@ describe("handleReviewRequest (U5)", () => {
       repository: { full_name: "unkey/api" },
       pull_request: { ...payload().pull_request, requested_reviewers: [{ id: 7, login: "flo" }] },
     };
-    await handlePullRequest(deps(), pullRequestEvent(readyPayload));
+    await convergePullRequest(deps(), pullRequestEvent(readyPayload));
     await expect(
       handleReadyForReview(waiting, pullRequestEvent(readyPayload), "delivery-ready", {
         attempt: 1,
       }),
     ).rejects.toThrow("CI has not reported");
 
-    await handlePullRequest(
+    await convergePullRequest(
       deps(),
       pullRequestEvent({
         action: "closed",

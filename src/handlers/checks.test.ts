@@ -2,15 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseEvent } from "#events";
 import { upsertIdentity } from "#identity";
 import { createLogger } from "#lib";
-import { applyPullRequestSource, setChannel } from "#pr";
 import type { Db } from "../db/client.ts";
 import { createTestDb } from "../db/testDb.ts";
 import type { CiReadiness } from "../github/ci.ts";
+import { applyPullRequestSource, setChannel } from "../pr/store.ts";
 import { type CheckRunPayload, checkRunEvent, pullRequestEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
-import { setPrState } from "../testing/pr.ts";
+import { inSession, setPrState } from "../testing/pr.ts";
 import { type ChecksDeps, handleCheckRun } from "./checks.ts";
-import { handleReviewRequest } from "./reviewRequest.ts";
+import { handleReviewRequest as handleReviewRequestStep } from "./reviewRequest.ts";
+
+const handleReviewRequest = inSession(handleReviewRequestStep);
 
 let db: Db;
 let slack: FakeSlackGateway;

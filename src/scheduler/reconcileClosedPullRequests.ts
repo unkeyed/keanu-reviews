@@ -1,4 +1,4 @@
-import { type PrChange, isTerminal, reconcileArrivalKey } from "#events";
+import { type PrSnapshot, isTerminal, reconcileArrivalKey } from "#events";
 import {
   GithubRateLimitExhaustedError,
   type PullRequestSnapshot,
@@ -6,16 +6,14 @@ import {
 } from "#github";
 import { type Logger, errMessage } from "#lib";
 import {
+  type PrDeps,
   type PrRow,
+  PullRequestLifecycleBusyError,
   findById,
   listOpenPullRequestsForReconciliation,
   listRecentlyClosedPullRequests,
+  session,
 } from "#pr";
-import {
-  type PrHandlerDeps,
-  PullRequestLifecycleBusyError,
-  handlePullRequest,
-} from "../handlers/pullRequest.ts";
 
 export interface ReconciliationSummary {
   /** Pull requests whose GitHub state was read, or whose read failed. */
@@ -50,7 +48,7 @@ const RE_ARCHIVE_WINDOW_MS = 7 * 24 * 60 * 60_000;
 
 export interface ClosedPullRequestReconciliationDeps {
   /** Same dependencies the webhook worker uses for pull_request events. */
-  handler: PrHandlerDeps;
+  handler: PrDeps;
   fetchSnapshot: PullRequestSnapshotFetcher;
   logger: Logger;
 }
@@ -83,31 +81,28 @@ function outcomeOf(snapshot: PullRequestSnapshot): "merged" | "closed" | undefin
   return undefined;
 }
 
-function closedChange(row: PrRow, snapshot: PullRequestSnapshot): PrChange {
+/** GitHub's REST view of the PR, in the repository the row tracks. */
+function prSnapshot(row: PrRow, snapshot: PullRequestSnapshot): PrSnapshot {
   return {
-    action: "closed",
-    merged: snapshot.merged,
-    pr: {
-      repo: row.repoFullName,
-      number: snapshot.number,
-      githubPrId: snapshot.id,
-      title: snapshot.title,
-      url: snapshot.htmlUrl,
-      author: snapshot.user,
-      draft: snapshot.draft,
-      headSha: snapshot.headSha,
-      headRef: snapshot.headRef,
-      baseRef: snapshot.baseRef,
-      updatedAt: snapshot.updatedAt,
-      requestedReviewers: [],
-    },
+    repo: row.repoFullName,
+    number: snapshot.number,
+    githubPrId: snapshot.id,
+    title: snapshot.title,
+    url: snapshot.htmlUrl,
+    author: snapshot.user,
+    draft: snapshot.draft,
+    headSha: snapshot.headSha,
+    headRef: snapshot.headRef,
+    baseRef: snapshot.baseRef,
+    updatedAt: snapshot.updatedAt,
+    requestedReviewers: [],
   };
 }
 
 /**
  * Catch merges and closes whose webhooks never arrived. For each PR the app
- * still treats as open, read GitHub. When GitHub says merged or closed, run the
- * webhook handler (`handlePullRequest`) so the channel is archived the same way.
+ * still treats as open, read GitHub. When GitHub says merged or closed, converge
+ * the channel in a PR session, so it is archived the way the webhook would.
  * One PR at a time. One failure is logged and the run continues. A second call
  * while this one is in progress returns without doing work; per-PR lifecycle
  * leases cover a second process.
@@ -211,8 +206,8 @@ async function reconcile(
 /**
  * Re-archive channels that drifted open. A CI check / comment / review that lands
  * just after a merge is delivered via the Slack client's `is_archived` recovery,
- * which unarchives the channel — and `handlePullRequest` won't re-close it because
- * its applied state already matches. So directly archive any recently-terminal
+ * which unarchives the channel — and convergence won't re-close it because its
+ * applied state already matches. So directly archive any recently-terminal
  * PR whose channel is currently open. Best-effort: one failure never stops the rest.
  */
 async function reArchiveDriftedChannels(
@@ -293,12 +288,18 @@ async function applySnapshot(
   }
 
   // The reconcile arrival key wins an updated_at tie with any webhook. A newer
-  // stored snapshot is left alone (sourceAccepted false).
-  const handled = await handlePullRequest(deps.handler, closedChange(fresh, snapshot), {
-    sourceArrivalKey: reconcileArrivalKey(new Date()),
-    announceMerge: false,
-  });
-  if (!handled.sourceAccepted) {
+  // stored snapshot is left alone (not accepted).
+  const cause = {
+    kind: "reconcile",
+    merged: snapshot.merged,
+    arrivalKey: reconcileArrivalKey(new Date()),
+  } as const;
+  const handled = await session(
+    deps.handler,
+    { snapshot: prSnapshot(fresh, snapshot), cause },
+    async (s) => s.converged,
+  );
+  if (!handled?.accepted) {
     result.skipped += 1;
     logger.info("pull request reconciliation skipped; GitHub snapshot was stale", fields);
     return;

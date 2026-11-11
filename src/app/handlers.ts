@@ -1,8 +1,8 @@
 import type { JobRow } from "#db";
 import { type DomainEvent, jobArrivalKey, parseEvent } from "#events";
 import type { ArrivalKey } from "#lib";
+import { session } from "#pr";
 import { type ChecksDeps, handleCheckRun } from "../handlers/checks.ts";
-import { handlePullRequest } from "../handlers/pullRequest.ts";
 import { type ReviewDeps, handleIssueComment, handleReview } from "../handlers/review.ts";
 import { handleReviewComment } from "../handlers/reviewComment.ts";
 import {
@@ -30,19 +30,26 @@ type Handler<K extends DomainEvent["kind"]> = (
 export type HandlerTable = { [K in DomainEvent["kind"]]: Handler<K> };
 
 export const handlers: HandlerTable = {
-  pull_request: async (deps, ev, work) => {
-    await handlePullRequest(deps, ev, { sourceArrivalKey: work.arrivalKey });
-    const gate = { attempt: work.attempt };
-    switch (ev.action) {
-      case "review_requested":
-      case "review_request_removed":
-        return handleReviewRequest(deps, ev, work.arrivalKey, gate);
-      case "ready_for_review":
-        // Invite reviewers assigned while the PR was a draft, once check runs pass.
-        return handleReadyForReview(deps, ev, work.arrivalKey, gate);
-      case "synchronize":
-        return handleSynchronizedReviewAlerts(deps, ev, work.arrivalKey, gate);
-    }
+  pull_request: (deps, ev, work) => {
+    const cause = {
+      kind: "pull_request",
+      action: ev.action,
+      merged: ev.merged,
+      arrivalKey: work.arrivalKey,
+    } as const;
+    return session(deps, { snapshot: ev.pr, cause }, async (s) => {
+      const gate = { attempt: work.attempt };
+      switch (ev.action) {
+        case "review_requested":
+        case "review_request_removed":
+          return handleReviewRequest(deps, s, ev, work.arrivalKey, gate);
+        case "ready_for_review":
+          // Invite reviewers assigned while the PR was a draft, once check runs pass.
+          return handleReadyForReview(deps, s, ev, work.arrivalKey, gate);
+        case "synchronize":
+          return handleSynchronizedReviewAlerts(deps, s, ev, work.arrivalKey, gate);
+      }
+    });
   },
   review_comment: (deps, ev) => handleReviewComment(deps, ev),
   review: (deps, ev, work) => handleReview(deps, ev, work.arrivalKey),

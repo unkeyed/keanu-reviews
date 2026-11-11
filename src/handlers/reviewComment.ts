@@ -1,5 +1,6 @@
 import type { ReviewCommentEvent } from "#events";
 import { shouldSkipActor } from "#github";
+import { type PrSession, session } from "#pr";
 import { type Message, createLedger, keys } from "#slack";
 import {
   commentImages,
@@ -8,8 +9,8 @@ import {
   resolveMessageAuthor,
   updateAuthoredMessage,
 } from "./authorship.ts";
+import type { PrHandlerDeps } from "./deps.ts";
 import { inviteMentionedUsers } from "./mentions.ts";
-import { type PrHandlerDeps, ensurePullRequestChannel } from "./pullRequest.ts";
 
 /**
  * Mirror an inline review comment into the PR channel (U6, R4). Handles the
@@ -39,7 +40,17 @@ export async function handleReviewComment(
 
   // The PR author's inline replies ARE mirrored — replying to review feedback is
   // the core channel conversation.
-  const row = await ensurePullRequestChannel(deps, ev.pr);
+  await session(deps, { snapshot: ev.pr, cause: { kind: "child" } }, (s) =>
+    mirrorReviewComment(deps, s, ev),
+  );
+}
+
+async function mirrorReviewComment(
+  deps: PrHandlerDeps,
+  s: PrSession,
+  ev: ReviewCommentEvent,
+): Promise<void> {
+  const row = await s.ready();
   const channelId = row.channelId;
 
   const c = ev.comment;

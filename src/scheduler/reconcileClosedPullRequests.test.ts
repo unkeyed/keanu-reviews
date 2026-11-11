@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Logger } from "#lib";
-import { findByRepoNumber, prId } from "#pr";
+import { type PrDeps, findByRepoNumber } from "#pr";
 import { scheduleReminder } from "#reminders";
 import type { Db } from "../db/client.ts";
 import { pullRequests, reminders } from "../db/schema.ts";
@@ -13,9 +13,10 @@ import {
   type PullRequestSnapshotFetcher,
   createPullRequestSnapshotFetcher,
 } from "../github/pullRequestSnapshot.ts";
-import { type PrHandlerDeps, handlePullRequest } from "../handlers/pullRequest.ts";
+import { prId } from "../pr/store.ts";
 import { type PullRequestPayload, pullRequestEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
+import { convergePullRequest } from "../testing/pr.ts";
 import { createClosedPullRequestReconciliation } from "./reconcileClosedPullRequests.ts";
 
 let db: Db;
@@ -47,7 +48,7 @@ function logger(): Logger {
   return captured;
 }
 
-function handler(over: Partial<PrHandlerDeps> = {}): PrHandlerDeps {
+function handler(over: Partial<PrDeps> = {}): PrDeps {
   return { db, slack, logger: logger(), ...over };
 }
 
@@ -93,7 +94,7 @@ function snapshot(
 }
 
 async function openPr(number: number, githubId: number, deps = handler()): Promise<void> {
-  await handlePullRequest(deps, pullRequestEvent(opened(number, githubId)));
+  await convergePullRequest(deps, pullRequestEvent(opened(number, githubId)));
 }
 
 function finished() {
@@ -241,7 +242,7 @@ describe("closed pull request reconciliation", () => {
   it("re-archives a terminal channel that drifted open after a late write", async () => {
     const deps = handler();
     await openPr(1, 101, deps);
-    await handlePullRequest(deps, pullRequestEvent(merge(1, 101)));
+    await convergePullRequest(deps, pullRequestEvent(merge(1, 101)));
     expect(slack.channel("C1")?.archived).toBe(true);
     // A late CI/comment/review write would unarchive the channel to deliver.
     await slack.unarchive("C1");
@@ -267,7 +268,7 @@ describe("closed pull request reconciliation", () => {
   it("leaves an already-archived terminal channel alone", async () => {
     const deps = handler();
     await openPr(1, 101, deps);
-    await handlePullRequest(deps, pullRequestEvent(merge(1, 101))); // archives C1 and leaves it archived
+    await convergePullRequest(deps, pullRequestEvent(merge(1, 101))); // archives C1 and leaves it archived
 
     const run = createClosedPullRequestReconciliation({
       handler: deps,
@@ -310,7 +311,7 @@ describe("closed pull request reconciliation", () => {
   it("does nothing when the channel is already archived", async () => {
     const deps = handler();
     await openPr(4, 104, deps);
-    await handlePullRequest(
+    await convergePullRequest(
       deps,
       pullRequestEvent({
         ...opened(4, 104),

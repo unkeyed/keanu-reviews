@@ -1,7 +1,7 @@
 import { findByGithubLogin } from "#identity";
 import { errMessage } from "#lib";
 import { inviteToChannel } from "#pr";
-import type { PrHandlerDeps } from "./pullRequest.ts";
+import type { PrHandlerDeps } from "./deps.ts";
 
 // GitHub logins are 1–39 chars: alphanumerics with single internal hyphens, no
 // leading/trailing hyphen. The lookbehind skips email locals (`foo@bar`); the

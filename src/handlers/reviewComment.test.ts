@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { upsertIdentity } from "#identity";
 import { createLogger } from "#lib";
-import { applyPullRequestSource, setChannel } from "#pr";
 import type { Db } from "../db/client.ts";
 import { createTestDb } from "../db/testDb.ts";
+import { applyPullRequestSource, setChannel } from "../pr/store.ts";
 import { type ReviewCommentPayload, reviewCommentEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { handleReviewComment } from "./reviewComment.ts";

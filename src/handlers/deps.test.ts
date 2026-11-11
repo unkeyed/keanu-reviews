@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSlackUserTokenRow, upsertIdentity, upsertSlackUserToken } from "#identity";
 import { createLogger } from "#lib";
-import { applyPullRequestSource, setChannel } from "#pr";
 import { loadConfig } from "../config/env.ts";
 import type { Db } from "../db/client.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createTokenCipher } from "../lib/tokenCipher.ts";
+import { applyPullRequestSource, setChannel } from "../pr/store.ts";
 import { SLACK_POST_USER_SCOPE } from "../slack/oauth.ts";
 import { reviewCommentEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";

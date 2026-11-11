@@ -1,15 +1,7 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { findByGithubId, upsertIdentity } from "#identity";
-import {
-  applyPullRequestSource,
-  claimPullRequestLifecycle,
-  findAllByRepoHeadSha,
-  findAllByRepoNumbers,
-  findByRepoNumber,
-  prId,
-  releasePullRequestLifecycle,
-} from "#pr";
+import { findAllByRepoHeadSha, findAllByRepoNumbers, findByRepoNumber } from "#pr";
 import {
   claimNextJob,
   completeJob,
@@ -24,6 +16,12 @@ import {
   listDue,
   scheduleReminder,
 } from "#reminders";
+import {
+  applyPullRequestSource,
+  claimPullRequestLifecycle,
+  prId,
+  releasePullRequestLifecycle,
+} from "../pr/store.ts";
 import { enqueueTestJob } from "../testing/queue.ts";
 import type { Db } from "./client.ts";
 import { jobs, messages, processedDeliveries, reminders } from "./schema.ts";

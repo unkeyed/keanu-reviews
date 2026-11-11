@@ -3,6 +3,7 @@ import type { Config } from "#config";
 import type { Db } from "#db";
 import {
   type CiReadinessFetcher,
+  type ImageEmbedder,
   type InstallationAuth,
   type PrForShaFetcher,
   type PullRequestFetcher,
@@ -17,6 +18,7 @@ import {
 } from "#github";
 import { createSlackOAuthRoute, deleteSlackUserToken, getSlackUserTokenRow } from "#identity";
 import { type Logger, createTokenCipher, errMessage } from "#lib";
+import type { PrDeps } from "#pr";
 import {
   SLACK_POST_USER_SCOPE,
   type SlackGateway,
@@ -24,7 +26,37 @@ import {
   hasScope,
   quietlyRemoveMembers,
 } from "#slack";
-import type { PrHandlerDeps } from "./pullRequest.ts";
+
+export interface PrHandlerDeps extends PrDeps {
+  /**
+   * Aggregate CI for the PR head. Review-needed alerts wait until this is
+   * passing. Omit to keep the previous behavior (drafts still wait; CI is not
+   * consulted).
+   */
+  fetchCiReadiness?: CiReadinessFetcher;
+  /** Optional PR read: mergeability for reminders, and requested reviewers for alerts. */
+  fetchPullRequest?: PullRequestFetcher;
+  embedImages?: ImageEmbedder;
+  /** Bot logins (normalized) whose comments/reviews should be mirrored anyway. */
+  allowedBots?: ReadonlySet<string>;
+  /**
+   * When true (default), a reply within a GitHub review thread is posted as a
+   * Slack threaded reply under the original comment's message. When false, every
+   * comment posts top-level (flat). Thread-starting comments and PR conversation
+   * comments are always top-level regardless.
+   */
+  threadComments?: boolean;
+  /**
+   * Optional post-as-user capability. When wired (Slack user-OAuth configured),
+   * mirrored comments/reviews are authored with the linked user's own token
+   * instead of the bot. `getUserToken` returns a decrypted token ONLY when the
+   * user granted `chat:write`; `onInvalidToken` drops a token Slack reports dead.
+   */
+  authorPoster?: {
+    getUserToken: (slackUserId: string) => Promise<string | undefined>;
+    onInvalidToken: (slackUserId: string) => Promise<void>;
+  };
+}
 
 export interface ServiceHandlers {
   /** Dependencies shared by the webhook worker and closed-PR reconciliation. */

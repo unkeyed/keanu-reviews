@@ -1,7 +1,7 @@
 import type { IssueCommentEvent, ReviewEvent } from "#events";
 import { shouldSkipActor } from "#github";
 import { type PrId, Retry } from "#lib";
-import { findByRepoNumber } from "#pr";
+import { type PrSession, findByRepoNumber, session } from "#pr";
 import { type Message, cleanGithubMarkdown, createLedger, keys } from "#slack";
 import {
   commentImages,
@@ -10,8 +10,8 @@ import {
   resolveMessageAuthor,
   updateAuthoredMessage,
 } from "./authorship.ts";
+import type { PrHandlerDeps } from "./deps.ts";
 import { inviteMentionedUsers } from "./mentions.ts";
-import { type PrHandlerDeps, ensurePullRequestChannel } from "./pullRequest.ts";
 import { sourceDate } from "./reviewRequest.ts";
 
 export interface ReviewDeps extends PrHandlerDeps {
@@ -31,7 +31,18 @@ export async function handleReview(
   sourceVersion = String(ev.review.id),
 ): Promise<void> {
   if (shouldSkipActor(ev.review.author, deps.allowedBots)) return; // skip non-allowed bots
-  const row = await ensurePullRequestChannel(deps, ev.pr);
+  await session(deps, { snapshot: ev.pr, cause: { kind: "child" } }, (s) =>
+    mirrorReview(deps, s, ev, sourceVersion),
+  );
+}
+
+async function mirrorReview(
+  deps: ReviewDeps,
+  s: PrSession,
+  ev: ReviewEvent,
+  sourceVersion: string,
+): Promise<void> {
+  const row = await s.ready();
   const channelId = row.channelId;
 
   const r = ev.review;

@@ -2,10 +2,10 @@ import { type GithubActor, type PullRequestEvent, isTerminal } from "#events";
 import type { GithubEmailFetcher } from "#github";
 import { displayName, resolveSlackUser } from "#identity";
 import { type PrId, Retry } from "#lib";
-import { type PrRow, inviteToChannel } from "#pr";
+import { type PrRow, type PrSession, inviteToChannel } from "#pr";
 import { findReminderForReviewer } from "#reminders";
 import { channelSink, createLedger, keys } from "#slack";
-import { type PrHandlerDeps, ensurePullRequestChannel } from "./pullRequest.ts";
+import type { PrHandlerDeps } from "./deps.ts";
 
 export interface ReviewRequestDeps extends PrHandlerDeps {
   fetchGithubEmail?: GithubEmailFetcher;
@@ -64,12 +64,13 @@ interface AlertSource {
  */
 export async function handleReviewRequest(
   deps: ReviewRequestDeps,
+  s: PrSession,
   ev: PullRequestEvent,
   sourceVersion = ev.pr.updatedAt,
   gate: ReviewAlertGate = {},
 ): Promise<void> {
   const { logger } = deps;
-  const row = await ensurePullRequestChannel(deps, ev.pr);
+  const row = await s.ready();
 
   if (ev.requestedTeam && !ev.requestedReviewer) {
     logger.info("team review requested; no per-user invite", { team: ev.requestedTeam });
@@ -132,13 +133,14 @@ export async function handleReviewRequest(
  */
 export async function handleReadyForReview(
   deps: ReviewRequestDeps,
+  s: PrSession,
   ev: PullRequestEvent,
   sourceVersion = ev.pr.updatedAt,
   gate: ReviewAlertGate = {},
 ): Promise<void> {
   const reviewers = ev.pr.requestedReviewers;
   if (reviewers.length === 0) return;
-  const row = await ensurePullRequestChannel(deps, ev.pr);
+  const row = await s.ready();
   if (isTerminal(row.currentState) || row.currentState === "draft") return;
 
   const source = alertSource(ev.pr.updatedAt, sourceVersion);
@@ -160,6 +162,7 @@ export async function handleReadyForReview(
  */
 export async function handleSynchronizedReviewAlerts(
   deps: ReviewRequestDeps,
+  s: PrSession,
   ev: PullRequestEvent,
   sourceVersion = ev.pr.updatedAt,
   gate: ReviewAlertGate = {},
@@ -167,7 +170,7 @@ export async function handleSynchronizedReviewAlerts(
   if (ev.pr.draft) return;
   const reviewers = ev.pr.requestedReviewers;
   if (reviewers.length === 0) return;
-  const row = await ensurePullRequestChannel(deps, ev.pr);
+  const row = await s.ready();
   if (isTerminal(row.currentState) || row.currentState === "draft") return;
 
   const source = alertSource(ev.pr.updatedAt, sourceVersion);

@@ -1,8 +1,8 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { reconcileArrivalKey } from "#events";
 import { upsertIdentity } from "#identity";
 import { type ArrivalKey, Retry, createLogger } from "#lib";
-import { findByRepoNumber, prId } from "#pr";
 import { scheduleReminder } from "#reminders";
 import { SlackApiError } from "#slack";
 import type { Db } from "../db/client.ts";
@@ -10,7 +10,15 @@ import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { type PullRequestPayload, pullRequestEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
-import { PullRequestLifecycleBusyError, handlePullRequest } from "./pullRequest.ts";
+import { convergePullRequest } from "../testing/pr.ts";
+import { PullRequestLifecycleBusyError, session } from "./session.ts";
+import {
+  claimPullRequestLifecycle,
+  findByRepoNumber,
+  prId,
+  pullRequestLifecycleClaimedAt,
+  releasePullRequestLifecycle,
+} from "./store.ts";
 
 let db: Db;
 let slack: FakeSlackGateway;
@@ -49,7 +57,7 @@ const payload = (
 const deps = () => ({ db, slack, logger: createLogger("error") });
 const arrival = (key: string) => key as ArrivalKey;
 
-describe("handlePullRequest (U4 channel lifecycle)", () => {
+describe("PR session channel convergence (U4 channel lifecycle)", () => {
   it("invites the linked PR author into the channel on open", async () => {
     await upsertIdentity(db, {
       githubUserId: 100,
@@ -57,10 +65,10 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       slackUserId: "U100",
       source: "self-link",
     });
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
     expect(slack.invites).toEqual([{ channelId: "C1", userIds: ["U100"] }]);
     // Idempotent: a second event does not re-invite the author.
-    await handlePullRequest(deps(), pullRequestEvent(payload("synchronize")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("synchronize")));
     expect(slack.invites).toHaveLength(1);
   });
 
@@ -72,7 +80,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       source: "self-link",
     });
     slack.profiles.set("U100", { name: "Oz Perkins" });
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
     const blocks = JSON.stringify(slack.messages);
     expect(blocks).toContain("👤 Opened by Oz Perkins");
     expect(blocks).not.toContain("<@U100>"); // never tag the author
@@ -89,8 +97,8 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     const warn = vi.fn();
     const d = { ...deps(), logger: { ...createLogger("error"), warn } };
 
-    await handlePullRequest(d, pullRequestEvent(payload("opened")));
-    await handlePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
+    await convergePullRequest(d, pullRequestEvent(payload("opened")));
+    await convergePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
 
     expect(slack.invites).toHaveLength(0);
     expect(JSON.stringify(slack.messages)).toContain("Opened by");
@@ -104,14 +112,14 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   });
 
   it("does not invite an unlinked author (degrades quietly)", async () => {
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
     expect(slack.invites).toHaveLength(0);
   });
 
   it("announces a merge in the shipped channel (merged only)", async () => {
     const d = { ...deps(), shippedChannel: "C0SHIPPED" };
-    await handlePullRequest(d, pullRequestEvent(payload("opened")));
-    await handlePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
+    await convergePullRequest(d, pullRequestEvent(payload("opened")));
+    await convergePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
     const shipped = slack.messages.find((m) => m.channel === "C0SHIPPED");
     expect(JSON.stringify(shipped?.blocks)).toContain("has shipped");
   });
@@ -125,8 +133,8 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     });
     slack.profiles.set("U100", { name: "Oz Perkins" });
     const d = { ...deps(), shippedChannel: "C0SHIPPED" };
-    await handlePullRequest(d, pullRequestEvent(payload("opened")));
-    await handlePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
+    await convergePullRequest(d, pullRequestEvent(payload("opened")));
+    await convergePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
     const shipped = slack.messages.find((m) => m.channel === "C0SHIPPED");
     const blocks = JSON.stringify(shipped?.blocks);
     expect(blocks).toContain("Oz Perkins");
@@ -135,7 +143,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
 
   it("archives and cancels reminders on merge even if the #shipped post fails", async () => {
     const d = { ...deps(), shippedChannel: "C0SHIPPED" };
-    await handlePullRequest(d, pullRequestEvent(payload("opened"))); // creates the PR row + channel C1
+    await convergePullRequest(d, pullRequestEvent(payload("opened"))); // creates the PR row + channel C1
     await scheduleReminder(db, {
       prId: prId("unkey/api", 1423),
       reviewerGithubId: 7,
@@ -147,7 +155,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       return realPost(channel, m, opts);
     };
 
-    await handlePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
+    await convergePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
 
     expect(slack.channel("C1")?.archived).toBe(true); // archived despite shipped failure
     const [rem] = await db
@@ -159,8 +167,8 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
 
   it("does not announce a plain close (not merged)", async () => {
     const d = { ...deps(), shippedChannel: "C0SHIPPED" };
-    await handlePullRequest(d, pullRequestEvent(payload("opened")));
-    await handlePullRequest(d, pullRequestEvent(payload("closed", { merged: false })));
+    await convergePullRequest(d, pullRequestEvent(payload("opened")));
+    await convergePullRequest(d, pullRequestEvent(payload("closed", { merged: false })));
     expect(slack.messages.some((m) => m.channel === "C0SHIPPED")).toBe(false);
   });
 
@@ -174,8 +182,8 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       postPrComment,
       slackTeamId: "T1",
     };
-    await handlePullRequest(d, pullRequestEvent(payload("opened")));
-    await handlePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
+    await convergePullRequest(d, pullRequestEvent(payload("opened")));
+    await convergePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
     expect(postPrComment).toHaveBeenCalledTimes(1);
     const call = postPrComment.mock.calls[0];
     expect(call?.[0]).toBe("unkey/api");
@@ -192,15 +200,15 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       postPrComment,
       slackTeamId: "T1",
     };
-    await handlePullRequest(d, pullRequestEvent(payload("opened")));
-    await handlePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
+    await convergePullRequest(d, pullRequestEvent(payload("opened")));
+    await convergePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
 
     expect(slack.messages.some((message) => message.channel === "C0SHIPPED")).toBe(true);
     expect(postPrComment).toHaveBeenCalledTimes(1);
     expect(slack.channel("C1")?.archived).toBe(true);
   });
 
-  it("skips the #shipped note and the merge comment when announceMerge is false", async () => {
+  it("skips the #shipped note and the merge comment on a reconcile catch-up", async () => {
     const postPrComment = vi.fn(async () => {});
     const d = {
       ...deps(),
@@ -209,19 +217,23 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       postPrComment,
       slackTeamId: "T1",
     };
-    await handlePullRequest(d, pullRequestEvent(payload("opened")));
+    await convergePullRequest(d, pullRequestEvent(payload("opened")));
     await scheduleReminder(db, {
       prId: prId("unkey/api", 1423),
       reviewerGithubId: 7,
       dueAt: new Date("2026-08-13T00:00:00Z"),
     });
 
+    const merged = pullRequestEvent(payload("closed", { merged: true }));
+    const cause = {
+      kind: "reconcile",
+      merged: true,
+      arrivalKey: reconcileArrivalKey(new Date()),
+    } as const;
     await expect(
-      handlePullRequest(d, pullRequestEvent(payload("closed", { merged: true })), {
-        announceMerge: false,
-      }),
+      session(d, { snapshot: merged.pr, cause }, async (s) => s.converged),
     ).resolves.toMatchObject({
-      sourceAccepted: true,
+      accepted: true,
       skippedShipped: true,
       skippedMergeComment: true,
     });
@@ -244,13 +256,13 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   it("does not comment on the PR when the opt-in is off", async () => {
     const postPrComment = vi.fn(async () => {});
     const d = { ...deps(), commentOnMerge: false, postPrComment, slackTeamId: "T1" };
-    await handlePullRequest(d, pullRequestEvent(payload("opened")));
-    await handlePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
+    await convergePullRequest(d, pullRequestEvent(payload("opened")));
+    await convergePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
     expect(postPrComment).not.toHaveBeenCalled();
   });
 
   it("opens with a description: linked PR number and the branch flow", async () => {
-    await handlePullRequest(
+    await convergePullRequest(
       deps(),
       pullRequestEvent(
         payload("opened", { base: { ref: "main" }, head: { sha: "sha1", ref: "feat/auth" } }),
@@ -262,7 +274,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   });
 
   it("sets the channel topic to a linked PR description", async () => {
-    await handlePullRequest(
+    await convergePullRequest(
       deps(),
       pullRequestEvent(
         payload("opened", { base: { ref: "main" }, head: { sha: "sha1", ref: "fix/gates" } }),
@@ -274,7 +286,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   });
 
   it("opened draft creates a draft-* channel, stores mapping + root ts", async () => {
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })));
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })));
     expect(slack.channels).toHaveLength(1);
     expect(slack.channels[0]?.name).toBe("draft-oz-unkey-api-1423-add-auth");
     const row = await findByRepoNumber(db, "unkey/api", 1423);
@@ -284,10 +296,10 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   });
 
   it("heals a stuck draft channel when ready_for_review was missed (state follows facts)", async () => {
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })));
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })));
     expect(slack.channel("C1")?.name).toBe("draft-oz-unkey-api-1423-add-auth");
     // ready_for_review never applied; a later synchronize carries draft: false.
-    await handlePullRequest(
+    await convergePullRequest(
       deps(),
       pullRequestEvent(
         payload("synchronize", { draft: false, updated_at: "2026-08-11T12:01:00Z" }),
@@ -297,8 +309,8 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   });
 
   it("keeps a draft channel draft on a synchronize that is still a draft", async () => {
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })));
-    await handlePullRequest(
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })));
+    await convergePullRequest(
       deps(),
       pullRequestEvent(payload("synchronize", { draft: true, updated_at: "2026-08-11T12:01:00Z" })),
     );
@@ -306,11 +318,11 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   });
 
   it("does not revive a merged PR from a stray synchronize", async () => {
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
-    await handlePullRequest(deps(), pullRequestEvent(payload("closed", { merged: true })));
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("closed", { merged: true })));
     expect(slack.channel("C1")?.name).toBe("merged-oz-unkey-api-1423-add-auth");
     // A late, non-lifecycle event must not flip it back to an open state.
-    await handlePullRequest(
+    await convergePullRequest(
       deps(),
       pullRequestEvent(
         payload("synchronize", { draft: false, updated_at: "2026-08-11T13:00:00Z" }),
@@ -321,13 +333,13 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   });
 
   it("ready_for_review renames draft -> pr; converted_to_draft renames back", async () => {
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })));
-    await handlePullRequest(
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })));
+    await convergePullRequest(
       deps(),
       pullRequestEvent(payload("ready_for_review", { draft: false })),
     );
     expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
-    await handlePullRequest(
+    await convergePullRequest(
       deps(),
       pullRequestEvent(payload("converted_to_draft", { draft: true })),
     );
@@ -335,31 +347,31 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   });
 
   it("closed+merged renames to merged then archives (rename precedes archive)", async () => {
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
-    await handlePullRequest(deps(), pullRequestEvent(payload("closed", { merged: true })));
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("closed", { merged: true })));
     const ch = slack.channel("C1");
     expect(ch?.name).toBe("merged-oz-unkey-api-1423-add-auth");
     expect(ch?.archived).toBe(true);
   });
 
   it("closed without merge renames to closed then archives", async () => {
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
-    await handlePullRequest(deps(), pullRequestEvent(payload("closed", { merged: false })));
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("closed", { merged: false })));
     expect(slack.channel("C1")?.name).toBe("closed-oz-unkey-api-1423-add-auth");
     expect(slack.channel("C1")?.archived).toBe(true);
   });
 
   it("reopened unarchives and renames to pr", async () => {
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
-    await handlePullRequest(deps(), pullRequestEvent(payload("closed", { merged: false })));
-    await handlePullRequest(deps(), pullRequestEvent(payload("reopened")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("closed", { merged: false })));
+    await convergePullRequest(deps(), pullRequestEvent(payload("reopened")));
     expect(slack.channel("C1")?.archived).toBe(false);
     expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
   });
 
   it("does not write to an archived channel on a later event for a merged PR (no is_archived)", async () => {
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
-    await handlePullRequest(deps(), pullRequestEvent(payload("closed", { merged: true })));
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("closed", { merged: true })));
     expect(slack.channel("C1")?.archived).toBe(true);
 
     // The author links their Slack account only AFTER the merge. A subsequent
@@ -374,12 +386,12 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     const before = slack.messages.length;
 
     await expect(
-      handlePullRequest(
+      convergePullRequest(
         deps(),
         pullRequestEvent(payload("edited", { updated_at: "2026-08-11T13:00:00Z" })),
       ),
     ).resolves.toMatchObject({
-      sourceAccepted: true,
+      accepted: true,
       skippedShipped: false,
       skippedMergeComment: false,
     });
@@ -388,8 +400,8 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   });
 
   it("unarchives before writing when a merged PR is reopened after the author links late", async () => {
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
-    await handlePullRequest(deps(), pullRequestEvent(payload("closed", { merged: true })));
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("closed", { merged: true })));
     // Author links after the archive; reopen must unarchive before the invite.
     await upsertIdentity(db, {
       githubUserId: 100,
@@ -399,12 +411,12 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     });
 
     await expect(
-      handlePullRequest(
+      convergePullRequest(
         deps(),
         pullRequestEvent(payload("reopened", { updated_at: "2026-08-11T13:00:00Z" })),
       ),
     ).resolves.toMatchObject({
-      sourceAccepted: true,
+      accepted: true,
       skippedShipped: false,
       skippedMergeComment: false,
     });
@@ -416,8 +428,8 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   });
 
   it("re-delivered opened event does not create a second channel", async () => {
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
     expect(slack.channels).toHaveLength(1);
     expect(await findByRepoNumber(db, "unkey/api", 1423).then((r) => r?.id)).toBe(
       prId("unkey/api", 1423),
@@ -431,7 +443,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       throw new SlackApiError("conversations.create", "no_response");
     };
 
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
 
     expect(slack.channels).toHaveLength(1);
     expect((await findByRepoNumber(db, "unkey/api", 1423))?.channelId).toBe("C1");
@@ -440,7 +452,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   it("recovers name_taken by looking up only the exact deterministic channel name", async () => {
     await slack.createChannel("pr-oz-unkey-api-1423-add-auth");
 
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
 
     expect(slack.channels).toHaveLength(1);
     expect((await findByRepoNumber(db, "unkey/api", 1423))?.channelId).toBe("C1");
@@ -456,7 +468,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     };
     const findChannelByName = vi.spyOn(slack, "findChannelByName");
 
-    await expect(handlePullRequest(deps(), pullRequestEvent(payload("opened")))).rejects.toBe(
+    await expect(convergePullRequest(deps(), pullRequestEvent(payload("opened")))).rejects.toBe(
       failure,
     );
 
@@ -470,7 +482,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       title: "ship <!channel>",
       user: { login: "<!everyone>", id: 101 },
     });
-    await handlePullRequest(deps(), pullRequestEvent(event));
+    await convergePullRequest(deps(), pullRequestEvent(event));
     expect(JSON.stringify(slack.messages.at(-1))).not.toContain("<!channel>");
     expect(JSON.stringify(slack.messages.at(-1))).not.toContain("<!everyone>");
   });
@@ -486,10 +498,10 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       return post(channel, message, opts);
     };
 
-    await expect(handlePullRequest(deps(), pullRequestEvent(payload("opened")))).rejects.toThrow(
+    await expect(convergePullRequest(deps(), pullRequestEvent(payload("opened")))).rejects.toThrow(
       "transient Slack failure",
     );
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
 
     expect(slack.channels).toHaveLength(1);
     expect(slack.messages).toHaveLength(1);
@@ -497,7 +509,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   });
 
   it("retries Slack reconciliation after a rename failure without regressing source state", async () => {
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })));
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })));
     const rename = slack.rename.bind(slack);
     let fail = true;
     slack.rename = async (channelId, name) => {
@@ -512,19 +524,19 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       draft: false,
       updated_at: "2026-08-11T12:01:00Z",
     });
-    await expect(handlePullRequest(deps(), pullRequestEvent(ready))).rejects.toThrow(
+    await expect(convergePullRequest(deps(), pullRequestEvent(ready))).rejects.toThrow(
       "rename failed",
     );
     const pending = await findByRepoNumber(db, "unkey/api", 1423);
     expect(pending?.currentState).toBe("pr");
     expect(pending?.appliedState).toBe("draft");
-    await handlePullRequest(deps(), pullRequestEvent(ready));
+    await convergePullRequest(deps(), pullRequestEvent(ready));
 
     expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
   });
 
   it("retries archive after rename succeeded but archive failed", async () => {
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
     const archive = slack.archive.bind(slack);
     let fail = true;
     slack.archive = async (channelId) => {
@@ -538,20 +550,20 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     const closed = payload("closed", {
       updated_at: "2026-08-11T12:01:00Z",
     });
-    await expect(handlePullRequest(deps(), pullRequestEvent(closed))).rejects.toThrow(
+    await expect(convergePullRequest(deps(), pullRequestEvent(closed))).rejects.toThrow(
       "archive failed",
     );
     const pending = await findByRepoNumber(db, "unkey/api", 1423);
     expect(pending?.currentState).toBe("closed");
     expect(pending?.appliedState).toBe("pr");
-    await handlePullRequest(deps(), pullRequestEvent(closed));
+    await convergePullRequest(deps(), pullRequestEvent(closed));
 
     expect(slack.channel("C1")?.name).toBe("closed-oz-unkey-api-1423-add-auth");
     expect(slack.channel("C1")?.archived).toBe(true);
   });
 
   it("posts a terminal lifecycle note after rename and before archive", async () => {
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
     const operations: string[] = [];
     const rename = slack.rename.bind(slack);
     const post = slack.post.bind(slack);
@@ -569,7 +581,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       await archive(channelId);
     };
 
-    await handlePullRequest(
+    await convergePullRequest(
       deps(),
       pullRequestEvent(payload("closed", { updated_at: "2026-08-11T12:01:00Z" })),
     );
@@ -579,7 +591,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   });
 
   it("runs the quiet-archive member cleanup immediately before archiving", async () => {
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
     const operations: string[] = [];
     const archive = slack.archive.bind(slack);
     slack.archive = async (channelId) => {
@@ -590,7 +602,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       operations.push(`quiet:${channelId}`);
     };
 
-    await handlePullRequest(
+    await convergePullRequest(
       { ...deps(), quietArchive },
       pullRequestEvent(payload("closed", { merged: true, updated_at: "2026-08-11T12:01:00Z" })),
     );
@@ -600,7 +612,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   });
 
   it("retries a terminal lifecycle note before archiving the channel", async () => {
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
     const post = slack.post.bind(slack);
     let fail = true;
     slack.post = async (channel, message, opts) => {
@@ -612,11 +624,11 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     };
     const closed = payload("closed", { updated_at: "2026-08-11T12:01:00Z" });
 
-    await expect(handlePullRequest(deps(), pullRequestEvent(closed))).rejects.toThrow(
+    await expect(convergePullRequest(deps(), pullRequestEvent(closed))).rejects.toThrow(
       "note failed",
     );
     expect(slack.channel("C1")?.archived).toBe(false);
-    await handlePullRequest(deps(), pullRequestEvent(closed));
+    await convergePullRequest(deps(), pullRequestEvent(closed));
 
     expect(slack.channel("C1")?.archived).toBe(true);
     expect(slack.messages.filter((message) => message.text.includes("closed"))).toHaveLength(1);
@@ -648,11 +660,11 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       merged: true,
       updated_at: "2026-08-11T12:01:00Z",
     });
-    await expect(handlePullRequest(deps(), pullRequestEvent(closed))).rejects.toThrow(
+    await expect(convergePullRequest(deps(), pullRequestEvent(closed))).rejects.toThrow(
       "root failed",
     );
     expect((await findByRepoNumber(db, "unkey/api", 1423))?.appliedState).toBeNull();
-    await handlePullRequest(deps(), pullRequestEvent(closed));
+    await convergePullRequest(deps(), pullRequestEvent(closed));
 
     expect(slack.channels).toHaveLength(1);
     expect(slack.channel("C1")?.name).toBe("merged-oz-unkey-api-1423-add-auth");
@@ -661,7 +673,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   });
 
   it("ignores an older lifecycle event after a newer terminal state", async () => {
-    await handlePullRequest(
+    await convergePullRequest(
       deps(),
       pullRequestEvent(
         payload("closed", {
@@ -670,7 +682,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
         }),
       ),
     );
-    await handlePullRequest(
+    await convergePullRequest(
       deps(),
       pullRequestEvent(
         payload("opened", {
@@ -690,22 +702,16 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
   it("uses the durable job arrival key to order equal GitHub updated_at snapshots", async () => {
     const opened = payload("opened", { draft: true });
     const ready = payload("ready_for_review", { draft: false });
-    await handlePullRequest(deps(), pullRequestEvent(opened), {
-      sourceArrivalKey: arrival("2026-08-11T12:00:01Z:a"),
-    });
-    await handlePullRequest(deps(), pullRequestEvent(ready), {
-      sourceArrivalKey: arrival("2026-08-11T12:00:02Z:b"),
-    });
-    await handlePullRequest(deps(), pullRequestEvent(opened), {
-      sourceArrivalKey: arrival("2026-08-11T12:00:01Z:a"),
-    });
+    await convergePullRequest(deps(), pullRequestEvent(opened), arrival("2026-08-11T12:00:01Z:a"));
+    await convergePullRequest(deps(), pullRequestEvent(ready), arrival("2026-08-11T12:00:02Z:b"));
+    await convergePullRequest(deps(), pullRequestEvent(opened), arrival("2026-08-11T12:00:01Z:a"));
 
     const row = await findByRepoNumber(db, "unkey/api", 1423);
     expect(row?.currentState).toBe("pr");
     expect(row?.sourceArrivalKey).toBe("2026-08-11T12:00:02Z:b");
   });
 
-  it("serializes older and newer lifecycle workers through the database lease", async () => {
+  it("queues a second worker on the same PR in this process behind the first", async () => {
     const create = slack.createChannel.bind(slack);
     let releaseCreate: (() => void) | undefined;
     let signalCreateStarted: (() => void) | undefined;
@@ -721,37 +727,58 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
       return create(name);
     };
 
-    const older = handlePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })), {
-      sourceArrivalKey: arrival("2026-08-11T12:00:01Z:old"),
-    });
+    const older = convergePullRequest(
+      deps(),
+      pullRequestEvent(payload("opened", { draft: true })),
+      arrival("2026-08-11T12:00:01Z:old"),
+    );
     await createStarted;
-    await expect(
-      handlePullRequest(
-        deps(),
-        pullRequestEvent(
-          payload("ready_for_review", {
-            updated_at: "2026-08-11T12:01:00Z",
-          }),
-        ),
-        { sourceArrivalKey: arrival("2026-08-11T12:01:01Z:new") },
-      ),
-    ).rejects.toBeInstanceOf(PullRequestLifecycleBusyError);
-    releaseCreate?.();
-    await older;
-
-    await handlePullRequest(
+    let newerSettled = false;
+    const newer = convergePullRequest(
       deps(),
       pullRequestEvent(payload("ready_for_review", { updated_at: "2026-08-11T12:01:00Z" })),
-      { sourceArrivalKey: arrival("2026-08-11T12:01:01Z:new") },
+      arrival("2026-08-11T12:01:01Z:new"),
+    ).finally(() => {
+      newerSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(newerSettled).toBe(false);
+    releaseCreate?.();
+    await older;
+    await expect(newer).resolves.toMatchObject({ accepted: true });
+
+    expect(slack.channels).toHaveLength(1);
+    expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
+    expect((await findByRepoNumber(db, "unkey/api", 1423))?.currentState).toBe("pr");
+  });
+
+  it("makes a worker retry while another replica holds the PR's database lease", async () => {
+    await convergePullRequest(
+      deps(),
+      pullRequestEvent(payload("opened", { draft: true })),
+      arrival("2026-08-11T12:00:01Z:old"),
     );
+    const otherReplica = await claimPullRequestLifecycle(db, 999);
+    if (!otherReplica) throw new Error("the lease should be free");
+    const ready = pullRequestEvent(
+      payload("ready_for_review", { updated_at: "2026-08-11T12:01:00Z" }),
+    );
+
+    await expect(
+      convergePullRequest(deps(), ready, arrival("2026-08-11T12:01:01Z:new")),
+    ).rejects.toBeInstanceOf(PullRequestLifecycleBusyError);
+    expect((await findByRepoNumber(db, "unkey/api", 1423))?.currentState).toBe("draft");
+    await releasePullRequestLifecycle(db, otherReplica);
+
+    await convergePullRequest(deps(), ready, arrival("2026-08-11T12:01:01Z:new"));
     expect((await findByRepoNumber(db, "unkey/api", 1423))?.currentState).toBe("pr");
   });
 
   it("reuses the PR row and channel after a repository rename", async () => {
-    await handlePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
     const original = await findByRepoNumber(db, "unkey/api", 1423);
 
-    await handlePullRequest(
+    await convergePullRequest(
       deps(),
       pullRequestEvent(payload("edited", { updated_at: "2026-08-11T12:01:00Z" }, "unkey/platform")),
     );
@@ -785,7 +812,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
 
     // A title edit forces a rename; a state change would too. Either way the new
     // name must stay in the v1 scheme — no author injected.
-    await handlePullRequest(
+    await convergePullRequest(
       deps(),
       pullRequestEvent(
         payload("edited", { title: "Add better auth", updated_at: "2026-08-11T12:00:00Z" }),
@@ -794,7 +821,7 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     expect(slack.channel("C-LEGACY")?.name).toBe("pr-unkey-api-1423-add-better-auth");
     expect(slack.channel("C-LEGACY")?.name).not.toContain("oz");
 
-    await handlePullRequest(
+    await convergePullRequest(
       deps(),
       pullRequestEvent(
         payload("closed", { title: "Add better auth", updated_at: "2026-08-11T13:00:00Z" }),
@@ -802,5 +829,98 @@ describe("handlePullRequest (U4 channel lifecycle)", () => {
     );
     expect(slack.channel("C-LEGACY")?.name).toBe("closed-unkey-api-1423-add-better-auth");
     expect((await findByRepoNumber(db, "unkey/api", 1423))?.channelNameVersion).toBe(1);
+  });
+});
+
+describe("PR session", () => {
+  const child = (over: Partial<PullRequestPayload["pull_request"]> = {}) => ({
+    snapshot: pullRequestEvent(payload("synchronize", over)).pr,
+    cause: { kind: "child" } as const,
+  });
+
+  it("builds a missing channel and root when a child event asks for a ready PR", async () => {
+    const ready = await session(deps(), child(), (s) => s.ready());
+
+    expect(ready).toMatchObject({ channelId: "C1", rootMessageTs: "ts-1", currentState: "pr" });
+    expect(ready.sourceArrivalKey).toBeNull();
+    expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
+  });
+
+  it("leaves a ready PR's stored facts alone for a child event", async () => {
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
+    const before = await findByRepoNumber(db, "unkey/api", 1423);
+
+    const ready = await session(
+      deps(),
+      child({ draft: true, updated_at: "2026-08-11T13:00:00Z" }),
+      async (s) => s.ready(),
+    );
+
+    expect(ready.currentState).toBe("pr");
+    expect(ready.sourceUpdatedAt).toEqual(before?.sourceUpdatedAt);
+    expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
+  });
+
+  it("retries a child event whose stale snapshot cannot build the missing channel", async () => {
+    slack.createChannel = async () => {
+      throw new SlackApiError("conversations.create", "invalid_name");
+    };
+    await expect(
+      convergePullRequest(
+        deps(),
+        pullRequestEvent(payload("opened", { updated_at: "2026-08-11T12:05:00Z" })),
+      ),
+    ).rejects.toThrow(SlackApiError);
+    const info = vi.fn();
+    const d = { ...deps(), logger: { ...createLogger("error"), info } };
+
+    await expect(session(d, child(), (s) => s.ready())).rejects.toThrow(
+      new Retry("PR channel is not ready for unkey/api#1423"),
+    );
+    expect(info).toHaveBeenCalledWith(
+      "stale PR lifecycle event ignored",
+      expect.objectContaining({ githubPrId: 999, incomingUpdatedAt: "2026-08-11T12:00:00Z" }),
+    );
+    expect(info).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a session opened inside another and releases the outer lease", async () => {
+    await expect(
+      session(deps(), child(), () => session(deps(), child(), async () => "nested")),
+    ).rejects.toThrow("PR session for 999 cannot open another");
+
+    await expect(session(deps(), child(), async () => "after")).resolves.toBe("after");
+  });
+
+  it("renews the lifecycle lease while the body runs", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    try {
+      const start = Date.now();
+      const renewed = await session(deps(), child(), async () => {
+        vi.advanceTimersByTime(100_000);
+        for (let i = 0; i < 100; i++) {
+          const claimedAt = await pullRequestLifecycleClaimedAt(db, 999);
+          if (claimedAt && claimedAt.getTime() > start) return claimedAt.getTime();
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        return start;
+      });
+      expect(renewed).toBe(start + 100_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("logs a lease another replica took over before release", async () => {
+    const error = vi.fn();
+    const d = { ...deps(), logger: { ...createLogger("error"), error } };
+
+    await session(d, child(), async () => {
+      await claimPullRequestLifecycle(db, 999, { now: new Date(Date.now() + 10 * 60_000) });
+    });
+
+    expect(error).toHaveBeenCalledWith("PR lifecycle lease was lost before release", {
+      githubPrId: 999,
+    });
   });
 });

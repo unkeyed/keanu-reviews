@@ -2,16 +2,16 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDispatcher } from "#app";
 import { Retry, createLogger } from "#lib";
-import { applyPullRequestSource, claimPullRequestLifecycle, prId } from "#pr";
 import { claimNextJob } from "#queue";
 import type { Db } from "../db/client.ts";
 import { jobs } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
-import { handlePullRequest } from "../handlers/pullRequest.ts";
+import { applyPullRequestSource, claimPullRequestLifecycle, prId } from "../pr/store.ts";
 import { keys } from "../slack/catalog.ts";
 import { channelSink, claim, createLedger } from "../slack/ledger.ts";
 import { type PullRequestPayload, pullRequestEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
+import { convergePullRequest } from "../testing/pr.ts";
 import { enqueueTestJob } from "../testing/queue.ts";
 import { createWorker, startWorkerLoop } from "./loop.ts";
 
@@ -251,7 +251,7 @@ describe("worker retry hints", () => {
       db,
       logger: createLogger("error"),
       dispatch: async () => {
-        await handlePullRequest(
+        await convergePullRequest(
           { db, slack, logger: createLogger("error") },
           pullRequestEvent(openedPayload),
         );
@@ -274,7 +274,7 @@ describe("worker retry hints", () => {
       db,
       logger: createLogger("error"),
       dispatch: async () => {
-        await handlePullRequest(
+        await convergePullRequest(
           { db, slack: new FakeSlackGateway(), logger: createLogger("error") },
           pullRequestEvent(openedPayload),
         );
@@ -294,7 +294,7 @@ describe("worker retry hints", () => {
       db,
       logger: createLogger("error"),
       dispatch: async () => {
-        await handlePullRequest(
+        await convergePullRequest(
           { db, slack: new FakeSlackGateway(), logger: createLogger("error") },
           pullRequestEvent(openedPayload),
         );
