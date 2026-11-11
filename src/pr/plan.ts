@@ -25,7 +25,7 @@ export type ConvergeCause =
   | { kind: "reconcile"; merged: boolean; arrivalKey: ArrivalKey };
 
 /** The action a cause stands for; lifecycle note keys embed it. */
-export function causeAction(cause: ConvergeCause): string {
+function causeAction(cause: ConvergeCause): string {
   switch (cause.kind) {
     case "pull_request":
       return cause.action;

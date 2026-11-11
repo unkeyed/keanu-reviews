@@ -156,7 +156,7 @@ export function parseIdentityImport(contents: string, format: ".csv" | ".json"):
   return enforceRowLimit(rows);
 }
 
-export async function loadIdentityImport(fileName: string): Promise<ImportRow[]> {
+async function loadIdentityImport(fileName: string): Promise<ImportRow[]> {
   const filePath = resolve(fileName);
   const extension = extname(filePath).toLowerCase();
   if (extension !== ".csv" && extension !== ".json") {

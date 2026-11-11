@@ -1,18 +1,15 @@
 export {
   type EffectKey,
   type EmbeddedImage,
-  type LedgerKind,
   type Message,
   type MessageImage,
   type PrView,
-  SLACK_SECTION_TEXT_LIMIT,
   type SlackBlock,
   channelTopic,
   cleanGithubMarkdown,
   extractEmbeddedImages,
   keys,
   render,
-  sanitizeMrkdwn,
 } from "./catalog.ts";
 export { SlackApiError } from "./errors.ts";
 export {
@@ -21,7 +18,6 @@ export {
   type Poster,
   type RefusedInvite,
   type RenderedMessage,
-  SLACK_METHODS,
   type SlackGateway,
   type SlackProfile,
   createSlackGateway,
@@ -31,8 +27,6 @@ export {
   type DeliverOptions,
   type Delivered,
   type EffectState,
-  type Sent,
-  type Ledger,
   type Outgoing,
   channelSink,
   createLedger,

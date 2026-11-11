@@ -1,9 +1,4 @@
-export {
-  type ImportResult,
-  type ImportRow,
-  type LinkDeps,
-  importIdentities,
-} from "./link.ts";
+export { type ImportRow, importIdentities } from "./link.ts";
 export { displayName, profileOrNone, resolveSlackUser } from "./resolve.ts";
 export {
   deleteSlackUserToken,

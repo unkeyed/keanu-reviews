@@ -20,7 +20,7 @@ export function sanitizeMrkdwn(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-export function sanitizeInlineCode(text: string): string {
+function sanitizeInlineCode(text: string): string {
   return sanitizeMrkdwn(text).replace(/`/g, "ˋ");
 }
 
@@ -120,7 +120,7 @@ export function extractEmbeddedImages(body: string, max = 5): EmbeddedImage[] {
 export const SLACK_SECTION_TEXT_LIMIT = 3_000;
 
 /** Apply the limit after every prefix, link, and quote marker is rendered. */
-export function clipSlackText(text: string, max = SLACK_SECTION_TEXT_LIMIT): string {
+function clipSlackText(text: string, max = SLACK_SECTION_TEXT_LIMIT): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 

@@ -13,7 +13,7 @@ export const SLACK_LEAVE_USER_SCOPE = "channels:write";
 /** User scope needed to post a mirrored comment/review as the user themselves. */
 export const SLACK_POST_USER_SCOPE = "chat:write";
 /** All user scopes `/link-slack` requests: quiet-archive leave + authoring posts. */
-export const SLACK_USER_SCOPES = `${SLACK_LEAVE_USER_SCOPE},${SLACK_POST_USER_SCOPE}`;
+const SLACK_USER_SCOPES = `${SLACK_LEAVE_USER_SCOPE},${SLACK_POST_USER_SCOPE}`;
 
 /** True when a Slack-granted scope string (space/comma separated) contains `required`. */
 export function hasScope(granted: string, required: string): boolean {

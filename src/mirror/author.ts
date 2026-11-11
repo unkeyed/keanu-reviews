@@ -65,7 +65,7 @@ export interface Presentation {
   label: string | undefined;
 }
 
-export async function authorFor(deps: MirrorDeps, actor: GithubActor): Promise<Author> {
+async function authorFor(deps: MirrorDeps, actor: GithubActor): Promise<Author> {
   const { login } = actor;
   const slackUserId = await resolveSlackUser(deps, { githubId: actor.id, login });
   if (!slackUserId) {

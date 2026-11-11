@@ -35,8 +35,6 @@ export type PullRequestFetcher = (
   number: number,
 ) => Promise<PullRequestMergeability | undefined>;
 
-export { GithubApiError } from "./http.ts";
-
 const EMAIL_CACHE_MS = 5 * 60_000;
 const EMAIL_CACHE_ENTRIES = 5_000;
 

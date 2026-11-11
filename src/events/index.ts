@@ -7,11 +7,9 @@ export type {
   DomainEvent,
   GithubActor,
   IssueCommentEvent,
-  PrChange,
   PrSnapshot,
   PrState,
   PullRequestEvent,
-  Review,
   ReviewCommentEvent,
   ReviewEvent,
 } from "./types.ts";

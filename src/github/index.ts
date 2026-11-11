@@ -1,4 +1,4 @@
-export { createInstallationAuth, type InstallationAuth } from "./auth.ts";
+export { createInstallationAuth } from "./auth.ts";
 export { octokitMintFn } from "./octokitAuth.ts";
 export {
   createCiReadinessFetcher,
@@ -21,7 +21,7 @@ export {
   toPrSnapshot,
 } from "./pullRequestSnapshot.ts";
 export { createGithubAttachmentMirror, type ImageEmbedder } from "./attachments.ts";
-export type { CiReadiness, PrForShaFetcher } from "./ci.ts";
+export type { PrForShaFetcher } from "./ci.ts";
 export { createPrCommenter, type PrCommenter } from "./comments.ts";
 export { shouldSkipActor } from "./actors.ts";
 export {

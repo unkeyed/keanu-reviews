@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { InstallationAuth } from "./auth.ts";
+import { GithubApiError } from "./http.ts";
 import {
-  GithubApiError,
   createCiReadinessFetcher,
   createGithubEmailFetcher,
   createGithubUserFetcher,

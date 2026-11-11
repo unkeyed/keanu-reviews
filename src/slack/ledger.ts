@@ -7,7 +7,7 @@ import { BOT, type Poster, type RenderedMessage, type SlackGateway } from "./gat
 
 // The worker's default job lease is 60 seconds. Keep an in-flight external
 // effect fenced beyond that boundary so a reclaimed job cannot post it twice.
-export const MESSAGE_LEASE_MS = 2 * 60_000;
+const MESSAGE_LEASE_MS = 2 * 60_000;
 
 /** Collision-safe natural key: `len:prId|len:kind|len:ref`. */
 export function naturalKey(key: EffectKey): string {
@@ -100,7 +100,7 @@ export async function complete(
 }
 
 /** Known failures are immediately retryable; lease expiry covers process crashes. */
-export async function release(db: Db, row: MessageRow): Promise<void> {
+async function release(db: Db, row: MessageRow): Promise<void> {
   await db.update(messages).set({ status: "pending", claimedAt: null }).where(currentClaim(row));
 }
 

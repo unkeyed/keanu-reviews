@@ -82,7 +82,7 @@ export type SelfLinkIdentityResult =
  * from another Slack user. The conflict insert plus Slack-scoped update makes
  * the decision safe when two callbacks race for the same GitHub id.
  */
-export async function linkSelfIdentity(
+async function linkSelfIdentity(
   db: Db,
   input: Omit<UpsertIdentityInput, "source">,
 ): Promise<SelfLinkIdentityResult> {
@@ -107,13 +107,13 @@ export async function linkSelfIdentity(
   return { outcome: "conflict" };
 }
 
-export const GITHUB_LINK_CONFIRMATION_TTL_MS = 10 * 60_000;
+const GITHUB_LINK_CONFIRMATION_TTL_MS = 10 * 60_000;
 
 function secretHash(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("base64url");
 }
 
-export async function deleteExpiredGithubLinkArtifacts(
+async function deleteExpiredGithubLinkArtifacts(
   db: Db,
   now = new Date(),
 ): Promise<{ confirmations: number; nonces: number }> {

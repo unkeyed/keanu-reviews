@@ -11,7 +11,7 @@ import { createDispatcher } from "./handlers.ts";
  * and no platform scheduler, so the reconciliation keeps its own once-a-day
  * timer. 08:00 UTC is after the US night and before the European afternoon.
  */
-export const DAILY_RECONCILE_HOUR_UTC = 8;
+const DAILY_RECONCILE_HOUR_UTC = 8;
 const JOB_RETENTION_MS = 14 * 24 * 60 * 60_000;
 // 288 lifecycle leases; a live holder renews every 100 seconds.
 const ORPHANED_CLAIM_MS = 24 * 60 * 60_000;
