@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { serviceVersion } from "#config";
 import type { ReadyCheck } from "#db";
+import { type Logger, errMessage } from "#lib";
 
 const startedAt = Date.now();
 const version = serviceVersion();
@@ -9,7 +10,7 @@ const version = serviceVersion();
  * Liveness and readiness (U1). Liveness reports that the process is serving;
  * readiness also protects traffic from an unavailable or unmigrated database.
  */
-export function createHealthRoutes(checkReady: ReadyCheck): Hono {
+export function createHealthRoutes(checkReady: ReadyCheck, logger: Logger): Hono {
   const health = new Hono();
 
   // Liveness deliberately has no external dependencies: it answers whether
@@ -27,7 +28,8 @@ export function createHealthRoutes(checkReady: ReadyCheck): Hono {
     try {
       await checkReady();
       return c.json({ status: "ready", service: "keanu-reviews" });
-    } catch {
+    } catch (err) {
+      logger.warn("readiness check failed", { err: errMessage(err) });
       return c.json({ status: "unavailable", service: "keanu-reviews" }, 503);
     }
   });

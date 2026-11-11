@@ -8,7 +8,7 @@ import { createHealthRoutes } from "./health.ts";
 export function createHttpApp(ctx: AppContext, nudge: () => void): Hono {
   const { config, db, logger } = ctx;
   const app = new Hono();
-  app.route("/", createHealthRoutes(createDbReadyCheck(db)));
+  app.route("/", createHealthRoutes(createDbReadyCheck(db), logger));
   app.route(
     "/",
     createGithubWebhookRoute({
