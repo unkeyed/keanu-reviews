@@ -354,14 +354,18 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
   // rejoining, and `is_archived` by unarchiving, since a write to an archived
   // channel would otherwise poison every future job for that PR. The daily
   // reconcile re-archives a merged PR's channel a late write reopened.
-  const withWritableChannel = async <T>(channel: string, op: () => Promise<T>): Promise<T> => {
+  const withWritableChannel = async <T>(
+    channel: string,
+    op: () => Promise<T>,
+    rejoin: () => Promise<unknown> = () => bot("conversations.join", { channel }),
+  ): Promise<T> => {
     for (let attempt = 0; ; attempt++) {
       try {
         return await op();
       } catch (error) {
         const code = error instanceof SlackApiError ? error.code : undefined;
         if (attempt < 2 && code === "not_in_channel") {
-          await bot("conversations.join", { channel });
+          await rejoin();
           continue;
         }
         if (attempt < 2 && code === "is_archived") {
@@ -443,31 +447,14 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
         unfurl_links: false,
         unfurl_media: false,
       });
-    for (let attempt = 0; ; attempt++) {
+    const inviteUser = async () => {
       try {
-        return await post();
+        await bot("conversations.invite", { channel, users: opts.poster.userId });
       } catch (error) {
-        const code = error instanceof SlackApiError ? error.code : undefined;
-        if (attempt < 2 && code === "not_in_channel") {
-          try {
-            await bot("conversations.invite", { channel, users: opts.poster.userId });
-          } catch (inviteError) {
-            if (
-              !(inviteError instanceof SlackApiError) ||
-              inviteError.code !== "already_in_channel"
-            ) {
-              throw inviteError;
-            }
-          }
-          continue;
-        }
-        if (attempt < 2 && code === "is_archived") {
-          await bot("conversations.unarchive", { channel });
-          continue;
-        }
-        throw error;
+        if (!(error instanceof SlackApiError) || error.code !== "already_in_channel") throw error;
       }
-    }
+    };
+    return withWritableChannel(channel, post, inviteUser);
   };
 
   const findChannelByName = async (name: string): Promise<string | undefined> => {
