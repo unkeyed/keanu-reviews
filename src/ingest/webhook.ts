@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { Db } from "#db";
+import { ignoredReason } from "#events";
 import { verifySignature } from "#github";
 import type { Logger } from "#lib";
 import { enqueueDeliveryJob } from "#queue";
@@ -53,6 +54,17 @@ export function createGithubWebhookRoute(deps: WebhookDeps): Hono {
     const event = c.req.header("x-github-event");
     if (!deliveryId || !event) {
       return c.json({ error: "missing_headers" }, 400);
+    }
+
+    const ignored = ignoredReason(event, payload);
+    if (ignored) {
+      deps.logger.debug("webhook ignored", {
+        deliveryId,
+        event,
+        action: payload.action,
+        reason: ignored,
+      });
+      return c.json({ ok: true, ignored }, 200);
     }
 
     const accepted = await enqueueDeliveryJob(deps.db, {

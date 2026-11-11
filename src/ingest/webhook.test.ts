@@ -89,6 +89,41 @@ describe("github webhook route", () => {
     expect(await jobCount()).toBe(0);
   });
 
+  it("ACKs a delivery no handler acts on without writing a job", async () => {
+    const cases: [event: string, body: string][] = [
+      ["check_run", body({ action: "created", check_run: { status: "queued", head_sha: "abc" } })],
+      ["issue_comment", body({ action: "created", issue: { number: 3 } })],
+      ["ping", body({ zen: "hi" })],
+    ];
+    for (const [event, b] of cases) {
+      const res = await post(b, {
+        "x-hub-signature-256": sign(b),
+        "x-github-event": event,
+        "x-github-delivery": `d-ignored-${event}`,
+      });
+      expect(res.status, event).toBe(200);
+      expect(await res.json(), event).toMatchObject({ ok: true, ignored: expect.any(String) });
+    }
+    expect(await jobCount()).toBe(0);
+    expect(nudge).not.toHaveBeenCalled();
+  });
+
+  it("still enqueues a completed check run and a malformed handled payload", async () => {
+    const cases: [event: string, body: string][] = [
+      ["check_run", body({ action: "completed", check_run: { status: "completed" } })],
+      ["pull_request_review", body({ action: "submitted" })],
+    ];
+    for (const [event, b] of cases) {
+      const res = await post(b, {
+        "x-hub-signature-256": sign(b),
+        "x-github-event": event,
+        "x-github-delivery": `d-handled-${event}`,
+      });
+      expect(res.status, event).toBe(202);
+    }
+    expect(await jobCount()).toBe(2);
+  });
+
   it("ACKs a duplicate delivery without creating a second job", async () => {
     const b = body();
     const headers = {
