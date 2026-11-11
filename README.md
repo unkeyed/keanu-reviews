@@ -83,7 +83,8 @@ GitHub App webhook  ──►  /webhooks/github  ──►  jobs table  ──�
 - **One writer per PR.** Every write to a PR's channel runs inside one PR session:
   a per-PR lane in the process and a database lease across replicas. Jobs for
   different PRs run in parallel (`WORKER_CONCURRENCY`); jobs for one PR run one
-  at a time, in arrival order.
+  at a time, in arrival order. The queue holds a PR's next job back until its
+  current one finishes, so a burst on one PR never fills the worker's slots.
 - **One-way boundary.** The bot reads GitHub and writes Slack. It never mutates
   GitHub except the opt-in merge comment.
 

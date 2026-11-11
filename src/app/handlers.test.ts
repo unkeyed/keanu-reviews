@@ -34,6 +34,7 @@ const job = (event: string, raw: Record<string, unknown>, attempts = 1): JobRow 
   availableAt: createdAt,
   claimedAt: createdAt,
   createdAt,
+  lanes: [],
 });
 
 const pullRequest = (action: string) => ({

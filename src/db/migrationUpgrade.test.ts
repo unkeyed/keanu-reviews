@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { afterEach, describe, expect, it } from "vitest";
+import { jobPrKeys } from "#events";
 import type { PrId } from "#lib";
 import type { LedgerKind } from "../slack/catalog.ts";
 import { claim } from "../slack/ledger.ts";
@@ -243,5 +244,87 @@ describe("incremental legacy-schema upgrade", () => {
         ) VALUES ('duplicate-id', 'another/repo', 99, 9001, 'pr')
       `),
     ).rejects.toThrow(/pr_github_id_unique|duplicate key|unique/i);
+  });
+});
+
+describe("job lanes upgrade", () => {
+  it("backfills the PR lanes of jobs that can still run, as new deliveries get them", async () => {
+    const client = new PGlite();
+    clients.push(client);
+    for (const file of readdirSync(migrationDirectory)
+      .filter((name) => name.endsWith(".sql") && name < "0010")
+      .sort()) {
+      await applyMigration(client, file);
+    }
+    const repository = { full_name: "Unkey/API" };
+    const pr = (number: unknown) => JSON.stringify({ repository, pull_request: { number } });
+    const run = (prs: unknown) => JSON.stringify({ repository, check_run: { pull_requests: prs } });
+    const queued: [id: string, status: string, event: string, raw: string][] = [
+      ["pr", "pending", "pull_request", pr(7)],
+      ["review", "processing", "pull_request_review", pr(8)],
+      ["review-comment", "failed", "pull_request_review_comment", pr(9)],
+      [
+        "issue-comment",
+        "pending",
+        "issue_comment",
+        JSON.stringify({ repository, issue: { number: 10 } }),
+      ],
+      [
+        "check-run",
+        "pending",
+        "check_run",
+        run([
+          { number: 9 },
+          { number: 7 },
+          { number: 9 },
+          null,
+          5,
+          { number: "3" },
+          { number: 4.5 },
+        ]),
+      ],
+      ["check-run-none", "pending", "check_run", run([])],
+      ["check-run-object", "pending", "check_run", run({ number: 7 })],
+      [
+        "decimal-number",
+        "pending",
+        "pull_request",
+        '{"repository":{"full_name":"unkey/api"},"pull_request":{"number":7.0}}',
+      ],
+      ["string-number", "pending", "pull_request", pr("7")],
+      ["no-repository", "pending", "pull_request", JSON.stringify({ pull_request: { number: 7 } })],
+      ["other-event", "pending", "installation", pr(7)],
+      ["not-an-object", "pending", "pull_request", "[1, 2]"],
+      ["purged", "pending", "pull_request", "null"],
+      ["done", "done", "pull_request", pr(7)],
+    ];
+    for (const [id, status, event, raw] of queued) {
+      await client.query(
+        `INSERT INTO "jobs" ("id", "delivery_id", "event", "status", "raw")
+         VALUES ($1, $1, $2, $3::job_status, $4::jsonb)`,
+        [id, event, status, raw],
+      );
+    }
+
+    await applyMigration(client, "0010_job_lanes.sql");
+
+    const { rows } = await client.query<{
+      id: string;
+      event: string;
+      raw: unknown;
+      lanes: string[];
+    }>(`SELECT "id", "event", "raw", "lanes" FROM "jobs"`);
+    const lanes = Object.fromEntries(rows.map((r) => [r.id, [...r.lanes].sort()]));
+    const enqueued = Object.fromEntries(rows.map((r) => [r.id, jobPrKeys(r.event, r.raw).sort()]));
+    expect(lanes).toEqual({ ...enqueued, done: [] });
+    expect(lanes).toMatchObject({
+      pr: ["unkey/api#7"],
+      review: ["unkey/api#8"],
+      "review-comment": ["unkey/api#9"],
+      "issue-comment": ["unkey/api#10"],
+      "check-run": ["unkey/api#7", "unkey/api#9"],
+      "decimal-number": ["unkey/api#7"],
+      "string-number": [],
+    });
   });
 });

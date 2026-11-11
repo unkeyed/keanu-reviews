@@ -361,60 +361,41 @@ describe("worker concurrency", () => {
     await loop.stop();
   });
 
-  it("starts a chained job's timeout at its turn and renews its lease while it waits", async () => {
-    fakeLeaseTimers();
-    await queued(["t1", 1], ["t2", 1]);
+  it("leaves a busy PR's queued jobs out of the worker's slots", async () => {
+    await queued(["a1", 1], ["a2", 1], ["a3", 1], ["b1", 2]);
     const held = heldJobs();
-    const worker = createWorker(db, quiet(), held.dispatch);
-    const first = await worker.claim();
-    const second = await worker.claim();
+    const loop = startWorker(createWorker(db, quiet(), held.dispatch), quiet(), 2);
+    loop.wake();
 
-    await vi.advanceTimersByTimeAsync(90_000);
-    expect(held.started).toEqual(["t1"]);
-    expect(await claimNextJob(db)).toBeUndefined();
-
-    held.release("t1");
-    await first?.settled;
-    await vi.advanceTimersByTimeAsync(0);
-    expect(held.started).toEqual(["t1", "t2"]);
-    await vi.advanceTimersByTimeAsync(HANDLER_TIMEOUT_MS - 1);
-    expect(held.signals.get("t2")?.aborted).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    await second?.settled;
-    expect(held.signals.get("t2")?.aborted).toBe(true);
-    expect(await row("t2")).toMatchObject({ status: "pending", attempts: 1 });
-    held.release("t2");
+    await vi.waitFor(() => expect(held.started).toEqual(["a1", "b1"]));
+    held.release("b1");
+    held.release("a1");
+    await vi.waitFor(() => expect(held.started).toEqual(["a1", "b1", "a2"]));
+    held.release("a2");
+    await vi.waitFor(() => expect(held.started).toEqual(["a1", "b1", "a2", "a3"]));
+    held.release("a3");
+    await loop.stop();
+    expect(await statuses()).toEqual({ a1: "done", a2: "done", a3: "done", b1: "done" });
   });
 
-  it("never runs a chained job whose lease another worker took while it waited", async () => {
-    fakeLeaseTimers();
-    await queued(["l1", 1], ["l2", 1]);
+  it("starts a PR's next job as soon as the one before it finishes, even mid-backoff", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    await queued(["a1", 1], ["a2", 1]);
     const held = heldJobs();
-    const warn = vi.fn();
-    const worker = createWorker(db, { ...quiet(), warn }, held.dispatch);
-    const first = await worker.claim();
-    const second = await worker.claim();
-    const stolenAt = new Date(Date.now() + 1);
-    await db.update(jobs).set({ attempts: 2, claimedAt: stolenAt }).where(eq(jobs.id, "l2"));
+    const loop = startWorker(createWorker(db, quiet(), held.dispatch), quiet(), 4);
+    loop.wake();
+    await vi.waitFor(() => expect(held.started).toEqual(["a1"]));
+    await vi.advanceTimersByTimeAsync(10_000);
 
-    await vi.advanceTimersByTimeAsync(LEASE_MS / 3);
-    expect(warn).toHaveBeenCalledWith("job lease lost to another worker", {
-      jobId: "l2",
-      event: "pull_request",
-    });
-    held.release("l1");
-    await first?.settled;
-    await second?.settled;
-
-    expect(held.started).toEqual(["l1"]);
-    expect(await row("l2")).toMatchObject({
-      status: "processing",
-      attempts: 2,
-      claimedAt: stolenAt,
-    });
+    const finishedAt = Date.now();
+    held.release("a1");
+    await vi.waitFor(() => expect(held.started).toEqual(["a1", "a2"]));
+    expect(Date.now() - finishedAt).toBeLessThan(1_000);
+    held.release("a2");
+    await loop.stop();
   });
 
-  it("stop hands back chained jobs that never ran and waits for the running ones", async () => {
+  it("stop waits for the running jobs and claims no more", async () => {
     await queued(["s1", 1], ["s2", 1], ["s3", 2]);
     const held = heldJobs();
     const loop = startWorker(createWorker(db, quiet(), held.dispatch), quiet(), 4);
@@ -425,9 +406,7 @@ describe("worker concurrency", () => {
     const stopping = loop.stop().then(() => {
       stopped = true;
     });
-    await vi.waitFor(async () =>
-      expect(await row("s2")).toMatchObject({ status: "pending", attempts: 0, claimedAt: null }),
-    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(stopped).toBe(false);
 
     held.release("s1");
@@ -435,6 +414,21 @@ describe("worker concurrency", () => {
     await stopping;
     expect(held.started).toEqual(["s1", "s3"]);
     expect(await statuses()).toEqual({ s1: "done", s2: "pending", s3: "done" });
+    expect(await row("s2")).toMatchObject({ attempts: 0, claimedAt: null });
+  });
+
+  it("hands back a job claimed after shutdown began without running it", async () => {
+    await queued(["late", 1]);
+    const dispatch = vi.fn(async () => undefined);
+    const draining = new AbortController();
+    draining.abort();
+
+    const claimed = await createWorker(db, quiet(), dispatch).claim(draining.signal);
+    await claimed?.settled;
+
+    expect(claimed).toBeDefined();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(await row("late")).toMatchObject({ status: "pending", attempts: 0, claimedAt: null });
   });
 });
 
@@ -600,7 +594,7 @@ describe("worker loop", () => {
     expect(claim).toHaveBeenCalledTimes(1);
   });
 
-  it("backs its idle poll off from one second to five, and back to one after work", async () => {
+  it("backs its idle poll off from one second to five, and starts over after work", async () => {
     vi.useFakeTimers();
     let queued = 0;
     const polls: number[] = [];
@@ -619,9 +613,9 @@ describe("worker loop", () => {
     queued = 1;
     polls.length = 0;
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(polls).toEqual([22_000, 22_000]);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(polls).toEqual([22_000, 22_000, 23_000]);
+    expect(polls.slice(0, 2)).toEqual([22_000, 22_000]);
+    await vi.advanceTimersByTimeAsync(2_001);
+    expect(polls).toEqual([22_000, 22_000, 22_001, 24_001]);
     await loop.stop();
   });
 
