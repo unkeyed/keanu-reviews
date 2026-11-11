@@ -31,7 +31,7 @@ export async function handleReview(
   sourceVersion = String(ev.review.id),
 ): Promise<void> {
   if (shouldSkipActor(ev.review.author, deps.allowedBots)) return; // skip non-allowed bots
-  await session(deps, { snapshot: ev.pr, cause: { kind: "child" } }, (s) =>
+  await session(deps, { kind: "snapshot", snapshot: ev.pr, cause: { kind: "child" } }, (s) =>
     mirrorReview(deps, s, ev, sourceVersion),
   );
 }

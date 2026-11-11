@@ -40,7 +40,7 @@ export async function handleReviewComment(
 
   // The PR author's inline replies ARE mirrored — replying to review feedback is
   // the core channel conversation.
-  await session(deps, { snapshot: ev.pr, cause: { kind: "child" } }, (s) =>
+  await session(deps, { kind: "snapshot", snapshot: ev.pr, cause: { kind: "child" } }, (s) =>
     mirrorReviewComment(deps, s, ev),
   );
 }

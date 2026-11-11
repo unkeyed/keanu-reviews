@@ -285,8 +285,6 @@ const TABLE_READERS: Record<string, string> = {
  * must still match a violation, so the list can only shrink.
  */
 const PENDING: readonly { files: string; rule: string; slice: string }[] = [
-  // S3: the closed-PR reconcile moves onto the PR session.
-  { files: "scheduler/reconcileClosedPullRequests.ts", rule: "", slice: "S3" },
   // S4: mirror/ replaces comment and review mirroring.
   { files: "handlers/authorship.ts", rule: "not in a layered module", slice: "S4" },
   { files: "handlers/mentions.ts", rule: "not in a layered module", slice: "S4" },

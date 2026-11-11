@@ -3,9 +3,9 @@ import { ConfigError, SECRET_KEYS, loadConfig } from "#config";
 import { createDb } from "#db";
 import { createInstallationAuth, createPullRequestSnapshotFetcher, octokitMintFn } from "#github";
 import { createLogger, registerSecrets } from "#lib";
+import { createClosedPullRequestReconciliation } from "#pr";
 import { createSlackGateway } from "#slack";
 import { createServiceHandlers } from "../handlers/deps.ts";
-import { createClosedPullRequestReconciliation } from "../scheduler/reconcileClosedPullRequests.ts";
 
 const USAGE = `Usage: pnpm jobs:reconcile-closed-prs
 
@@ -44,13 +44,10 @@ export async function runReconcileClosedPullRequestsCli(
     const database = createDb(config.DATABASE_URL);
     close = database.close;
     const services = createServiceHandlers({ config, db: database.db, slack, logger, auth });
-    const run = createClosedPullRequestReconciliation({
-      handler: services.handler,
-      fetchSnapshot: createPullRequestSnapshotFetcher(auth, config.GITHUB_INSTALLATION_ID, {
-        logger,
-      }),
-      logger,
-    });
+    const run = createClosedPullRequestReconciliation(
+      services.handler,
+      createPullRequestSnapshotFetcher(auth, config.GITHUB_INSTALLATION_ID, { logger }),
+    );
     const summary = await run();
     io.stdout(JSON.stringify(summary));
     return summary.failed > 0 ? 1 : 0;

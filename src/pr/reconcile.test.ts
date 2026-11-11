@@ -1,7 +1,6 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Logger } from "#lib";
-import { type PrDeps, findByRepoNumber } from "#pr";
 import { scheduleReminder } from "#reminders";
 import type { Db } from "../db/client.ts";
 import { pullRequests, reminders } from "../db/schema.ts";
@@ -13,11 +12,12 @@ import {
   type PullRequestSnapshotFetcher,
   createPullRequestSnapshotFetcher,
 } from "../github/pullRequestSnapshot.ts";
-import { prId } from "../pr/store.ts";
 import { type PullRequestPayload, pullRequestEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { convergePullRequest } from "../testing/pr.ts";
-import { createClosedPullRequestReconciliation } from "./reconcileClosedPullRequests.ts";
+import type { PrDeps } from "./converge.ts";
+import { createClosedPullRequestReconciliation } from "./reconcile.ts";
+import { claimPullRequestLifecycle, findByRepoNumber, prId } from "./store.ts";
 
 let db: Db;
 let slack: FakeSlackGateway;
@@ -119,11 +119,7 @@ describe("closed pull request reconciliation", () => {
     const fetchSnapshot = vi.fn<PullRequestSnapshotFetcher>(async () => ({
       snapshot: snapshot(1, 101, { merged: true }),
     }));
-    const run = createClosedPullRequestReconciliation({
-      handler: deps,
-      fetchSnapshot,
-      logger: deps.logger,
-    });
+    const run = createClosedPullRequestReconciliation(deps, fetchSnapshot);
 
     await expect(run()).resolves.toMatchObject({
       checked: 1,
@@ -204,11 +200,7 @@ describe("closed pull request reconciliation", () => {
     const fetchSnapshot = vi.fn<PullRequestSnapshotFetcher>(async () => ({
       snapshot: snapshot(2, 102, { merged: false, state: "closed" }),
     }));
-    const run = createClosedPullRequestReconciliation({
-      handler: deps,
-      fetchSnapshot,
-      logger: deps.logger,
-    });
+    const run = createClosedPullRequestReconciliation(deps, fetchSnapshot);
 
     await expect(run()).resolves.toMatchObject({
       checked: 1,
@@ -248,11 +240,7 @@ describe("closed pull request reconciliation", () => {
     await slack.unarchive("C1");
     expect(slack.channel("C1")?.archived).toBe(false);
 
-    const run = createClosedPullRequestReconciliation({
-      handler: deps,
-      fetchSnapshot: noSnapshots,
-      logger: deps.logger,
-    });
+    const run = createClosedPullRequestReconciliation(deps, noSnapshots);
     const result = await run();
 
     expect(result.reArchived).toBe(1);
@@ -265,16 +253,32 @@ describe("closed pull request reconciliation", () => {
     );
   });
 
+  it("leaves a drifted channel to the next run while another replica holds the PR", async () => {
+    const deps = handler();
+    await openPr(1, 101, deps);
+    await convergePullRequest(deps, pullRequestEvent(merge(1, 101)));
+    await slack.unarchive("C1");
+    await claimPullRequestLifecycle(db, 101);
+
+    const result = await createClosedPullRequestReconciliation(deps, noSnapshots)();
+
+    expect(result).toMatchObject({ reArchived: 0, failed: 0 });
+    expect(slack.channel("C1")?.archived).toBe(false);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        level: "info",
+        msg: "re-archive sweep skipped; lifecycle already in progress",
+        fields: expect.objectContaining({ number: 1, channelId: "C1" }),
+      }),
+    );
+  });
+
   it("leaves an already-archived terminal channel alone", async () => {
     const deps = handler();
     await openPr(1, 101, deps);
     await convergePullRequest(deps, pullRequestEvent(merge(1, 101))); // archives C1 and leaves it archived
 
-    const run = createClosedPullRequestReconciliation({
-      handler: deps,
-      fetchSnapshot: noSnapshots,
-      logger: deps.logger,
-    });
+    const run = createClosedPullRequestReconciliation(deps, noSnapshots);
     const result = await run();
 
     expect(result.reArchived).toBe(0);
@@ -287,11 +291,7 @@ describe("closed pull request reconciliation", () => {
     const fetchSnapshot = vi.fn<PullRequestSnapshotFetcher>(async () => ({
       snapshot: snapshot(3, 103, { state: "open", merged: false }),
     }));
-    const run = createClosedPullRequestReconciliation({
-      handler: deps,
-      fetchSnapshot,
-      logger: deps.logger,
-    });
+    const run = createClosedPullRequestReconciliation(deps, fetchSnapshot);
 
     await expect(run()).resolves.toMatchObject({
       checked: 1,
@@ -326,11 +326,7 @@ describe("closed pull request reconciliation", () => {
     const fetchSnapshot = vi.fn<PullRequestSnapshotFetcher>(async () => {
       throw new Error("GitHub should not be consulted");
     });
-    const run = createClosedPullRequestReconciliation({
-      handler: deps,
-      fetchSnapshot,
-      logger: deps.logger,
-    });
+    const run = createClosedPullRequestReconciliation(deps, fetchSnapshot);
 
     await expect(run()).resolves.toMatchObject({
       checked: 0,
@@ -349,11 +345,7 @@ describe("closed pull request reconciliation", () => {
     const fetchSnapshot = vi.fn<PullRequestSnapshotFetcher>(async () => {
       throw new Error("GitHub should not be consulted");
     });
-    const run = createClosedPullRequestReconciliation({
-      handler: deps,
-      fetchSnapshot,
-      logger: deps.logger,
-    });
+    const run = createClosedPullRequestReconciliation(deps, fetchSnapshot);
 
     await expect(run()).resolves.toMatchObject({ checked: 0, archived: 0, failed: 0 });
     expect(fetchSnapshot).not.toHaveBeenCalled();
@@ -375,11 +367,7 @@ describe("closed pull request reconciliation", () => {
       }
       return { snapshot: snapshot(number, 100 + number, { merged: true }) };
     });
-    const run = createClosedPullRequestReconciliation({
-      handler: deps,
-      fetchSnapshot,
-      logger: deps.logger,
-    });
+    const run = createClosedPullRequestReconciliation(deps, fetchSnapshot);
 
     await expect(run()).resolves.toMatchObject({
       checked: 3,
@@ -437,15 +425,14 @@ describe("closed pull request reconciliation", () => {
       );
     });
     const auth: InstallationAuth = { getToken: async () => "token", invalidate: () => {} };
-    const run = createClosedPullRequestReconciliation({
-      handler: deps,
-      fetchSnapshot: createPullRequestSnapshotFetcher(auth, "42", {
+    const run = createClosedPullRequestReconciliation(
+      deps,
+      createPullRequestSnapshotFetcher(auth, "42", {
         fetch: fetchFn,
         sleep,
         logger: deps.logger,
       }),
-      logger: deps.logger,
-    });
+    );
 
     await expect(run()).resolves.toMatchObject({
       checked: 2,
@@ -481,15 +468,14 @@ describe("closed pull request reconciliation", () => {
       });
     });
     const auth: InstallationAuth = { getToken: async () => "token", invalidate: () => {} };
-    const run = createClosedPullRequestReconciliation({
-      handler: deps,
-      fetchSnapshot: createPullRequestSnapshotFetcher(auth, "42", {
+    const run = createClosedPullRequestReconciliation(
+      deps,
+      createPullRequestSnapshotFetcher(auth, "42", {
         fetch: fetchFn,
         sleep,
         maxBackoffMs: 120_000,
       }),
-      logger: deps.logger,
-    });
+    );
 
     await expect(run()).resolves.toMatchObject({
       checked: 0,
@@ -530,11 +516,10 @@ describe("closed pull request reconciliation", () => {
       );
     });
     const auth: InstallationAuth = { getToken: async () => "token", invalidate: () => {} };
-    const run = createClosedPullRequestReconciliation({
-      handler: deps,
-      fetchSnapshot: createPullRequestSnapshotFetcher(auth, "42", { fetch: fetchFn }),
-      logger: deps.logger,
-    });
+    const run = createClosedPullRequestReconciliation(
+      deps,
+      createPullRequestSnapshotFetcher(auth, "42", { fetch: fetchFn }),
+    );
 
     await expect(run()).resolves.toMatchObject({
       checked: 1,
@@ -559,11 +544,7 @@ describe("closed pull request reconciliation", () => {
       await gate;
       return { snapshot: snapshot(1, 101, { state: "open", merged: false }) };
     });
-    const run = createClosedPullRequestReconciliation({
-      handler: deps,
-      fetchSnapshot,
-      logger: deps.logger,
-    });
+    const run = createClosedPullRequestReconciliation(deps, fetchSnapshot);
 
     const first = run();
     await expect(run()).resolves.toMatchObject({ overlapped: true, checked: 0, failed: 0 });

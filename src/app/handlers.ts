@@ -37,7 +37,7 @@ export const handlers: HandlerTable = {
       merged: ev.merged,
       arrivalKey: work.arrivalKey,
     } as const;
-    return session(deps, { snapshot: ev.pr, cause }, async (s) => {
+    return session(deps, { kind: "snapshot", snapshot: ev.pr, cause }, async (s) => {
       const gate = { attempt: work.attempt };
       switch (ev.action) {
         case "review_requested":

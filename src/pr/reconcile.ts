@@ -4,16 +4,15 @@ import {
   type PullRequestSnapshot,
   type PullRequestSnapshotFetcher,
 } from "#github";
-import { type Logger, errMessage } from "#lib";
+import { errMessage } from "#lib";
+import type { PrDeps } from "./converge.ts";
+import { PullRequestLifecycleBusyError, session } from "./session.ts";
 import {
-  type PrDeps,
   type PrRow,
-  PullRequestLifecycleBusyError,
   findById,
   listOpenPullRequestsForReconciliation,
   listRecentlyClosedPullRequests,
-  session,
-} from "#pr";
+} from "./store.ts";
 
 export interface ReconciliationSummary {
   /** Pull requests whose GitHub state was read, or whose read failed. */
@@ -45,13 +44,6 @@ export interface ReconciliationSummary {
  * checked, since channel drift happens from writes clustered around the merge.
  */
 const RE_ARCHIVE_WINDOW_MS = 7 * 24 * 60 * 60_000;
-
-export interface ClosedPullRequestReconciliationDeps {
-  /** Same dependencies the webhook worker uses for pull_request events. */
-  handler: PrDeps;
-  fetchSnapshot: PullRequestSnapshotFetcher;
-  logger: Logger;
-}
 
 const ZERO: ReconciliationSummary = {
   checked: 0,
@@ -108,7 +100,8 @@ function prSnapshot(row: PrRow, snapshot: PullRequestSnapshot): PrSnapshot {
  * leases cover a second process.
  */
 export function createClosedPullRequestReconciliation(
-  deps: ClosedPullRequestReconciliationDeps,
+  deps: PrDeps,
+  fetchSnapshot: PullRequestSnapshotFetcher,
 ): () => Promise<ReconciliationSummary> {
   let inProgress = false;
 
@@ -123,7 +116,7 @@ export function createClosedPullRequestReconciliation(
 
     inProgress = true;
     try {
-      return await reconcile(deps);
+      return await reconcile(deps, fetchSnapshot);
     } finally {
       inProgress = false;
     }
@@ -131,10 +124,11 @@ export function createClosedPullRequestReconciliation(
 }
 
 async function reconcile(
-  deps: ClosedPullRequestReconciliationDeps,
+  deps: PrDeps,
+  fetchSnapshot: PullRequestSnapshotFetcher,
 ): Promise<ReconciliationSummary> {
   const { logger } = deps;
-  const rows = await listOpenPullRequestsForReconciliation(deps.handler.db);
+  const rows = await listOpenPullRequestsForReconciliation(deps.db);
   const result = summary();
 
   for (let index = 0; index < rows.length; index++) {
@@ -148,7 +142,7 @@ async function reconcile(
 
     let fetched: Awaited<ReturnType<PullRequestSnapshotFetcher>>;
     try {
-      fetched = await deps.fetchSnapshot(row.repoFullName, row.number);
+      fetched = await fetchSnapshot(row.repoFullName, row.number);
     } catch (error) {
       if (error instanceof GithubRateLimitExhaustedError) {
         result.rateLimited = true;
@@ -208,27 +202,36 @@ async function reconcile(
  * just after a merge is delivered via the Slack client's `is_archived` recovery,
  * which unarchives the channel — and convergence won't re-close it because its
  * applied state already matches. So directly archive any recently-terminal
- * PR whose channel is currently open. Best-effort: one failure never stops the rest.
+ * PR whose channel is currently open. Each check holds the PR's session, so it
+ * never interleaves with a lifecycle job; a PR another replica holds waits for
+ * the next run. Best-effort: one failure never stops the rest.
  */
 async function reArchiveDriftedChannels(
-  deps: ClosedPullRequestReconciliationDeps,
+  deps: PrDeps,
   result: ReconciliationSummary,
 ): Promise<void> {
-  const { handler, logger } = deps;
+  const { slack, logger } = deps;
   const since = new Date(Date.now() - RE_ARCHIVE_WINDOW_MS);
-  const rows = await listRecentlyClosedPullRequests(handler.db, since);
+  const rows = await listRecentlyClosedPullRequests(deps.db, since);
   for (const row of rows) {
-    if (!row.channelId) continue;
-    const fields = { repoFullName: row.repoFullName, number: row.number, channelId: row.channelId };
+    const channelId = row.channelId;
+    if (!channelId) continue;
+    const fields = { repoFullName: row.repoFullName, number: row.number, channelId };
     try {
-      const archived = await handler.slack.isArchived(row.channelId);
-      if (archived !== false) continue; // already archived, or unreadable — leave it
-      // Empty the channel first (silent) when quiet-archive is configured, then close.
-      if (handler.quietArchive) await handler.quietArchive(row.channelId);
-      await handler.slack.archive(row.channelId);
-      result.reArchived += 1;
-      logger.info("re-archived PR channel that drifted open after a late write", fields);
+      await session(deps, { kind: "existing", githubPrId: row.githubPrId }, async () => {
+        const archived = await slack.isArchived(channelId);
+        if (archived !== false) return; // already archived, or unreadable — leave it
+        // Empty the channel first (silent) when quiet-archive is configured, then close.
+        if (deps.quietArchive) await deps.quietArchive(channelId);
+        await slack.archive(channelId);
+        result.reArchived += 1;
+        logger.info("re-archived PR channel that drifted open after a late write", fields);
+      });
     } catch (error) {
+      if (error instanceof PullRequestLifecycleBusyError) {
+        logger.info("re-archive sweep skipped; lifecycle already in progress", fields);
+        continue;
+      }
       result.failed += 1;
       logger.error("re-archive sweep failed for a channel", {
         ...fields,
@@ -240,7 +243,7 @@ async function reArchiveDriftedChannels(
 
 /** Apply one GitHub snapshot. Rate-limit exhaustion is decided by the caller. */
 async function applySnapshot(
-  deps: ClosedPullRequestReconciliationDeps,
+  deps: PrDeps,
   row: PrRow,
   fetched: Awaited<ReturnType<PullRequestSnapshotFetcher>>,
   result: ReconciliationSummary,
@@ -276,7 +279,7 @@ async function applySnapshot(
     return;
   }
 
-  const fresh = await findById(deps.handler.db, row.id);
+  const fresh = await findById(deps.db, row.id);
   if (!fresh || channelArchived(fresh) || isTerminal(fresh.currentState)) {
     result.skipped += 1;
     logger.info("pull request reconciliation skipped; already closed or archived", {
@@ -295,8 +298,8 @@ async function applySnapshot(
     arrivalKey: reconcileArrivalKey(new Date()),
   } as const;
   const handled = await session(
-    deps.handler,
-    { snapshot: prSnapshot(fresh, snapshot), cause },
+    deps,
+    { kind: "snapshot", snapshot: prSnapshot(fresh, snapshot), cause },
     async (s) => s.converged,
   );
   if (!handled?.accepted) {
@@ -305,7 +308,7 @@ async function applySnapshot(
     return;
   }
 
-  const after = await findById(deps.handler.db, row.id);
+  const after = await findById(deps.db, row.id);
   if (!after || !channelArchived(after)) {
     result.failed += 1;
     logger.error("pull request reconciliation failed; channel was not archived", {

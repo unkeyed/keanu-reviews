@@ -7,27 +7,31 @@ import {
   PULL_REQUEST_LIFECYCLE_LEASE_MS,
   type PrRow,
   claimPullRequestLifecycle,
+  findByGithubPrId,
   findByRepoNumber,
   pullRequestLifecycleClaimedAt,
   releasePullRequestLifecycle,
   renewPullRequestLifecycle,
 } from "./store.ts";
 
-/** What a session knows about its PR: GitHub's view of it and why the work runs. */
-export interface PrSource {
-  snapshot: PrSnapshot;
-  cause: ConvergeCause;
-}
+/**
+ * Which PR a session is for. A snapshot is GitHub's view of the PR and why the
+ * work runs. An existing PR is only locked: nothing converges, and a missing
+ * channel stays missing.
+ */
+export type PrSource =
+  | { kind: "snapshot"; snapshot: PrSnapshot; cause: ConvergeCause }
+  | { kind: "existing"; githubPrId: number };
 
 /** A PR row whose channel and root message exist. */
 export type ReadyPr = PrRow & { channelId: string; rootMessageTs: string };
 
 export interface PrSession {
-  /** The channel convergence this session ran on entry; undefined for a child event. */
+  /** The channel convergence this session ran on entry; undefined for a child event or an existing PR. */
   readonly converged: ConvergeOutcome | undefined;
   /**
-   * The PR with its channel and root. A missing one is built from the
-   * snapshot as a child event would; still missing means retry later.
+   * The PR with its channel and root. For a snapshot, a missing one is built
+   * as a child event would; still missing means retry later.
    */
   ready(): Promise<ReadyPr>;
 }
@@ -61,10 +65,13 @@ export async function session<T>(
 ): Promise<T> {
   const outer = inSession.getStore();
   if (outer !== undefined) throw new Error(`PR session for ${outer} cannot open another`);
-  const githubPrId = source.snapshot.githubPrId;
+  const githubPrId = source.kind === "snapshot" ? source.snapshot.githubPrId : source.githubPrId;
   return inLane(githubPrId, () =>
     inSession.run(githubPrId, () =>
       leased(deps, githubPrId, async () => {
+        if (source.kind === "existing") {
+          return body({ converged: undefined, ready: () => stored(deps, githubPrId) });
+        }
         const converged =
           source.cause.kind === "child"
             ? undefined
@@ -131,6 +138,12 @@ async function ready(deps: PrDeps, snapshot: PrSnapshot): Promise<ReadyPr> {
   if (!isReady(row)) {
     throw new Retry(`PR channel is not ready for ${snapshot.repo}#${snapshot.number}`);
   }
+  return row;
+}
+
+async function stored(deps: PrDeps, githubPrId: number): Promise<ReadyPr> {
+  const row = await findByGithubPrId(deps.db, githubPrId);
+  if (!isReady(row)) throw new Retry(`PR channel is not ready for GitHub PR ${githubPrId}`);
   return row;
 }
 

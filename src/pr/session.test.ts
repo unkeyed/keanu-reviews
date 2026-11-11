@@ -231,7 +231,7 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
       arrivalKey: reconcileArrivalKey(new Date()),
     } as const;
     await expect(
-      session(d, { snapshot: merged.pr, cause }, async (s) => s.converged),
+      session(d, { kind: "snapshot", snapshot: merged.pr, cause }, async (s) => s.converged),
     ).resolves.toMatchObject({
       accepted: true,
       skippedShipped: true,
@@ -833,10 +833,12 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
 });
 
 describe("PR session", () => {
-  const child = (over: Partial<PullRequestPayload["pull_request"]> = {}) => ({
-    snapshot: pullRequestEvent(payload("synchronize", over)).pr,
-    cause: { kind: "child" } as const,
-  });
+  const child = (over: Partial<PullRequestPayload["pull_request"]> = {}) =>
+    ({
+      kind: "snapshot",
+      snapshot: pullRequestEvent(payload("synchronize", over)).pr,
+      cause: { kind: "child" },
+    }) as const;
 
   it("builds a missing channel and root when a child event asks for a ready PR", async () => {
     const ready = await session(deps(), child(), (s) => s.ready());
@@ -882,6 +884,19 @@ describe("PR session", () => {
       expect.objectContaining({ githubPrId: 999, incomingUpdatedAt: "2026-08-11T12:00:00Z" }),
     );
     expect(info).toHaveBeenCalledTimes(1);
+  });
+
+  it("locks an existing PR without converging it", async () => {
+    const existing = { kind: "existing", githubPrId: 999 } as const;
+    await expect(session(deps(), existing, (s) => s.ready())).rejects.toThrow(
+      new Retry("PR channel is not ready for GitHub PR 999"),
+    );
+    expect(slack.channels).toHaveLength(0);
+
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await expect(
+      session(deps(), existing, async (s) => ({ converged: s.converged, ready: await s.ready() })),
+    ).resolves.toMatchObject({ converged: undefined, ready: { channelId: "C1" } });
   });
 
   it("refuses a session opened inside another and releases the outer lease", async () => {

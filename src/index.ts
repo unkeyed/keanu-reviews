@@ -11,12 +11,12 @@ import {
 import { createGithubOAuthRoute, createSlackCommandRoute } from "#identity";
 import { createGithubWebhookRoute } from "#ingest";
 import { createLogger, errMessage, registerSecrets } from "#lib";
+import { createClosedPullRequestReconciliation } from "#pr";
 import { pruneJobHistory } from "#queue";
 import { createSlackGateway } from "#slack";
 import { createServiceHandlers } from "./handlers/deps.ts";
 import { DAILY_RECONCILE_HOUR_UTC, startDailyLoop } from "./scheduler/dailyLoop.ts";
 import { startReminderLoop } from "./scheduler/loop.ts";
-import { createClosedPullRequestReconciliation } from "./scheduler/reconcileClosedPullRequests.ts";
 import { createReminderScheduler } from "./scheduler/reminders.ts";
 import { createApp } from "./server.ts";
 import { createWorker, startWorkerLoop } from "./worker/loop.ts";
@@ -130,11 +130,10 @@ function boot(): void {
   // Missed merge/close webhooks are caught by a daily in-process timer. There
   // is no cron library or platform scheduler; the reminder loop is a short
   // interval scan, so reconciliation keeps its own once-a-day timer.
-  const reconcileClosedPullRequests = createClosedPullRequestReconciliation({
-    handler: services.handler,
-    fetchSnapshot: createPullRequestSnapshotFetcher(auth, installationId, { logger }),
-    logger,
-  });
+  const reconcileClosedPullRequests = createClosedPullRequestReconciliation(
+    services.handler,
+    createPullRequestSnapshotFetcher(auth, installationId, { logger }),
+  );
   const workerLoop = startWorkerLoop(worker, 1000, logger);
   const reminderLoop = startReminderLoop(
     scheduler.processDue,

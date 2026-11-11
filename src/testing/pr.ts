@@ -25,7 +25,7 @@ function nextArrival(): ArrivalKey {
 /** The session source the handler table opens for a pull_request job. */
 function pullRequestSource(ev: PullRequestEvent, arrivalKey = nextArrival()): PrSource {
   const cause = { kind: "pull_request", action: ev.action, merged: ev.merged, arrivalKey } as const;
-  return { snapshot: ev.pr, cause };
+  return { kind: "snapshot", snapshot: ev.pr, cause };
 }
 
 /** Converge a pull_request job's channel, without the review step that follows it. */
@@ -45,5 +45,7 @@ export function inSession<D extends PrDeps, A extends unknown[]>(
   step: (deps: D, s: PrSession, ev: PullRequestEvent, ...rest: A) => Promise<void>,
 ): (deps: D, ev: PullRequestEvent, ...rest: A) => Promise<void> {
   return (deps, ev, ...rest) =>
-    session(deps, { snapshot: ev.pr, cause: { kind: "child" } }, (s) => step(deps, s, ev, ...rest));
+    session(deps, { kind: "snapshot", snapshot: ev.pr, cause: { kind: "child" } }, (s) =>
+      step(deps, s, ev, ...rest),
+    );
 }
