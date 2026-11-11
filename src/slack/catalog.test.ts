@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
+import type { PrId } from "#lib";
 import {
+  type EffectKey,
   type Message,
   cleanGithubMarkdown,
   extractEmbeddedImages,
+  keys,
   render,
   sanitizeMrkdwn,
 } from "./catalog.ts";
@@ -108,8 +111,12 @@ describe("GitHub body parsing on hostile input", () => {
     ["unclosed links", hostile("<a ")],
     ["unclosed tags", hostile("<b")],
     ["unclosed comments", hostile("<!--")],
+    ["comments closed only at the end", hostile("<!--", "-->")],
     ["unclosed sup blocks", hostile("<sup>")],
+    ["sup blocks closed only at the end", hostile("<sup>", "</sup>")],
     ["trailing spaces without a newline", hostile(" ", "x")],
+    ["a long run of spaces before a newline", hostile(" \t", "\n")],
+    ["spaces before every newline", hostile("  \n")],
     ["a URL ending in punctuation runs", `https://x/${hostile(")", "a")}`],
   ];
 
@@ -239,5 +246,34 @@ describe("render", () => {
     expect(review.blocks).toEqual([
       { type: "section", text: { type: "mrkdwn", text: "<https://r|✅ approved> by Flo" } },
     ]);
+  });
+});
+
+describe("effect keys", () => {
+  it("writes the kind and ref that existing messages rows dedupe on", () => {
+    const pr = "unkey/api#7" as PrId;
+    const written = {
+      root: keys.root(pr),
+      authorInvite: keys.authorInvite(pr, 100),
+      lifecycle: keys.lifecycle(pr, "closed", "merged", "abc", "2026-08-11T12:00:00Z"),
+      reviewComment: keys.reviewComment(pr, 11),
+      issueComment: keys.issueComment(pr, 12),
+      review: keys.review(pr, 13),
+      reviewRequest: keys.reviewRequest(pr, 7, 2),
+      reminder: keys.reminder(pr, 7, 2),
+      shipped: keys.shipped(pr),
+    } satisfies Record<keyof typeof keys, EffectKey>;
+
+    expect(written).toEqual({
+      root: { prId: pr, kind: "root", ref: "root" },
+      authorInvite: { prId: pr, kind: "author_invite", ref: "100" },
+      lifecycle: { prId: pr, kind: "lifecycle", ref: "closed:merged:abc:2026-08-11T12:00:00Z" },
+      reviewComment: { prId: pr, kind: "review_comment", ref: "11" },
+      issueComment: { prId: pr, kind: "issue_comment", ref: "12" },
+      review: { prId: pr, kind: "review", ref: "13" },
+      reviewRequest: { prId: pr, kind: "invite", ref: "7:2" },
+      reminder: { prId: pr, kind: "reminder", ref: "7:2" },
+      shipped: { prId: pr, kind: "shipped", ref: "shipped" },
+    });
   });
 });

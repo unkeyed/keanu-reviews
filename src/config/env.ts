@@ -35,7 +35,7 @@ const PublicUrlSchema = z
   })
   .transform((value) => new URL(value).origin);
 
-const ConfigSchema = z
+export const ConfigSchema = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
     PORT: z.coerce.number().int().positive().default(3000),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ConfigError, SECRET_KEYS, loadConfig } from "./env.ts";
+import { ConfigError, ConfigSchema, SECRET_KEYS, loadConfig } from "./env.ts";
 
 const validEnv = (): NodeJS.ProcessEnv => ({
   GITHUB_APP_ID: "123456",
@@ -82,13 +82,13 @@ describe("loadConfig", () => {
   });
 
   it("enumerates every secret key so the logger can redact them", () => {
-    expect(SECRET_KEYS).toContain("GITHUB_APP_PRIVATE_KEY");
-    expect(SECRET_KEYS).toContain("SLACK_BOT_TOKEN");
-    expect(SECRET_KEYS).toContain("SLACK_SIGNING_SECRET");
-    expect(SECRET_KEYS).toContain("GITHUB_OAUTH_CLIENT_SECRET");
-    expect(SECRET_KEYS).toContain("OAUTH_STATE_SECRET");
-    expect(SECRET_KEYS).toContain("SLACK_OAUTH_CLIENT_SECRET");
-    expect(SECRET_KEYS).toContain("SLACK_USER_TOKEN_ENC_KEY");
+    const secretLike = Object.keys(ConfigSchema.shape).filter((key) =>
+      /SECRET|TOKEN|PRIVATE_KEY|ENC_KEY|DATABASE_URL/.test(key),
+    );
+    expect(secretLike.length).toBeGreaterThan(0);
+    expect(secretLike.filter((key) => !(SECRET_KEYS as readonly string[]).includes(key))).toEqual(
+      [],
+    );
   });
 
   const ENC_KEY = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";

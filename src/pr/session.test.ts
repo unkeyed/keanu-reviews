@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { reconcileArrivalKey } from "#events";
+import { jobArrivalKey, reconcileArrivalKey } from "#events";
 import { upsertIdentity } from "#identity";
 import { type ArrivalKey, Retry, createLogger } from "#lib";
 import { scheduleReminder } from "#reminders";
@@ -727,6 +727,27 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
     const row = await findByRepoNumber(db, "unkey/api", 1423);
     expect(row?.currentState).toBe("pr");
     expect(row?.sourceArrivalKey).toBe("2026-08-11T12:00:02Z:b");
+  });
+
+  it("orders a reconcile snapshot after any job that saw the same updated_at", async () => {
+    const updatedAt = new Date("2026-08-11T12:00:00Z");
+    const reconciledAt = new Date("2026-08-12T08:00:00Z");
+    const apply = (currentState: "pr" | "merged", sourceArrivalKey: ArrivalKey) =>
+      applyPullRequestSource(db, {
+        repoFullName: "unkey/api",
+        number: 1423,
+        githubPrId: 999,
+        currentState,
+        sourceUpdatedAt: updatedAt,
+        sourceArrivalKey,
+      });
+
+    await apply("pr", jobArrivalKey(new Date("2026-08-12T09:00:00Z"), "zzz"));
+    expect((await apply("merged", reconcileArrivalKey(reconciledAt))).sourceAccepted).toBe(true);
+    expect(
+      (await apply("pr", jobArrivalKey(new Date("2026-08-13T00:00:00Z"), "zzz"))).sourceAccepted,
+    ).toBe(false);
+    expect((await findByRepoNumber(db, "unkey/api", 1423))?.currentState).toBe("merged");
   });
 
   it("queues a second worker on the same PR in this process behind the first", async () => {
