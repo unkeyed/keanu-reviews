@@ -175,6 +175,9 @@ export class FakeSlackGateway implements SlackGateway {
     }
     const posted = this.messages.find((m) => m.ts === ts && m.channel === channel);
     if (!posted) throw fail("chat.update", "message_not_found");
+    // Slack lets only the token that posted a message edit it.
+    if (posted.authorUserToken !== authorUserToken)
+      throw fail("chat.update", "cant_update_message");
     this.updates.push({ channel, ts, ...msg, authorUserToken });
     posted.text = msg.text;
     posted.blocks = msg.blocks;
@@ -185,6 +188,9 @@ export class FakeSlackGateway implements SlackGateway {
     }
     const idx = this.messages.findIndex((m) => m.ts === ts && m.channel === channel);
     if (idx === -1) throw fail("chat.delete", "message_not_found");
+    if (this.messages[idx]?.authorUserToken !== authorUserToken) {
+      throw fail("chat.delete", "cant_delete_message");
+    }
     this.deletes.push({ channel, ts, authorUserToken });
     this.messages.splice(idx, 1);
   }

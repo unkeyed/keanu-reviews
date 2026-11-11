@@ -1,5 +1,5 @@
 import type { Logger } from "#lib";
-import { type ChannelSink, type Message, type SlackGateway, render } from "#slack";
+import { type ChannelSink, type Message, SlackApiError, type SlackGateway, render } from "#slack";
 
 /**
  * The writer for one PR's channel: posts, edits, deletes and invites. Healing
@@ -8,7 +8,11 @@ import { type ChannelSink, type Message, type SlackGateway, render } from "#slac
  * #shipped post included, so it has one owner.
  */
 export interface PrChannel extends ChannelSink {
-  /** Slack only lets a message be edited or deleted with the token that posted it. */
+  /**
+   * Slack only lets a message be edited or deleted with the token that posted
+   * it. The author's token is tried first; when Slack refuses it, the bot
+   * posted the message before the author linked, so the bot tries once.
+   */
   update(ts: string, message: Message, userToken?: string): Promise<void>;
   remove(ts: string, userToken?: string): Promise<void>;
   /**
@@ -27,8 +31,12 @@ export function prChannel(
   return {
     channel,
     post: (msg, opts) => slack.post(channel, msg, opts),
-    update: (ts, message, userToken) => slack.update(channel, ts, render(message), userToken),
-    remove: (ts, userToken) => slack.remove(channel, ts, userToken),
+    update: (ts, message, userToken) =>
+      thenBot(userToken, "cant_update_message", (token) =>
+        slack.update(channel, ts, render(message), token),
+      ),
+    remove: (ts, userToken) =>
+      thenBot(userToken, "cant_delete_message", (token) => slack.remove(channel, ts, token)),
     async invite(userIds, context) {
       for (const refused of await slack.invite(channel, userIds)) {
         logger.warn("Slack refused to invite user into channel", {
@@ -40,4 +48,17 @@ export function prChannel(
       }
     },
   };
+}
+
+async function thenBot(
+  userToken: string | undefined,
+  refusal: string,
+  op: (userToken: string | undefined) => Promise<void>,
+): Promise<void> {
+  try {
+    await op(userToken);
+  } catch (error) {
+    if (!userToken || !(error instanceof SlackApiError) || error.code !== refusal) throw error;
+    await op(undefined);
+  }
 }

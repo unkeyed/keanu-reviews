@@ -267,6 +267,41 @@ describe("onReviewComment (U6)", () => {
     expect(slack.updates[0]?.authorUserToken).toBe("xoxp-flo"); // edited as the user
   });
 
+  describe("after the author links a token to a comment the bot posted (B5)", () => {
+    const postAsBotThenLink = async () => {
+      await seedChannel();
+      await onReviewComment(deps(), reviewCommentEvent(payload({ body: "v1" })));
+      await upsertIdentity(db, {
+        githubUserId: 7,
+        githubLogin: "flo",
+        slackUserId: "U7",
+        source: "self-link",
+      });
+      return {
+        ...deps(),
+        authorPoster: { getUserToken: async () => "xoxp-flo", onInvalidToken: async () => {} },
+      };
+    };
+
+    it("applies the edit with the bot once Slack refuses the user's token", async () => {
+      const linked = await postAsBotThenLink();
+      await onReviewComment(
+        linked,
+        reviewCommentEvent({ ...payload({ body: "v2" }), action: "edited" }),
+      );
+      expect(slack.updates).toHaveLength(1);
+      expect(slack.updates[0]?.authorUserToken).toBeUndefined();
+      expect(JSON.stringify(slack.messages[0]?.blocks)).toContain("v2");
+    });
+
+    it("deletes with the bot once Slack refuses the user's token", async () => {
+      const linked = await postAsBotThenLink();
+      await onReviewComment(linked, reviewCommentEvent({ ...payload(), action: "deleted" }));
+      expect(slack.deletes).toHaveLength(1);
+      expect(slack.messages).toHaveLength(0);
+    });
+  });
+
   it("removes the mirrored Slack message when the comment is deleted", async () => {
     await seedChannel();
     await onReviewComment(deps(), reviewCommentEvent(payload()));
