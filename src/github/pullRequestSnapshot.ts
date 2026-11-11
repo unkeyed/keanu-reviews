@@ -1,25 +1,13 @@
 import type { GithubActor, PrSnapshot } from "#events";
-import type { Logger } from "#lib";
 import type { InstallationAuth } from "./auth.ts";
 import {
   GithubApiError,
   type GithubRequestOptions,
   encodedRepoPath,
   githubRequest,
+  headerNumber,
+  rateLimitOf,
 } from "./http.ts";
-
-/** A GitHub rate limit we will not wait out. The reconciliation run stops cleanly. */
-export class GithubRateLimitExhaustedError extends Error {
-  readonly retryAfterMs?: number;
-  readonly resetAtMs?: number;
-
-  constructor(message: string, details: { retryAfterMs?: number; resetAtMs?: number } = {}) {
-    super(message);
-    this.name = "GithubRateLimitExhaustedError";
-    this.retryAfterMs = details.retryAfterMs;
-    this.resetAtMs = details.resetAtMs;
-  }
-}
 
 /** Pull request facts the reconciliation job needs to replay a close or merge. */
 export interface PullRequestSnapshot {
@@ -66,57 +54,6 @@ export type PullRequestSnapshotFetcher = (
   repoFullName: string,
   number: number,
 ) => Promise<PullRequestSnapshotFetch>;
-
-export interface PullRequestSnapshotFetcherOptions extends GithubRequestOptions {
-  logger?: Logger;
-}
-
-/**
- * Wait at most this long for a single Retry-After or rate-limit reset. Two
- * minutes: long enough to honor a short Retry-After, short enough to stop a daily run.
- */
-const MAX_BACKOFF_MS = 120_000;
-/** How many times to back off and retry one PR before stopping the run. */
-const MAX_RATE_LIMIT_RETRIES = 3;
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-interface RateLimitHeaders {
-  remaining?: number;
-  resetEpochSec?: number;
-  retryAfterSec?: number;
-}
-
-function headerNumber(headers: Headers, name: string): number | undefined {
-  const raw = headers.get(name)?.trim();
-  if (!raw) return undefined;
-  const value = Number(raw);
-  if (!Number.isFinite(value) || value < 0) return undefined;
-  return value;
-}
-
-function readRateLimit(headers: Headers): RateLimitHeaders {
-  return {
-    remaining: headerNumber(headers, "x-ratelimit-remaining"),
-    resetEpochSec: headerNumber(headers, "x-ratelimit-reset"),
-    retryAfterSec: headerNumber(headers, "retry-after"),
-  };
-}
-
-function backoffMs(limit: RateLimitHeaders, nowMs: number): number | undefined {
-  if (limit.retryAfterSec !== undefined) return Math.ceil(limit.retryAfterSec * 1000);
-  if (limit.remaining === 0 && limit.resetEpochSec !== undefined) {
-    return Math.max(0, Math.ceil(limit.resetEpochSec * 1000 - nowMs));
-  }
-  return undefined;
-}
-
-function isRateLimited(status: number, limit: RateLimitHeaders, body: string): boolean {
-  if (status === 429) return true;
-  if (status !== 403) return false;
-  if (limit.retryAfterSec !== undefined || limit.remaining === 0) return true;
-  return /rate limit/i.test(body);
-}
 
 function invalidResponse(path: string): GithubApiError {
   return new GithubApiError("GitHub API returned an unexpected pull request", {
@@ -169,74 +106,43 @@ function parseSnapshot(body: unknown, path: string, expectedNumber: number): Pul
 }
 
 /**
- * Read one PR from GitHub, honoring primary and secondary rate limits.
- * Backs off on Retry-After (or the reset time when remaining is 0) up to a cap,
- * then throws {@link GithubRateLimitExhaustedError} so the caller can stop.
- * Calls are independent — remaining is reported, not remembered — so a later run
- * starts fresh after the limit window resets.
+ * Read one PR from GitHub. A rate limit throws `RateLimited` at once with
+ * GitHub's wait: a job retries at the reset, and the daily reconcile decides
+ * itself whether to wait or stop.
  */
 export function createPullRequestSnapshotFetcher(
   auth: InstallationAuth,
   installationId: string,
-  options: PullRequestSnapshotFetcherOptions = {},
+  options: GithubRequestOptions = {},
 ): PullRequestSnapshotFetcher {
   return async (repoFullName, number) => {
     const path = `/repos/${encodedRepoPath(repoFullName)}/pulls/${number}`;
-    let rateLimitRetries = 0;
-
-    for (;;) {
-      const response = await githubRequest(auth, installationId, path, options);
-      const limit = readRateLimit(response.headers);
-      const text = await response.text();
-
-      if (isRateLimited(response.status, limit, text)) {
-        const waitMs = backoffMs(limit, Date.now());
-        const resetAtMs =
-          limit.resetEpochSec !== undefined ? limit.resetEpochSec * 1000 : undefined;
-        const withinBudget =
-          waitMs !== undefined &&
-          waitMs <= MAX_BACKOFF_MS &&
-          rateLimitRetries < MAX_RATE_LIMIT_RETRIES;
-        if (!withinBudget) {
-          throw new GithubRateLimitExhaustedError(
-            waitMs === undefined
-              ? "GitHub rate limit exceeded and no retry delay was provided"
-              : `GitHub rate limit exceeded; retry after ${waitMs}ms is outside the backoff budget`,
-            { retryAfterMs: waitMs, resetAtMs },
-          );
-        }
-        rateLimitRetries += 1;
-        options.logger?.info("GitHub rate limit backoff", {
-          repoFullName,
-          number,
-          waitMs,
-          attempt: rateLimitRetries,
-        });
-        await sleep(waitMs);
-        continue;
-      }
-
-      if (response.status === 404) return { snapshot: undefined, remaining: limit.remaining };
-      if (!response.ok) {
-        throw new GithubApiError(`GitHub API returned HTTP ${response.status}`, {
-          kind: "http",
-          status: response.status,
-          url: `https://api.github.com${path}`,
-        });
-      }
-
-      let body: unknown;
-      try {
-        body = text ? JSON.parse(text) : undefined;
-      } catch (cause) {
-        throw new GithubApiError("GitHub API returned invalid JSON", {
-          kind: "invalid_response",
-          status: response.status,
-          url: `https://api.github.com${path}`,
-          cause,
-        });
-      }
-      return { snapshot: parseSnapshot(body, path, number), remaining: limit.remaining };
+    const url = `https://api.github.com${path}`;
+    const response = await githubRequest(auth, installationId, path, options);
+    const text = await response.text();
+    const rateLimit = rateLimitOf(response, url, text);
+    if (rateLimit) throw rateLimit;
+    const fetched = { remaining: headerNumber(response.headers, "x-ratelimit-remaining") };
+    if (response.status === 404) return { ...fetched, snapshot: undefined };
+    if (!response.ok) {
+      throw new GithubApiError(`GitHub API returned HTTP ${response.status}`, {
+        kind: "http",
+        status: response.status,
+        url,
+      });
     }
+
+    let body: unknown;
+    try {
+      body = text ? JSON.parse(text) : undefined;
+    } catch (cause) {
+      throw new GithubApiError("GitHub API returned invalid JSON", {
+        kind: "invalid_response",
+        status: response.status,
+        url,
+        cause,
+      });
+    }
+    return { ...fetched, snapshot: parseSnapshot(body, path, number) };
   };
 }

@@ -1,11 +1,6 @@
 import { isTerminal, reconcileArrivalKey } from "#events";
-import {
-  GithubRateLimitExhaustedError,
-  type PullRequestSnapshot,
-  type PullRequestSnapshotFetcher,
-  toPrSnapshot,
-} from "#github";
-import { errMessage } from "#lib";
+import { type PullRequestSnapshot, type PullRequestSnapshotFetcher, toPrSnapshot } from "#github";
+import { RateLimited, errMessage } from "#lib";
 import type { PrDeps } from "./converge.ts";
 import { PullRequestLifecycleBusyError, session } from "./session.ts";
 import {
@@ -45,6 +40,14 @@ export interface ReconciliationSummary {
  * checked, since channel drift happens from writes clustered around the merge.
  */
 const RE_ARCHIVE_WINDOW_MS = 7 * 24 * 60 * 60_000;
+
+/**
+ * Wait at most this long for one rate-limit reset, at most this many times per
+ * PR. Long enough to honor a short Retry-After; short enough to stop a daily
+ * run, which is not a job and so has no retry of its own.
+ */
+const MAX_BACKOFF_MS = 120_000;
+const MAX_RATE_LIMIT_RETRIES = 3;
 
 const ZERO: ReconciliationSummary = {
   checked: 0,
@@ -125,9 +128,9 @@ async function reconcile(
 
     let fetched: Awaited<ReturnType<PullRequestSnapshotFetcher>>;
     try {
-      fetched = await fetchSnapshot(row.repoFullName, row.number);
+      fetched = await fetchWaitingOutShortLimits(deps, fetchSnapshot, row);
     } catch (error) {
-      if (error instanceof GithubRateLimitExhaustedError) {
+      if (error instanceof RateLimited) {
         result.rateLimited = true;
         logger.warn("pull request reconciliation stopped; GitHub rate limit exhausted", {
           ...fields,
@@ -178,6 +181,30 @@ async function reconcile(
 
   logger.info("pull request reconciliation finished", { ...result });
   return result;
+}
+
+async function fetchWaitingOutShortLimits(
+  deps: PrDeps,
+  fetchSnapshot: PullRequestSnapshotFetcher,
+  row: PrRow,
+): ReturnType<PullRequestSnapshotFetcher> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fetchSnapshot(row.repoFullName, row.number);
+    } catch (error) {
+      const waitMs = error instanceof RateLimited ? error.retryAfterMs : undefined;
+      if (waitMs === undefined || waitMs > MAX_BACKOFF_MS || attempt > MAX_RATE_LIMIT_RETRIES) {
+        throw error;
+      }
+      deps.logger.info("GitHub rate limit backoff", {
+        repoFullName: row.repoFullName,
+        number: row.number,
+        waitMs,
+        attempt,
+      });
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
 }
 
 /**

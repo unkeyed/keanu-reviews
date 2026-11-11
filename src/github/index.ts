@@ -15,7 +15,6 @@ export {
   type ReviewApprovalFetcher,
 } from "./users.ts";
 export {
-  GithubRateLimitExhaustedError,
   createPullRequestSnapshotFetcher,
   type PullRequestSnapshot,
   type PullRequestSnapshotFetcher,

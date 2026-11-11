@@ -40,6 +40,8 @@ export function createInstallationAuth(
   now: () => number = Date.now,
 ): InstallationAuth {
   const cache = new Map<string, MintedToken>();
+  // Concurrent callers share one mint instead of each spending a JWT exchange.
+  const minting = new Map<string, Promise<MintedToken>>();
 
   return {
     async getToken(installationId) {
@@ -47,9 +49,17 @@ export function createInstallationAuth(
       const fresh = cached && cached.expiresAt.getTime() - REFRESH_SKEW_MS > now();
       if (fresh && cached) return cached.token;
 
-      const minted = await mintWithTimeout(mint, installationId);
-      cache.set(installationId, minted);
-      return minted.token;
+      let pending = minting.get(installationId);
+      if (!pending) {
+        pending = mintWithTimeout(mint, installationId)
+          .then((minted) => {
+            cache.set(installationId, minted);
+            return minted;
+          })
+          .finally(() => minting.delete(installationId));
+        minting.set(installationId, pending);
+      }
+      return (await pending).token;
     },
     invalidate(installationId) {
       cache.delete(installationId);

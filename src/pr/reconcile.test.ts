@@ -431,7 +431,7 @@ describe("closed pull request reconciliation", () => {
     const auth: InstallationAuth = { getToken: async () => "token", invalidate: () => {} };
     const run = createClosedPullRequestReconciliation(
       deps,
-      createPullRequestSnapshotFetcher(auth, "42", { fetch: fetchFn, logger: deps.logger }),
+      createPullRequestSnapshotFetcher(auth, "42", { fetch: fetchFn }),
     );
 
     vi.useFakeTimers({ toFake: ["setTimeout"] });

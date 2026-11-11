@@ -92,7 +92,7 @@ export function createContext(config: Config): AppContext {
   const userTokens =
     slackOAuth && userTokenAccess({ db, slack, logger, teamId, cipher: slackOAuth.cipher });
 
-  const fetchSnapshot = createPullRequestSnapshotFetcher(auth, installationId, { logger });
+  const fetchSnapshot = createPullRequestSnapshotFetcher(auth, installationId);
   const deps: HandlerDeps = {
     db,
     slack,

@@ -1,5 +1,5 @@
 import type { Db, JobRow } from "#db";
-import { type Logger, type Loop, Permanent, Retry, errMessage, every } from "#lib";
+import { type Logger, type Loop, Permanent, RateLimited, Retry, errMessage, every } from "#lib";
 import {
   LEASE_MS,
   claimNextJob,
@@ -15,6 +15,9 @@ export const MAX_ATTEMPTS = 8;
 const RETRY_BASE_MS = 2_000;
 // Lease errors can ask for the full 5-minute PR lifecycle lease. Nothing waits longer.
 const MAX_RETRY_DELAY_MS = 5 * 60_000;
+// GitHub's hourly quota can reset most of an hour out; retry at the reset, but
+// check back at least every 15 minutes.
+const MAX_RATE_LIMIT_DELAY_MS = 15 * 60_000;
 const RENEW_EVERY_MS = LEASE_MS / 3;
 
 /**
@@ -119,7 +122,8 @@ export function createWorker(db: Db, logger: Logger, dispatch: Dispatch) {
     const willRetry = job.attempts < MAX_ATTEMPTS;
     const backoffMs = RETRY_BASE_MS * 2 ** Math.max(0, job.attempts - 1);
     const retryAfterMs = error instanceof Retry ? (error.retryAfterMs ?? 0) : 0;
-    const retryDelay = Math.min(MAX_RETRY_DELAY_MS, Math.max(backoffMs, retryAfterMs));
+    const maxDelayMs = error instanceof RateLimited ? MAX_RATE_LIMIT_DELAY_MS : MAX_RETRY_DELAY_MS;
+    const retryDelay = Math.min(maxDelayMs, Math.max(backoffMs, retryAfterMs));
     if (error instanceof Retry) {
       // Expected transient condition (e.g. out-of-order delivery). Retry
       // quietly; only escalate to warn once it stops being transient.

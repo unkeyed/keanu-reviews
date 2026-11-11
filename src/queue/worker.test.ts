@@ -6,6 +6,7 @@ import { type Logger, Retry, createLogger } from "#lib";
 import type { Db } from "../db/client.ts";
 import { jobs } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
+import { createGithubEmailFetcher } from "../github/users.ts";
 import { applyPullRequestSource, claimPullRequestLifecycle, prId } from "../pr/store.ts";
 import { keys } from "../slack/catalog.ts";
 import { channelSink, claim, createLedger } from "../slack/ledger.ts";
@@ -162,6 +163,37 @@ describe("worker retry hints", () => {
 
     expect(await availableAt(short.id)).toEqual({ status: "pending", at: clock + 90_000 });
     expect(await availableAt(long.id)).toEqual({ status: "pending", at: clock + 300_000 });
+  });
+
+  it("waits up to fifteen minutes for a GitHub rate-limit reset", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const soon = await enqueue("rate-limit-soon");
+    const later = await enqueue("rate-limit-later");
+    const clock = Date.now();
+    const resetIn = (job: JobRow) => (job.id === soon.id ? 12 * 60_000 : 60 * 60_000);
+    const auth = { getToken: async () => "token", invalidate: () => {} };
+    const worker = createWorker(db, quiet(), async (job) => {
+      const reset = Math.ceil((Date.now() + resetIn(job)) / 1000);
+      const fetchEmail = createGithubEmailFetcher(auth, "42", {
+        fetch: async () =>
+          Response.json(
+            { message: "API rate limit exceeded" },
+            {
+              status: 403,
+              headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(reset) },
+            },
+          ),
+      });
+      await fetchEmail("oz");
+    });
+
+    await drainQueue(worker);
+
+    const soonAt = (await availableAt(soon.id)).at ?? 0;
+    expect(soonAt - clock).toBeGreaterThanOrEqual(12 * 60_000);
+    expect(soonAt - clock).toBeLessThan(12 * 60_000 + 1_000);
+    expect(await availableAt(later.id)).toMatchObject({ status: "pending" });
+    expect(((await availableAt(later.id)).at ?? 0) - clock).toBe(15 * 60_000);
   });
 
   it("delivers a Slack effect once a crashed holder's lease lifts", async () => {

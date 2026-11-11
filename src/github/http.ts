@@ -1,3 +1,4 @@
+import { RateLimited } from "#lib";
 import type { InstallationAuth } from "./auth.ts";
 
 const GITHUB_API_BASE = "https://api.github.com";
@@ -38,6 +39,44 @@ export class GithubApiError extends Error {
     this.status = options.status;
     this.url = options.url;
   }
+}
+
+/** A non-negative numeric header, or undefined when absent or malformed. */
+export function headerNumber(headers: Headers, name: string): number | undefined {
+  const raw = headers.get(name)?.trim();
+  if (!raw) return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * A 403 or 429 that is a GitHub rate limit, as a retry at the time GitHub
+ * names: `retry-after` for a secondary limit, or `x-ratelimit-reset` once
+ * `x-ratelimit-remaining` hits 0. Pass the body when it was read, since a
+ * secondary limit can say so only there.
+ */
+export function rateLimitOf(
+  response: Response,
+  url: string,
+  body?: string,
+): RateLimited | undefined {
+  const { status, headers } = response;
+  if (status !== 403 && status !== 429) return undefined;
+  const retryAfterSec = headerNumber(headers, "retry-after");
+  const remaining = headerNumber(headers, "x-ratelimit-remaining");
+  const resetSec = headerNumber(headers, "x-ratelimit-reset");
+  const limited =
+    retryAfterSec !== undefined ||
+    remaining === 0 ||
+    (body !== undefined && /rate limit/i.test(body));
+  if (!limited) return undefined;
+  const retryAfterMs =
+    retryAfterSec !== undefined
+      ? Math.ceil(retryAfterSec * 1000)
+      : remaining === 0 && resetSec !== undefined
+        ? Math.max(0, Math.ceil(resetSec * 1000 - Date.now()))
+        : undefined;
+  return new RateLimited(`GitHub rate limit exceeded (HTTP ${status})`, { url }, retryAfterMs);
 }
 
 /** `owner/repo` as a URL path, each segment encoded and the separator kept. */
@@ -126,6 +165,11 @@ export async function githubGetJson<T>(
     await response.body?.cancel();
     return undefined;
   }
+  const rateLimit = rateLimitOf(response, url);
+  if (rateLimit) {
+    await response.body?.cancel();
+    throw rateLimit;
+  }
   if (!response.ok) {
     await response.body?.cancel();
     throw new GithubApiError(`GitHub API returned HTTP ${response.status}`, {
@@ -177,6 +221,8 @@ export async function githubPostJson(
   });
   await response.body?.cancel();
 
+  const rateLimit = rateLimitOf(response, url);
+  if (rateLimit) throw rateLimit;
   if (!response.ok) {
     const hint =
       response.status === 403

@@ -18,6 +18,18 @@ export class Retry extends Error {
 }
 
 /**
+ * An upstream API's rate limit. `retryAfterMs` is when the limit resets, which
+ * can be most of an hour away, so the worker waits longer for it than for any
+ * other retry.
+ */
+export class RateLimited extends Retry {
+  constructor(message: string, details?: Record<string, unknown>, retryAfterMs?: number) {
+    super(message, details, retryAfterMs);
+    this.name = "RateLimited";
+  }
+}
+
+/**
  * A job that can never succeed, such as a payload missing a field a handler
  * reads. The worker fails it at once instead of retrying the same bytes.
  */
