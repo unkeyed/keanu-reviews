@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { findByGithubId, upsertIdentity } from "#identity";
+import { upsertIdentity } from "#identity";
 import { findAllByRepoHeadSha, findAllByRepoNumbers, findByRepoNumber } from "#pr";
 import {
   claimNextJob,
@@ -16,6 +16,7 @@ import {
   listDueWithContext,
   scheduleReminder,
 } from "#reminders";
+import { findByGithubId } from "../identity/store.ts";
 import {
   applyPullRequestSource,
   claimPullRequestLifecycle,

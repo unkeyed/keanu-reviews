@@ -7,7 +7,6 @@ export {
 export { displayName, resolveSlackUser } from "./resolve.ts";
 export {
   deleteSlackUserToken,
-  findByGithubId,
   findSlackUsersByGithubLogins,
   getSlackUserTokenRow,
   getSlackUserTokenRows,

@@ -56,11 +56,6 @@ describe("effect identity", () => {
     expect(keys.issueComment(PR, 56)).toEqual({ prId: PR, kind: "issue_comment", ref: "56" });
     expect(keys.review(PR, 77)).toEqual({ prId: PR, kind: "review", ref: "77" });
     expect(keys.reviewRequest(PR, 7, 2)).toEqual({ prId: PR, kind: "invite", ref: "7:2" });
-    expect(keys.reviewRequest(PR, 7, "2026:x")).toEqual({
-      prId: PR,
-      kind: "invite",
-      ref: "7:2026:x",
-    });
     expect(keys.reminder(PR, 7, 3)).toEqual({ prId: PR, kind: "reminder", ref: "7:3" });
     expect(keys.shipped(PR)).toEqual({ prId: PR, kind: "shipped", ref: "shipped" });
   });

@@ -286,12 +286,6 @@ const TABLE_READERS: Record<string, string> = {
  * must still match a violation, so the list can only shrink.
  */
 const PENDING: readonly { files: string; rule: string; slice: string }[] = [
-  // S5: reviews/ replaces review alerts, CI release and the reminder scan.
-  { files: "handlers/reviewRequest.ts", rule: "not in a layered module", slice: "S5" },
-  { files: "handlers/checks.ts", rule: "not in a layered module", slice: "S5" },
-  { files: "app/handlers.ts", rule: "(../handlers/reviewRequest.ts)", slice: "S5" },
-  { files: "app/handlers.ts", rule: "(../handlers/checks.ts)", slice: "S5" },
-  { files: "scheduler/reminders.ts", rule: "not in a layered module", slice: "S5" },
   // S6: queue worker, app context and HTTP, main.ts and the admin CLIs.
   { files: "handlers/deps.ts", rule: "not in a layered module", slice: "S6" },
   { files: "worker/loop.ts", rule: "not in a layered module", slice: "S6" },

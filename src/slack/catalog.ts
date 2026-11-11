@@ -225,11 +225,11 @@ export const keys = {
     kind: "review",
     ref: String(reviewId),
   }),
-  /** `round` is the reminder generation, or the source version when no reminder row exists. */
-  reviewRequest: (prId: PrId, reviewerGithubId: number, round: number | string): EffectKey => ({
+  /** One review-request alert per reminder generation. */
+  reviewRequest: (prId: PrId, reviewerGithubId: number, generation: number): EffectKey => ({
     prId,
     kind: "invite",
-    ref: `${reviewerGithubId}:${round}`,
+    ref: `${reviewerGithubId}:${generation}`,
   }),
   reminder: (prId: PrId, reviewerGithubId: number, generation: number): EffectKey => ({
     prId,

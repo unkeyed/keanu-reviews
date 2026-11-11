@@ -10,7 +10,7 @@ import {
 } from "#github";
 import { createGithubOAuthRoute, createSlackCommandRoute } from "#identity";
 import { createGithubWebhookRoute } from "#ingest";
-import { createLogger, errMessage, registerSecrets, systemClock } from "#lib";
+import { createLogger, errMessage, registerSecrets } from "#lib";
 import { createClosedPullRequestReconciliation } from "#pr";
 import { pruneJobHistory } from "#queue";
 import { scanDue } from "#reviews";
@@ -18,7 +18,6 @@ import { createSlackGateway } from "#slack";
 import { createServiceHandlers } from "./handlers/deps.ts";
 import { DAILY_RECONCILE_HOUR_UTC, startDailyLoop } from "./scheduler/dailyLoop.ts";
 import { startReminderLoop } from "./scheduler/loop.ts";
-import { createReminderScheduler } from "./scheduler/reminders.ts";
 import { createApp } from "./server.ts";
 import { createWorker, startWorkerLoop } from "./worker/loop.ts";
 
@@ -53,35 +52,8 @@ function boot(): void {
   const installationId = config.GITHUB_INSTALLATION_ID;
   const services = createServiceHandlers({ config, db, slack, logger, auth });
 
-  // Scheduler + dispatcher + worker
-  const scheduler = createReminderScheduler({
-    db,
-    slack,
-    logger,
-    reminderHours: config.REMINDER_HOURS,
-  });
-  const reviewDeps = {
-    ...services.handler,
-    clock: systemClock,
-    fetchCiReadiness: services.fetchCiReadiness,
-    fetchPullRequest: services.fetchPullRequest,
-    fetchApprovalCount: services.fetchApprovalCount,
-    reminderHours: config.REMINDER_HOURS,
-    reminderWindow: {
-      startHour: config.REMINDER_WINDOW_START_HOUR,
-      endHour: config.REMINDER_WINDOW_END_HOUR,
-      timeZone: config.REMINDER_WINDOW_TZ,
-    },
-    suppressApprovals: config.REMINDER_SUPPRESS_APPROVALS,
-  };
-  const dispatch = createDispatcher({
-    ...services.handler,
-    fetchPrForSha: services.fetchPrForSha,
-    onReviewRequested: scheduler.onReviewRequested,
-    onReviewSubmitted: scheduler.onReviewSubmitted,
-    onReviewRequestRemoved: scheduler.onReviewRequestRemoved,
-    onReviewAlerted: scheduler.onReviewAlerted,
-  });
+  // Dispatcher + worker
+  const dispatch = createDispatcher(services.handler);
   const worker = createWorker({ db, logger, dispatch });
 
   // Routes
@@ -139,7 +111,7 @@ function boot(): void {
   );
   const workerLoop = startWorkerLoop(worker, 1000, logger);
   const reminderLoop = startReminderLoop(
-    () => scanDue(reviewDeps),
+    () => scanDue(services.handler),
     config.REMINDER_SCAN_INTERVAL_MS,
     logger,
   );

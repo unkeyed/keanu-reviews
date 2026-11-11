@@ -1,1 +1,1 @@
-export { createDispatcher, handlers } from "./handlers.ts";
+export { type HandlerDeps, createDispatcher, handlers } from "./handlers.ts";

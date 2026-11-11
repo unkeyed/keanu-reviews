@@ -1,18 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseEvent } from "#events";
+import type { HandlerDeps } from "#app";
+import { type CheckRunEvent, jobArrivalKey, parseEvent } from "#events";
 import { upsertIdentity } from "#identity";
-import { createLogger } from "#lib";
 import type { Db } from "../db/client.ts";
 import { createTestDb } from "../db/testDb.ts";
 import type { CiReadiness } from "../github/ci.ts";
 import { applyPullRequestSource, setChannel } from "../pr/store.ts";
+import { handlerDeps } from "../testing/deps.ts";
 import { type CheckRunPayload, checkRunEvent, pullRequestEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { inSession, setPrState } from "../testing/pr.ts";
-import { type ChecksDeps, handleCheckRun } from "./checks.ts";
-import { handleReviewRequest as handleReviewRequestStep } from "./reviewRequest.ts";
+import { onPullRequest } from "./alerts.ts";
+import { onCheckRun } from "./checks.ts";
 
-const handleReviewRequest = inSession(handleReviewRequestStep);
+const onPr = inSession(onPullRequest);
+let jobs = 0;
+const work = () => ({
+  arrivalKey: jobArrivalKey(new Date(0), `job-${String(++jobs).padStart(4, "0")}`),
+  attempt: 1,
+});
+const handleCheckRun = (deps: HandlerDeps, ev: CheckRunEvent) => onCheckRun(deps, ev, work());
+const handleReviewRequest = (deps: HandlerDeps, ev: Parameters<typeof onPr>[1]) =>
+  onPr(deps, ev, work());
 
 let db: Db;
 let slack: FakeSlackGateway;
@@ -28,18 +37,16 @@ beforeEach(async () => {
 });
 afterEach(() => close());
 
-const deps = (over: Partial<ChecksDeps> = {}): ChecksDeps => ({
-  db,
-  slack,
-  logger: createLogger("error"),
-  fetchCiReadiness: async () => ci,
-  fetchPullRequest: async (_repo, number) => ({
-    mergeableState: "blocked",
-    draft: false,
-    requestedReviewers: number === 2 ? [{ id: 8, login: "ada" }] : [{ id: 7, login: "flo" }],
-  }),
-  ...over,
-});
+const deps = (over: Partial<HandlerDeps> = {}) =>
+  handlerDeps(db, slack, {
+    fetchCiReadiness: async () => ci,
+    fetchPullRequest: async (_repo, number) => ({
+      mergeableState: "blocked",
+      draft: false,
+      requestedReviewers: number === 2 ? [{ id: 8, login: "ada" }] : [{ id: 7, login: "flo" }],
+    }),
+    ...over,
+  });
 
 const seedPr = async (
   headSha: string,
@@ -211,7 +218,6 @@ describe("CI events release review alerts", () => {
         },
         requested_reviewer: { id: 7, login: "flo" },
       }),
-      "delivery-1",
     );
     ci = "passing";
     await handleCheckRun(deps(), checkRunEvent(payload({ head_sha: "sha-1" })));

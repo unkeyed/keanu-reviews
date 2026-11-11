@@ -5,7 +5,7 @@ import { createLogger } from "#lib";
 import type { Db } from "./db/client.ts";
 import { createTestDb } from "./db/testDb.ts";
 import { createGithubWebhookRoute } from "./ingest/webhook.ts";
-import { createReminderScheduler } from "./scheduler/reminders.ts";
+import { handlerDeps } from "./testing/deps.ts";
 import { FakeSlackGateway } from "./testing/fakeSlack.ts";
 import { createWorker } from "./worker/loop.ts";
 
@@ -30,16 +30,7 @@ beforeEach(async () => {
   close = () => t.client.close();
   slack = new FakeSlackGateway();
   const logger = createLogger("error");
-  const scheduler = createReminderScheduler({ db, slack, logger, reminderHours: 12 });
-  const dispatch = createDispatcher({
-    db,
-    slack,
-    logger,
-    fetchCiReadiness: async () => "passing" as const,
-    onReviewRequested: scheduler.onReviewRequested,
-    onReviewSubmitted: scheduler.onReviewSubmitted,
-    onReviewRequestRemoved: scheduler.onReviewRequestRemoved,
-  });
+  const dispatch = createDispatcher(handlerDeps(db, slack, { logger }));
   worker = createWorker({ db, logger, dispatch });
   route = createGithubWebhookRoute({
     db,

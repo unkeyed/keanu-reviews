@@ -1,15 +1,13 @@
 import { eq } from "drizzle-orm";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { handlers } from "#app";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { type HandlerDeps, handlers } from "#app";
 import { type ReviewEvent, jobArrivalKey, parseEvent } from "#events";
 import { upsertIdentity } from "#identity";
-import { createLogger } from "#lib";
-import type { HandlerDeps } from "../app/handlers.ts";
+import { scheduleReminder } from "#reminders";
+import { onCheckRun, onPullRequest } from "#reviews";
 import type { Db } from "../db/client.ts";
 import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
-import { handleCheckRun } from "../handlers/checks.ts";
-import { handleReviewRequest as handleReviewRequestStep } from "../handlers/reviewRequest.ts";
 import { PullRequestLifecycleBusyError } from "../pr/session.ts";
 import {
   applyPullRequestSource,
@@ -17,7 +15,7 @@ import {
   prId,
   setChannel,
 } from "../pr/store.ts";
-import { createReminderScheduler } from "../scheduler/reminders.ts";
+import { handlerDeps } from "../testing/deps.ts";
 import {
   type IssueCommentPayload,
   type ReviewPayload,
@@ -30,7 +28,7 @@ import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { inSession } from "../testing/pr.ts";
 import { onIssueComment } from "./comments.ts";
 
-const handleReviewRequest = inSession(handleReviewRequestStep);
+const handleReviewRequest = inSession(onPullRequest);
 const reviewArrival = jobArrivalKey(new Date(0), "review");
 /** A review job as the worker runs it: reminder cancel, then the mirror. */
 const handleReview = (deps: HandlerDeps, ev: ReviewEvent, arrivalKey = reviewArrival) =>
@@ -57,7 +55,9 @@ beforeEach(async () => {
 });
 afterEach(() => close());
 
-const deps = (over = {}) => ({ db, slack, logger: createLogger("error"), ...over });
+const deps = (over: Partial<HandlerDeps> = {}) => handlerDeps(db, slack, over);
+const reminderRow = async () =>
+  (await db.select().from(reminders).where(eq(reminders.prId, "unkey/api#1")))[0];
 
 const review = (state: string): ReviewPayload => ({
   action: "submitted",
@@ -180,38 +180,32 @@ describe("review job (U6, R5)", () => {
     expect(slack.messages).toHaveLength(0);
   });
 
-  it("fires the reminder-cancel hook for the reviewer", async () => {
-    const onReviewSubmitted = vi.fn(async () => {});
-    await handleReview(deps({ onReviewSubmitted }), reviewEvent(review("approved")));
-    expect(onReviewSubmitted).toHaveBeenCalledWith(
-      "unkey/api#1",
-      7,
-      new Date("2026-08-11T12:00:00Z"),
-      reviewArrival,
-    );
+  it("cancels the reviewer's reminder, stamped by the review", async () => {
+    await handleReview(deps(), reviewEvent(review("approved")));
+    expect(await reminderRow()).toMatchObject({
+      reviewerGithubId: 7,
+      status: "cancelled",
+      sourceUpdatedAt: new Date("2026-08-11T12:00:00Z"),
+      sourceVersion: reviewArrival,
+    });
   });
 
   it("cancels the reminder before a fallible Slack delivery", async () => {
-    const scheduler = createReminderScheduler({
-      db,
-      slack,
-      logger: createLogger("error"),
-      reminderHours: 12,
-      now: () => Date.parse("2026-08-11T11:00:00Z"),
+    const requestedAt = new Date("2026-08-11T11:00:00Z");
+    await scheduleReminder(db, {
+      prId: prId("unkey/api", 1),
+      reviewerGithubId: 7,
+      dueAt: new Date("2026-08-11T23:00:00Z"),
+      stamp: { updatedAt: requestedAt, version: "" },
     });
-    await scheduler.onReviewRequested(prId("unkey/api", 1), 7, new Date("2026-08-11T11:00:00Z"));
     slack.post = async () => {
       throw new Error("Slack unavailable");
     };
 
-    await expect(
-      handleReview(
-        deps({ onReviewSubmitted: scheduler.onReviewSubmitted }),
-        reviewEvent(review("approved")),
-      ),
-    ).rejects.toThrow("Slack unavailable");
-    const [reminder] = await db.select().from(reminders).where(eq(reminders.prId, "unkey/api#1"));
-    expect(reminder?.status).toBe("cancelled");
+    await expect(handleReview(deps(), reviewEvent(review("approved")))).rejects.toThrow(
+      "Slack unavailable",
+    );
+    expect((await reminderRow())?.status).toBe("cancelled");
   });
 
   it("reconciles the parent channel when a review arrives before opened", async () => {
@@ -222,12 +216,11 @@ describe("review job (U6, R5)", () => {
   });
 
   it("suppresses the empty 'commented' wrapper but still cancels the reminder", async () => {
-    const onReviewSubmitted = vi.fn(async () => {});
     const emptyCommented = review("commented");
     emptyCommented.review.body = null; // inline-comments-only review, no summary text
-    await handleReview(deps({ onReviewSubmitted }), reviewEvent(emptyCommented));
+    await handleReview(deps(), reviewEvent(emptyCommented));
     expect(slack.messages).toHaveLength(0); // no "💬 commented by …" noise
-    expect(onReviewSubmitted).toHaveBeenCalled(); // reminder still cancelled
+    expect((await reminderRow())?.status).toBe("cancelled"); // reminder still cancelled
   });
 
   it("posts a 'commented' review whose body is only a pasted image, with the image", async () => {
@@ -291,37 +284,28 @@ describe("review job (U6, R5)", () => {
       currentState: "pr",
       headSha: "sha-1",
     });
-    const scheduler = createReminderScheduler({
-      db,
-      slack,
-      logger: createLogger("error"),
-      reminderHours: 12,
-    });
     await handleReviewRequest(
-      deps({
-        fetchCiReadiness: async () => "failing",
-        onReviewRequested: scheduler.onReviewRequested,
-      }),
+      deps({ fetchCiReadiness: async () => "failing" }),
       pullRequestEvent({
         action: "review_requested",
         repository: { full_name: "unkey/api" },
         pull_request: review("approved").pull_request,
         requested_reviewer: { id: 7, login: "flo" },
       }),
-      "delivery-request",
+      { arrivalKey: jobArrivalKey(new Date(0), "delivery-request"), attempt: 1 },
     );
     expect(slack.invites).toHaveLength(0);
 
     const submitted = review("approved");
     submitted.review.submitted_at = "2026-08-11T12:30:00Z";
     await handleReview(
-      deps({ onReviewSubmitted: scheduler.onReviewSubmitted }),
+      deps(),
       reviewEvent(submitted),
       jobArrivalKey(new Date(0), "delivery-review"),
     );
     const afterReview = slack.messages.length;
 
-    await handleCheckRun(
+    await onCheckRun(
       deps({
         fetchCiReadiness: async () => "passing",
         fetchPullRequest: async () => ({
@@ -343,6 +327,7 @@ describe("review job (U6, R5)", () => {
           pull_requests: [{ number: 1 }],
         },
       }),
+      { arrivalKey: jobArrivalKey(new Date(0), "delivery-check"), attempt: 1 },
     );
     expect(slack.invites).toHaveLength(0);
     expect(slack.messages).toHaveLength(afterReview);

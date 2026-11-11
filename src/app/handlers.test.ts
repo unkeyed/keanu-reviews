@@ -5,6 +5,7 @@ import { findByRepoNumber } from "#pr";
 import type { Db } from "../db/client.ts";
 import type { JobRow } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
+import { handlerDeps } from "../testing/deps.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { createDispatcher } from "./handlers.ts";
 
@@ -51,7 +52,7 @@ const pullRequest = (action: string) => ({
 
 describe("createDispatcher", () => {
   it("stamps the job's arrival key on the PR snapshot", async () => {
-    const dispatch = createDispatcher({ db, slack, logger: createLogger("error") });
+    const dispatch = createDispatcher(handlerDeps(db, slack));
     await dispatch(job("pull_request", pullRequest("opened")));
     const row = await findByRepoNumber(db, "unkey/api", 1423);
     expect(row?.sourceArrivalKey).toBe("2026-08-11T12:00:01.000Z:delivery-1");
@@ -64,12 +65,9 @@ describe("createDispatcher", () => {
       slackUserId: "U7",
       source: "self-link",
     });
-    const dispatch = createDispatcher({
-      db,
-      slack,
-      logger: createLogger("error"),
-      fetchCiReadiness: async () => "absent",
-    });
+    const dispatch = createDispatcher(
+      handlerDeps(db, slack, { fetchCiReadiness: async () => "absent" }),
+    );
 
     // No check runs yet: attempts below the absent-CI budget retry.
     await expect(dispatch(job("pull_request", pullRequest("review_requested"), 1))).rejects.toThrow(
@@ -84,7 +82,9 @@ describe("createDispatcher", () => {
 
   it("logs an event no handler acts on and does nothing else", async () => {
     const debug = vi.fn();
-    const dispatch = createDispatcher({ db, slack, logger: { ...createLogger("error"), debug } });
+    const dispatch = createDispatcher(
+      handlerDeps(db, slack, { logger: { ...createLogger("error"), debug } }),
+    );
     await dispatch(job("ping", { zen: "Design for failure." }));
     expect(debug).toHaveBeenCalledWith("unhandled event", {
       event: "ping",
@@ -95,7 +95,7 @@ describe("createDispatcher", () => {
   });
 
   it("rejects a malformed payload permanently", async () => {
-    const dispatch = createDispatcher({ db, slack, logger: createLogger("error") });
+    const dispatch = createDispatcher(handlerDeps(db, slack));
     await expect(dispatch(job("pull_request", { action: "opened" }))).rejects.toThrow(Permanent);
     expect(slack.channels).toEqual([]);
   });

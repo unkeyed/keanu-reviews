@@ -9,6 +9,7 @@ import { createTestDb } from "../db/testDb.ts";
 import { applyPullRequestSource, claimPullRequestLifecycle, prId } from "../pr/store.ts";
 import { keys } from "../slack/catalog.ts";
 import { channelSink, claim, createLedger } from "../slack/ledger.ts";
+import { handlerDeps } from "../testing/deps.ts";
 import { type PullRequestPayload, pullRequestEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { convergePullRequest } from "../testing/pr.ts";
@@ -89,11 +90,7 @@ describe("worker retries", () => {
     const worker = createWorker({
       db,
       logger: { ...createLogger("error"), error },
-      dispatch: createDispatcher({
-        db,
-        slack: new FakeSlackGateway(),
-        logger: createLogger("error"),
-      }),
+      dispatch: createDispatcher(handlerDeps(db, new FakeSlackGateway())),
       now: () => job.availableAt.getTime(),
     });
 

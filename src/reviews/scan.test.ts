@@ -19,9 +19,9 @@ import {
   prId,
   setChannel,
 } from "../pr/store.ts";
+import { handlerDeps } from "../testing/deps.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { setPrState } from "../testing/pr.ts";
-import { reviewDeps } from "../testing/reviews.ts";
 import type { ReviewDeps } from "./deps.ts";
 import { scanDue } from "./scan.ts";
 
@@ -57,7 +57,7 @@ beforeEach(async () => {
 afterEach(() => close());
 
 const scan = (over: Partial<ReviewDeps> = {}) =>
-  scanDue(reviewDeps(db, slack, { clock: { now: () => new Date(clock) }, ...over }));
+  scanDue(handlerDeps(db, slack, { clock: { now: () => new Date(clock) }, ...over }));
 
 let versions = 0;
 /** Each write sorts after the previous one at the same instant, as job arrival keys do. */

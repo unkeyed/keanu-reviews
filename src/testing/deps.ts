@@ -1,17 +1,18 @@
+import type { HandlerDeps } from "#app";
 import type { Db } from "#db";
 import { createLogger, systemClock } from "#lib";
-import type { ReviewDeps } from "#reviews";
 import type { FakeSlackGateway } from "./fakeSlack.ts";
 
 /**
- * Review deps whose GitHub reads say: CI passing, the PR blocked with no
- * requested reviewers, no approvals. The window is open every weekday.
+ * Handler deps whose GitHub reads say: CI passing, the PR blocked with no
+ * requested reviewers, no approvals, and no PRs at an unknown head. The
+ * reminder window is open every weekday.
  */
-export function reviewDeps(
+export function handlerDeps(
   db: Db,
   slack: FakeSlackGateway,
-  over: Partial<ReviewDeps> = {},
-): ReviewDeps {
+  over: Partial<HandlerDeps> = {},
+): HandlerDeps {
   return {
     db,
     slack,
@@ -24,6 +25,7 @@ export function reviewDeps(
       requestedReviewers: [],
     }),
     fetchApprovalCount: async () => 0,
+    fetchPrForSha: async () => [],
     reminderHours: 12,
     reminderWindow: { startHour: 0, endHour: 0, timeZone: "UTC" },
     suppressApprovals: 1,

@@ -1,12 +1,9 @@
 import type { Hono } from "hono";
+import type { HandlerDeps } from "#app";
 import type { Config } from "#config";
 import type { Db } from "#db";
 import {
-  type CiReadinessFetcher,
   type InstallationAuth,
-  type PrForShaFetcher,
-  type PullRequestFetcher,
-  type ReviewApprovalFetcher,
   createCiReadinessFetcher,
   createGithubAttachmentMirror,
   createGithubEmailFetcher,
@@ -21,8 +18,7 @@ import {
   getSlackUserTokenRow,
   getSlackUserTokenRows,
 } from "#identity";
-import { type Logger, createTokenCipher, errMessage } from "#lib";
-import type { MirrorDeps } from "#mirror";
+import { type Logger, createTokenCipher, errMessage, systemClock } from "#lib";
 import {
   SLACK_POST_USER_SCOPE,
   type SlackGateway,
@@ -31,24 +27,9 @@ import {
   quietlyRemoveMembers,
 } from "#slack";
 
-export interface PrHandlerDeps extends MirrorDeps {
-  /**
-   * Aggregate CI for the PR head. Review-needed alerts wait until this is
-   * passing. Omit to keep the previous behavior (drafts still wait; CI is not
-   * consulted).
-   */
-  fetchCiReadiness?: CiReadinessFetcher;
-  /** Optional PR read: mergeability for reminders, and requested reviewers for alerts. */
-  fetchPullRequest?: PullRequestFetcher;
-}
-
 export interface ServiceHandlers {
-  /** Dependencies shared by the webhook worker and closed-PR reconciliation. */
-  handler: PrHandlerDeps;
-  fetchPullRequest: PullRequestFetcher;
-  fetchApprovalCount: ReviewApprovalFetcher;
-  fetchCiReadiness: CiReadinessFetcher;
-  fetchPrForSha: PrForShaFetcher;
+  /** Dependencies shared by the webhook worker, the reminder scan and closed-PR reconciliation. */
+  handler: HandlerDeps;
   slackOauthRoute?: Hono;
   attachmentRoute: Hono;
 }
@@ -68,8 +49,8 @@ export function createServiceHandlers(input: {
   const installationId = config.GITHUB_INSTALLATION_ID;
   const slackOauthCallbackUrl = `${config.PUBLIC_URL}/oauth/slack/callback`;
 
-  let quietArchive: PrHandlerDeps["quietArchive"];
-  let authorPoster: PrHandlerDeps["authorPoster"];
+  let quietArchive: HandlerDeps["quietArchive"];
+  let authorPoster: HandlerDeps["authorPoster"];
   let slackOauthRoute: Hono | undefined;
 
   // Quiet archiving (opt-in): when Slack user-OAuth is configured, collect
@@ -145,15 +126,24 @@ export function createServiceHandlers(input: {
     publicUrl: config.PUBLIC_URL,
     secret: config.OAUTH_STATE_SECRET,
   });
-  const fetchPullRequest = createPullRequestFetcher(auth, installationId);
-  const fetchCiReadiness = createCiReadinessFetcher(auth, installationId);
-  const handler: PrHandlerDeps = {
+  const handler: HandlerDeps = {
     db,
     slack,
     logger,
+    clock: systemClock,
     fetchGithubEmail: createGithubEmailFetcher(auth, installationId),
-    fetchCiReadiness,
-    fetchPullRequest,
+    fetchCiReadiness: createCiReadinessFetcher(auth, installationId),
+    fetchPullRequest: createPullRequestFetcher(auth, installationId),
+    fetchApprovalCount: createReviewApprovalFetcher(auth, installationId),
+    fetchPrForSha: createPrForShaFetcher(auth, installationId),
+    reminderHours: config.REMINDER_HOURS,
+    reminderWindow: {
+      startHour: config.REMINDER_WINDOW_START_HOUR,
+      endHour: config.REMINDER_WINDOW_END_HOUR,
+      timeZone: config.REMINDER_WINDOW_TZ,
+    },
+    // Don't remind once the PR is ready to merge or has this many approvals.
+    suppressApprovals: config.REMINDER_SUPPRESS_APPROVALS,
     shippedChannel: config.SLACK_SHIPPED_CHANNEL,
     commentOnMerge: config.GITHUB_COMMENT_ON_MERGE,
     postPrComment: config.GITHUB_COMMENT_ON_MERGE
@@ -169,10 +159,6 @@ export function createServiceHandlers(input: {
 
   return {
     handler,
-    fetchPullRequest,
-    fetchApprovalCount: createReviewApprovalFetcher(auth, installationId),
-    fetchCiReadiness,
-    fetchPrForSha: createPrForShaFetcher(auth, installationId),
     slackOauthRoute,
     attachmentRoute: attachments.route,
   };
