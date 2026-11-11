@@ -197,7 +197,6 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
     );
     const d = {
       ...deps(),
-      commentOnMerge: true,
       postPrComment,
       slackTeamId: "T1",
     };
@@ -215,7 +214,6 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
     const d = {
       ...deps(),
       shippedChannel: "C0SHIPPED",
-      commentOnMerge: true,
       postPrComment,
       slackTeamId: "T1",
     };
@@ -232,7 +230,6 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
     const d = {
       ...deps(),
       shippedChannel: "C0SHIPPED",
-      commentOnMerge: true,
       postPrComment,
       slackTeamId: "T1",
     };
@@ -271,14 +268,6 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
       .from(reminders)
       .where(eq(reminders.id, `${prId("unkey/api", 1423)}::7`));
     expect(reminder?.status).toBe("cancelled");
-  });
-
-  it("does not comment on the PR when the opt-in is off", async () => {
-    const postPrComment = vi.fn(async () => {});
-    const d = { ...deps(), commentOnMerge: false, postPrComment, slackTeamId: "T1" };
-    await convergePullRequest(d, pullRequestEvent(payload("opened")));
-    await convergePullRequest(d, pullRequestEvent(payload("closed", { merged: true })));
-    expect(postPrComment).not.toHaveBeenCalled();
   });
 
   it("opens with a description: linked PR number and the branch flow", async () => {

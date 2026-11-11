@@ -112,7 +112,6 @@ export function createContext(config: Config): AppContext {
     // Don't remind once the PR is ready to merge or has this many approvals.
     suppressApprovals: config.REMINDER_SUPPRESS_APPROVALS,
     shippedChannel: config.SLACK_SHIPPED_CHANNEL,
-    commentOnMerge: config.GITHUB_COMMENT_ON_MERGE,
     postPrComment: config.GITHUB_COMMENT_ON_MERGE
       ? createPrCommenter(auth, installationId)
       : undefined,

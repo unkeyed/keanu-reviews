@@ -110,7 +110,6 @@ describe("closed pull request reconciliation", () => {
     const postPrComment = vi.fn(async () => {});
     const deps = handler({
       shippedChannel: "C0SHIPPED",
-      commentOnMerge: true,
       postPrComment,
       slackTeamId: "T1",
     });

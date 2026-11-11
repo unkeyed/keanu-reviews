@@ -35,9 +35,7 @@ export interface PrDeps {
   fetchGithubEmail: GithubEmailFetcher;
   /** #shipped channel (id or name) that announces merges; undefined disables it. */
   shippedChannel: string | undefined;
-  /** Opt-in: comment the Slack channel URL on the PR when it merges. */
-  commentOnMerge: boolean;
-  /** Undefined unless `commentOnMerge`. */
+  /** Opt-in: comments the Slack channel URL on the PR when it merges; undefined when off. */
   postPrComment: PrCommenter | undefined;
   /** Slack workspace id for the merge comment's channel deep link. */
   slackTeamId: string;
@@ -134,7 +132,7 @@ export async function followNewerSnapshot(deps: PrDeps, snapshot: PrSnapshot): P
 function features(deps: PrDeps) {
   return {
     shipped: Boolean(deps.shippedChannel),
-    commentOnMerge: Boolean(deps.commentOnMerge),
+    commentOnMerge: Boolean(deps.postPrComment),
     quietLeave: Boolean(deps.quietArchive),
   };
 }
@@ -322,14 +320,7 @@ function createMayHaveSucceeded(error: unknown): boolean {
  */
 async function commentOnMerge(deps: PrDeps, row: PrRow, channelId: string): Promise<void> {
   const { db, logger, postPrComment, slackTeamId } = deps;
-  if (!postPrComment || !slackTeamId) {
-    logger.warn("merge comment enabled but not configured", {
-      prId: row.id,
-      hasCommenter: Boolean(postPrComment),
-      hasSlackTeamId: Boolean(slackTeamId),
-    });
-    return;
-  }
+  if (!postPrComment) return;
   try {
     if (await claimMergeComment(db, row.id, new Date())) {
       const url = slackChannelUrl(slackTeamId, channelId);

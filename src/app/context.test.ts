@@ -109,7 +109,6 @@ describe("createContext", () => {
       expect(ctx.deps).toMatchObject({
         slackTeamId: "T123",
         shippedChannel: undefined,
-        commentOnMerge: false,
         postPrComment: undefined,
         quietArchive: undefined,
         authorPoster: undefined,

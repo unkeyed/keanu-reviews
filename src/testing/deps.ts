@@ -32,7 +32,6 @@ export function handlerDeps(
     reminderWindow: { startHour: 0, endHour: 0, timeZone: "UTC" },
     suppressApprovals: 1,
     shippedChannel: undefined,
-    commentOnMerge: false,
     postPrComment: undefined,
     slackTeamId: "T123",
     quietArchive: undefined,
