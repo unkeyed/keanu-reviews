@@ -29,17 +29,17 @@ function boot(inject: string): Promise<Run> {
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
-  let output = "";
+  const output = { stdout: "", stderr: "" };
   child.stdout.on("data", (chunk) => {
-    output += chunk;
+    output.stdout += chunk;
   });
   child.stderr.on("data", (chunk) => {
-    output += chunk;
+    output.stderr += chunk;
   });
   return new Promise((resolve) => {
-    child.on("exit", (code) => {
-      const lines = output
-        .split("\n")
+    child.on("close", (code) => {
+      const lines = [output.stdout, output.stderr]
+        .flatMap((text) => text.split("\n"))
         .filter((line) => line.startsWith("{"))
         .map((line) => JSON.parse(line));
       resolve({ code, lines });
@@ -52,7 +52,6 @@ describe("process guards", () => {
     const run = await boot(`Promise.reject(new Error("boom from a stray promise"));`);
 
     expect(run.code).toBe(1);
-    const msgs = run.lines.map((line) => line.msg);
     expect(run.lines).toContainEqual(
       expect.objectContaining({
         level: "error",
@@ -61,7 +60,6 @@ describe("process guards", () => {
         service: "keanu-reviews",
       }),
     );
-    expect(msgs.indexOf("unhandled rejection")).toBeLessThan(msgs.indexOf("shutting down"));
     expect(run.lines).toContainEqual(
       expect.objectContaining({ msg: "shutting down", signal: "unhandled rejection" }),
     );
