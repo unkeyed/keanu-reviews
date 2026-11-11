@@ -50,8 +50,6 @@ export interface Worker {
    * is handed back without running. Undefined when nothing is due.
    */
   claim(draining?: AbortSignal): Promise<Claimed | undefined>;
-  /** Claim one job and wait for it to settle. False when nothing is due. */
-  tick(): Promise<boolean>;
 }
 
 type Outcome =
@@ -208,15 +206,7 @@ export function createWorker(db: Db, logger: Logger, dispatch: Dispatch): Worker
     return { settled };
   };
 
-  return {
-    claim,
-    tick: async () => {
-      const claimed = await claim();
-      if (!claimed) return false;
-      await claimed.settled;
-      return true;
-    },
-  };
+  return { claim };
 }
 
 /**
@@ -227,7 +217,7 @@ export function createWorker(db: Db, logger: Logger, dispatch: Dispatch): Worker
  * while they wait. `stop` claims no further jobs, hands back the ones still
  * waiting their turn, and resolves once the running ones settle.
  */
-export function startWorker(worker: Pick<Worker, "claim">, logger: Logger, concurrency = 1): Loop {
+export function startWorker(worker: Worker, logger: Logger, concurrency = 1): Loop {
   const draining = new AbortController();
   const inFlight = new Set<Promise<void>>();
   let idleMs = IDLE_MIN_MS;

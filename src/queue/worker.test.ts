@@ -14,7 +14,7 @@ import { handlerDeps } from "../testing/deps.ts";
 import { type PullRequestPayload, pullRequestEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { convergePullRequest } from "../testing/pr.ts";
-import { drainQueue, enqueueTestJob } from "../testing/queue.ts";
+import { drainQueue, enqueueTestJob, tick } from "../testing/queue.ts";
 import { LEASE_MS, claimNextJob } from "./store.ts";
 import {
   type Claimed,
@@ -67,17 +67,17 @@ describe("worker retries", () => {
     const dueTimes: number[] = [];
     for (let attempt = 1; attempt < MAX_ATTEMPTS; attempt += 1) {
       const startedAt = Date.now();
-      expect(await worker.tick()).toBe(true);
+      expect(await tick(worker)).toBe(true);
       const pending = await row(job.id);
       expect(pending?.status).toBe("pending");
       expect(pending?.raw).toEqual({ private: "payload" });
       dueTimes.push((pending?.availableAt.getTime() ?? 0) - startedAt);
-      expect(await worker.tick()).toBe(false);
+      expect(await tick(worker)).toBe(false);
       vi.setSystemTime(pending?.availableAt ?? new Date());
     }
     expect(dueTimes).toEqual([2_000, 4_000, 8_000, 16_000, 32_000, 64_000, 128_000]);
 
-    expect(await worker.tick()).toBe(true);
+    expect(await tick(worker)).toBe(true);
     const failed = await row(job.id);
     expect(failed?.status).toBe("failed");
     expect(failed?.attempts).toBe(MAX_ATTEMPTS);
@@ -96,7 +96,7 @@ describe("worker retries", () => {
       createDispatcher(handlerDeps(db, new FakeSlackGateway())),
     );
 
-    expect(await worker.tick()).toBe(true);
+    expect(await tick(worker)).toBe(true);
     expect(await row(job.id)).toMatchObject({ status: "failed", attempts: 1, raw: job.raw });
     expect(error).toHaveBeenCalledWith(
       "job failed permanently",
@@ -118,7 +118,7 @@ describe("worker retries", () => {
     vi.setSystemTime(Date.now() + LEASE_MS);
     const dispatch = vi.fn(async () => undefined);
 
-    expect(await createWorker(db, quiet(), dispatch).tick()).toBe(true);
+    expect(await tick(createWorker(db, quiet(), dispatch))).toBe(true);
     expect(dispatch).not.toHaveBeenCalled();
     const failed = await row(job.id);
     expect(failed?.status).toBe("failed");
@@ -132,7 +132,7 @@ describe("worker retry hints", () => {
     return { status: r?.status, at: r?.availableAt.getTime() };
   };
   // Run the job at each retry time it asks for until it stops retrying.
-  const settle = async (worker: { tick: () => Promise<boolean> }, id: string) => {
+  const settle = async (worker: ReturnType<typeof createWorker>, id: string) => {
     for (;;) {
       await drainQueue(worker);
       const r = await row(id);
@@ -467,7 +467,7 @@ describe("worker lease", () => {
     fakeLeaseTimers();
     const job = await enqueue("slow-job");
     const handler = heldHandler();
-    const ticking = createWorker(db, quiet(), handler.dispatch).tick();
+    const ticking = tick(createWorker(db, quiet(), handler.dispatch));
     await handler.running;
 
     await vi.advanceTimersByTimeAsync(LEASE_MS + LEASE_MS / 3);
@@ -483,7 +483,7 @@ describe("worker lease", () => {
     const job = await enqueue("stolen-job", { private: "payload" });
     const handler = heldHandler();
     const warn = vi.fn();
-    const ticking = createWorker(db, { ...quiet(), warn }, handler.dispatch).tick();
+    const ticking = tick(createWorker(db, { ...quiet(), warn }, handler.dispatch));
     await handler.running;
     const stolenAt = new Date(Date.now() + 1);
     await db.update(jobs).set({ attempts: 2, claimedAt: stolenAt }).where(eq(jobs.id, job.id));
@@ -510,7 +510,7 @@ describe("worker lease", () => {
     const job = await enqueue("hung-job");
     const handler = heldHandler();
     const error = vi.fn();
-    const ticking = createWorker(db, { ...quiet(), error }, handler.dispatch).tick();
+    const ticking = tick(createWorker(db, { ...quiet(), error }, handler.dispatch));
     await handler.running;
     const startedAt = Date.now();
 
