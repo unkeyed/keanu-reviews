@@ -2,14 +2,14 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDispatcher } from "#app";
 import type { JobRow } from "#db";
-import { type Logger, Retry, createLogger } from "#lib";
+import { type Logger, Retry, createLogger, leaseWaitMs } from "#lib";
 import type { Db } from "../db/client.ts";
 import { jobs } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createGithubEmailFetcher } from "../github/users.ts";
 import { applyPullRequestSource, claimPullRequestLifecycle, prId } from "../pr/store.ts";
 import { keys } from "../slack/catalog.ts";
-import { channelSink, claim, createLedger } from "../slack/ledger.ts";
+import { MESSAGE_LEASE_MS, channelSink, claim, createLedger } from "../slack/ledger.ts";
 import { handlerDeps } from "../testing/deps.ts";
 import { type PullRequestPayload, pullRequestEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
@@ -76,6 +76,10 @@ describe("worker retries", () => {
       vi.setSystemTime(pending?.availableAt ?? new Date());
     }
     expect(dueTimes).toEqual([2_000, 4_000, 8_000, 16_000, 32_000, 64_000, 128_000]);
+    expect(
+      dueTimes.reduce((total, ms) => total + ms),
+      "retries outlast a crashed holder's Slack effect lease",
+    ).toBeGreaterThan(MESSAGE_LEASE_MS);
 
     expect(await tick(worker)).toBe(true);
     const failed = await row(job.id);
@@ -527,7 +531,19 @@ describe("worker lease", () => {
   });
 
   it("stays under the window in which another worker could take over a Slack effect", () => {
-    expect(HANDLER_TIMEOUT_MS + LEASE_MS / 3).toBeLessThanOrEqual(2 * 60_000);
+    expect(HANDLER_TIMEOUT_MS + LEASE_MS / 3).toBeLessThanOrEqual(MESSAGE_LEASE_MS);
+  });
+
+  it("fences a Slack effect for longer than a job lease, so a reclaimed job cannot post it twice", () => {
+    expect(MESSAGE_LEASE_MS).toBeGreaterThan(LEASE_MS);
+  });
+
+  it("treats a claim as live for one job lease, then waits out the rest of its own lease", () => {
+    const now = new Date("2026-08-11T12:00:00Z");
+    const heldFor = (ms: number) =>
+      leaseWaitMs(new Date(now.getTime() - ms), MESSAGE_LEASE_MS, now);
+    expect(heldFor(LEASE_MS - 1)).toBeUndefined();
+    expect(heldFor(LEASE_MS)).toBe(MESSAGE_LEASE_MS - LEASE_MS);
   });
 });
 

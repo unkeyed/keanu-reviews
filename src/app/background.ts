@@ -1,6 +1,10 @@
 import type { Db } from "#db";
 import { type Logger, errMessage, every } from "#lib";
-import { createClosedPullRequestReconciliation, deleteLifecycleClaimsBefore } from "#pr";
+import {
+  PULL_REQUEST_LIFECYCLE_LEASE_MS,
+  createClosedPullRequestReconciliation,
+  deleteLifecycleClaimsBefore,
+} from "#pr";
 import { createWorker, pruneJobHistory, startWorker } from "#queue";
 import { scanDue } from "#reviews";
 import type { AppContext } from "./context.ts";
@@ -8,7 +12,7 @@ import { createDispatcher } from "./handlers.ts";
 
 const DAILY_RECONCILE_HOUR_UTC = 8;
 const JOB_RETENTION_MS = 14 * 24 * 60 * 60_000;
-const ORPHANED_CLAIM_MS = 24 * 60 * 60_000;
+const ORPHANED_CLAIM_MS = 288 * PULL_REQUEST_LIFECYCLE_LEASE_MS;
 
 export function millisecondsUntilUtcHour(now: Date, hourUtc: number): number {
   const next = new Date(

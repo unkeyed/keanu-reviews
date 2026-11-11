@@ -1,6 +1,8 @@
 import type { Db, JobRow } from "#db";
 import { jobPrKeys } from "#events";
 import { type Logger, type Loop, Permanent, RateLimited, Retry, errMessage, every } from "#lib";
+import { PULL_REQUEST_LIFECYCLE_LEASE_MS } from "#pr";
+import { MESSAGE_LEASE_MS } from "#slack";
 import {
   LEASE_MS,
   claimNextJob,
@@ -13,11 +15,11 @@ import {
 
 export const MAX_ATTEMPTS = 8;
 const RETRY_BASE_MS = 2_000;
-const MAX_RETRY_DELAY_MS = 5 * 60_000;
+const MAX_RETRY_DELAY_MS = PULL_REQUEST_LIFECYCLE_LEASE_MS;
 const MAX_RATE_LIMIT_DELAY_MS = 15 * 60_000;
 const RENEW_EVERY_MS = LEASE_MS / 3;
 
-export const HANDLER_TIMEOUT_MS = 100_000;
+export const HANDLER_TIMEOUT_MS = MESSAGE_LEASE_MS - RENEW_EVERY_MS;
 
 const IDLE_MIN_MS = 1_000;
 const IDLE_MAX_MS = 5_000;
@@ -154,9 +156,7 @@ export function createWorker(db: Db, logger: Logger, dispatch: Dispatch): Worker
     else await failJob(db, claim);
   };
 
-  const claim = async (draining = NEVER): Promise<Claimed | undefined> => {
-    const job = await claimNextJob(db);
-    if (!job) return undefined;
+  const chainBehindPr = (job: JobRow, draining: AbortSignal): Promise<void> => {
     const keys = jobPrKeys(job.event, job.raw);
     const turn = Promise.all(keys.map((key) => tails.get(key))).then(() => undefined);
     const settled = settle(job, turn, draining);
@@ -165,7 +165,13 @@ export function createWorker(db: Db, logger: Logger, dispatch: Dispatch): Worker
     void tail.then(() => {
       for (const key of keys) if (tails.get(key) === tail) tails.delete(key);
     });
-    return { settled };
+    return settled;
+  };
+
+  const claim = async (draining = NEVER): Promise<Claimed | undefined> => {
+    const job = await claimNextJob(db);
+    if (!job) return undefined;
+    return { settled: chainBehindPr(job, draining) };
   };
 
   return { claim };

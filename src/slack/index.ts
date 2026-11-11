@@ -27,6 +27,7 @@ export {
   type DeliverOptions,
   type Delivered,
   type EffectState,
+  MESSAGE_LEASE_MS,
   type Outgoing,
   channelSink,
   createLedger,

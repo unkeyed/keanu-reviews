@@ -8,6 +8,7 @@ export {
   session,
 } from "./session.ts";
 export {
+  PULL_REQUEST_LIFECYCLE_LEASE_MS,
   type PrRow,
   deleteLifecycleClaimsBefore,
   findAllByRepoHeadSha,

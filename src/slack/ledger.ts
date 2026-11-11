@@ -5,7 +5,7 @@ import { type ClientMsgId, type Clock, Retry, leaseWaitMs, systemClock } from "#
 import { type EffectKey, type Message, render } from "./catalog.ts";
 import { BOT, type Poster, type RenderedMessage, type SlackGateway } from "./gateway.ts";
 
-const MESSAGE_LEASE_MS = 2 * 60_000;
+export const MESSAGE_LEASE_MS = 2 * 60_000;
 
 export function naturalKey(key: EffectKey): string {
   return [key.prId, key.kind, key.ref].map((part) => `${part.length}:${part}`).join("|");
