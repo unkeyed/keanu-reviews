@@ -5,6 +5,8 @@ export interface Work {
   arrivalKey: ArrivalKey;
   /** 1-based. */
   attempt: number;
+  /** Aborts when the job's handler times out or its lease is lost. */
+  signal: AbortSignal;
 }
 
 /** A webhook job's arrival order: `${createdAt ISO}:${jobId}`. */

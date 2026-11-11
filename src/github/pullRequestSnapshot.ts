@@ -50,20 +50,18 @@ export type PullRequestSnapshotFetcher = (
 ) => Promise<PullRequestSnapshotFetch>;
 
 export interface PullRequestSnapshotFetcherOptions extends GithubRequestOptions {
-  sleep?: (ms: number) => Promise<void>;
-  now?: () => number;
-  /** Wait at most this long for a single Retry-After or rate-limit reset. */
-  maxBackoffMs?: number;
-  /** How many times to back off and retry one PR before stopping the run. */
-  maxRateLimitRetries?: number;
   logger?: Logger;
 }
 
-/** Two minutes: long enough to honor a short Retry-After, short enough to stop a daily run. */
-const DEFAULT_MAX_BACKOFF_MS = 120_000;
-const DEFAULT_MAX_RATE_LIMIT_RETRIES = 3;
+/**
+ * Wait at most this long for a single Retry-After or rate-limit reset. Two
+ * minutes: long enough to honor a short Retry-After, short enough to stop a daily run.
+ */
+const MAX_BACKOFF_MS = 120_000;
+/** How many times to back off and retry one PR before stopping the run. */
+const MAX_RATE_LIMIT_RETRIES = 3;
 
-const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 interface RateLimitHeaders {
   remaining?: number;
@@ -164,11 +162,6 @@ export function createPullRequestSnapshotFetcher(
   installationId: string,
   options: PullRequestSnapshotFetcherOptions = {},
 ): PullRequestSnapshotFetcher {
-  const sleep = options.sleep ?? realSleep;
-  const now = options.now ?? Date.now;
-  const maxBackoffMs = options.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS;
-  const maxRateLimitRetries = options.maxRateLimitRetries ?? DEFAULT_MAX_RATE_LIMIT_RETRIES;
-
   return async (repoFullName, number) => {
     const path = `/repos/${encodedRepoPath(repoFullName)}/pulls/${number}`;
     let rateLimitRetries = 0;
@@ -179,11 +172,13 @@ export function createPullRequestSnapshotFetcher(
       const text = await response.text();
 
       if (isRateLimited(response.status, limit, text)) {
-        const waitMs = backoffMs(limit, now());
+        const waitMs = backoffMs(limit, Date.now());
         const resetAtMs =
           limit.resetEpochSec !== undefined ? limit.resetEpochSec * 1000 : undefined;
         const withinBudget =
-          waitMs !== undefined && waitMs <= maxBackoffMs && rateLimitRetries < maxRateLimitRetries;
+          waitMs !== undefined &&
+          waitMs <= MAX_BACKOFF_MS &&
+          rateLimitRetries < MAX_RATE_LIMIT_RETRIES;
         if (!withinBudget) {
           throw new GithubRateLimitExhaustedError(
             waitMs === undefined

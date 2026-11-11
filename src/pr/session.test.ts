@@ -8,6 +8,7 @@ import { SlackApiError, keys } from "#slack";
 import type { Db } from "../db/client.ts";
 import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
+import { handlerDeps } from "../testing/deps.ts";
 import { type PullRequestPayload, pullRequestEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { convergePullRequest } from "../testing/pr.ts";
@@ -56,7 +57,7 @@ const payload = (
     },
   }) satisfies PullRequestPayload;
 
-const deps = () => ({ db, slack, logger: createLogger("error") });
+const deps = () => handlerDeps(db, slack);
 const arrival = (key: string) => key as ArrivalKey;
 
 describe("PR session channel convergence (U4 channel lifecycle)", () => {

@@ -1,8 +1,19 @@
-import { eq } from "drizzle-orm";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { type Db, jobs, processedDeliveries } from "#db";
+import { readFileSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { eq, sql } from "drizzle-orm";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { type Db, type JobRow, createDb, jobs, processedDeliveries } from "#db";
 import { createTestDb } from "../db/testDb.ts";
-import { enqueueDeliveryJob, pruneJobHistory } from "./store.ts";
+import { enqueueTestJob } from "../testing/queue.ts";
+import {
+  LEASE_MS,
+  claimNextJob,
+  completeJob,
+  enqueueDeliveryJob,
+  failJob,
+  pruneJobHistory,
+  resetFailedJob,
+} from "./store.ts";
 
 let db: Db;
 let close: () => Promise<void>;
@@ -12,11 +23,15 @@ beforeEach(async () => {
   db = t.db;
   close = () => t.client.close();
 });
-afterEach(() => close());
+afterEach(async () => {
+  vi.useRealTimers();
+  await close();
+});
 
 const DAY_MS = 24 * 60 * 60_000;
 const now = new Date("2026-10-29T08:00:00Z");
 const daysAgo = (days: number) => new Date(now.getTime() - days * DAY_MS);
+const row = async (id: string) => (await db.select().from(jobs).where(eq(jobs.id, id)))[0];
 
 async function delivery(
   deliveryId: string,
@@ -33,6 +48,186 @@ async function delivery(
     .set({ seenAt: daysAgo(ageDays) })
     .where(eq(processedDeliveries.deliveryId, deliveryId));
 }
+
+const enqueueInto = (target: Db, deliveryId: string) =>
+  enqueueTestJob(target, { deliveryId, event: "pull_request", action: "opened", raw: {} });
+
+const enqueue = (deliveryId: string, raw: unknown = {}) =>
+  enqueueTestJob(db, { deliveryId, event: "pull_request", action: "opened", raw });
+
+/** Seed a pending job due at `availableAt`, created at `createdAt`. */
+async function due(id: string, availableAt: Date, createdAt = availableAt): Promise<void> {
+  await enqueue(id);
+  await db.update(jobs).set({ availableAt, createdAt }).where(eq(jobs.id, id));
+}
+
+function claimed(job: JobRow | undefined): JobRow {
+  if (!job) throw new Error("expected a job claim");
+  return job;
+}
+
+describe("enqueueDeliveryJob", () => {
+  it("stores a new delivery as a pending job keyed by the delivery id", async () => {
+    const result = await enqueueDeliveryJob(db, {
+      deliveryId: "d-new",
+      event: "issue_comment",
+      action: null,
+      raw: { nested: { list: [1, "two"] } },
+    });
+
+    expect(result).toEqual({ isNew: true, job: await row("d-new") });
+    expect(await row("d-new")).toMatchObject({
+      id: "d-new",
+      deliveryId: "d-new",
+      event: "issue_comment",
+      action: null,
+      raw: { nested: { list: [1, "two"] } },
+      status: "pending",
+      attempts: 0,
+      claimedAt: null,
+    });
+    const job = claimed(await row("d-new"));
+    expect(job.availableAt.getTime()).toBe(job.createdAt.getTime());
+  });
+
+  it("stores neither a marker nor a job for a duplicate delivery", async () => {
+    await enqueue("d-dup", { first: true });
+
+    expect(
+      await enqueueDeliveryJob(db, {
+        deliveryId: "d-dup",
+        event: "pull_request",
+        action: "closed",
+        raw: { first: false },
+      }),
+    ).toEqual({ isNew: false });
+    expect(await db.select().from(jobs)).toHaveLength(1);
+    expect((await row("d-dup"))?.raw).toEqual({ first: true });
+    expect(await db.select().from(processedDeliveries)).toHaveLength(1);
+  });
+});
+
+describe("claimNextJob", () => {
+  it("claims due jobs oldest first by available_at, then created_at", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+    await due("later", new Date(now.getTime() - 1_000));
+    await due("tie-newer", new Date(now.getTime() - 5_000), new Date(now.getTime() - 2_000));
+    await due("tie-older", new Date(now.getTime() - 5_000), new Date(now.getTime() - 9_000));
+    await due("not-yet", new Date(now.getTime() + 1));
+
+    const order: string[] = [];
+    for (let job = await claimNextJob(db); job; job = await claimNextJob(db)) order.push(job.id);
+
+    expect(order).toEqual(["tie-older", "tie-newer", "later"]);
+    expect(await row("not-yet")).toMatchObject({ status: "pending", attempts: 0 });
+  });
+
+  it("marks the claim processing at the current time and counts an attempt", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+    await due("job", now);
+
+    const job = claimed(await claimNextJob(db));
+
+    expect(job).toMatchObject({ id: "job", status: "processing", attempts: 1, claimedAt: now });
+    expect(await row("job")).toEqual(job);
+  });
+
+  it("orders a lease-expired job among pending ones by its available_at", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+    await due("crashed", new Date(now.getTime() - 3_000));
+    claimed(await claimNextJob(db));
+    await due("pending", new Date(now.getTime() - 1_000));
+
+    vi.setSystemTime(new Date(now.getTime() + LEASE_MS));
+    expect((await claimNextJob(db))?.id).toBe("crashed");
+    expect((await claimNextJob(db))?.id).toBe("pending");
+  });
+
+  it("reclaims a processing job only once its lease expires", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+    await due("lease-job", now);
+    expect((await claimNextJob(db))?.id).toBe("lease-job");
+
+    vi.setSystemTime(new Date(now.getTime() + LEASE_MS - 1));
+    expect(await claimNextJob(db)).toBeUndefined();
+
+    vi.setSystemTime(new Date(now.getTime() + LEASE_MS));
+    const reclaimed = claimed(await claimNextJob(db));
+    expect(reclaimed).toMatchObject({ id: "lease-job", attempts: 2 });
+  });
+
+  it("reclaims a processing job that has no claim time", async () => {
+    await enqueue("orphan");
+    await db.update(jobs).set({ status: "processing", attempts: 3 }).where(eq(jobs.id, "orphan"));
+
+    expect(await claimNextJob(db)).toMatchObject({ id: "orphan", attempts: 4 });
+  });
+
+  it("never claims done or failed jobs", async () => {
+    await enqueue("done");
+    await enqueue("failed");
+    await db.update(jobs).set({ status: "done" }).where(eq(jobs.id, "done"));
+    await db.update(jobs).set({ status: "failed" }).where(eq(jobs.id, "failed"));
+
+    expect(await claimNextJob(db)).toBeUndefined();
+  });
+
+  it("gives concurrent claimers different jobs", async () => {
+    await enqueue("a");
+    await enqueue("b");
+
+    const both = await Promise.all([claimNextJob(db), claimNextJob(db), claimNextJob(db)]);
+
+    expect(both.map((job) => job?.id).sort()).toEqual(["a", "b", undefined]);
+  });
+});
+
+describe("job claim fence", () => {
+  it("purges the raw payload on completion (retention, KTD13)", async () => {
+    await enqueue("d1", { secret: "private-repo-diff" });
+    await completeJob(db, claimed(await claimNextJob(db)));
+
+    expect(await row("d1")).toMatchObject({ status: "done", raw: null, claimedAt: null });
+  });
+
+  it("fences a stale worker after its processing lease is reclaimed", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+    await due("fenced-job", now);
+    const staleClaim = claimed(await claimNextJob(db));
+    vi.setSystemTime(new Date(now.getTime() + LEASE_MS));
+    const currentClaim = claimed(await claimNextJob(db));
+
+    expect(await completeJob(db, staleClaim)).toBe(false);
+    expect(await completeJob(db, currentClaim)).toBe(true);
+    expect((await row("fenced-job"))?.status).toBe("done");
+  });
+
+  it("retains a terminal payload for one explicit safe replay", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+    await enqueue("terminal-job", { secret: "private-repo-diff" });
+    await failJob(db, claimed(await claimNextJob(db)));
+
+    expect(await row("terminal-job")).toMatchObject({
+      status: "failed",
+      raw: { secret: "private-repo-diff" },
+    });
+
+    vi.setSystemTime(new Date(now.getTime() + 2_000));
+    expect(await resetFailedJob(db, "terminal-job")).toBe(true);
+    const reset = await row("terminal-job");
+    expect(reset?.status).toBe("pending");
+    expect(reset?.attempts).toBe(0);
+    expect(reset?.raw).toEqual({ secret: "private-repo-diff" });
+    expect(reset?.availableAt.getTime()).toBe(now.getTime() + 2_000);
+    expect(await resetFailedJob(db, "terminal-job")).toBe(false);
+  });
+});
 
 describe("pruneJobHistory", () => {
   it("drops done jobs and their markers past retention, keeping failed, pending, and recent ones", async () => {
@@ -63,5 +258,45 @@ describe("pruneJobHistory", () => {
         raw: {},
       }),
     ).toEqual({ isNew: false });
+  });
+});
+
+/**
+ * PGlite has one session, so a row lock held by another connection needs a
+ * real server: set QUEUE_TEST_DATABASE_URL to an empty Postgres database.
+ */
+const PG_URL = process.env.QUEUE_TEST_DATABASE_URL;
+
+describe.skipIf(!PG_URL)("claimNextJob on Postgres", () => {
+  it("skips a job another worker's transaction holds, then claims it once released", async () => {
+    const pg = createDb(PG_URL as string);
+    try {
+      const migrations = fileURLToPath(new URL("../db/migrations", import.meta.url));
+      await pg.db.execute(sql.raw("drop schema public cascade; create schema public"));
+      for (const file of readdirSync(migrations)
+        .filter((f) => f.endsWith(".sql"))
+        .sort()) {
+        for (const stmt of readFileSync(`${migrations}/${file}`, "utf8").split(
+          "--> statement-breakpoint",
+        )) {
+          if (stmt.trim()) await pg.db.execute(sql.raw(stmt));
+        }
+      }
+      await enqueueInto(pg.db, "held");
+      await enqueueInto(pg.db, "free");
+      await pg.db
+        .update(jobs)
+        .set({ availableAt: new Date(Date.now() - 60_000) })
+        .where(eq(jobs.id, "held"));
+
+      await pg.db.transaction(async (tx) => {
+        await tx.select().from(jobs).where(eq(jobs.id, "held")).for("update");
+        expect((await claimNextJob(pg.db))?.id).toBe("free");
+        expect(await claimNextJob(pg.db)).toBeUndefined();
+      });
+      expect((await claimNextJob(pg.db))?.id).toBe("held");
+    } finally {
+      await pg.close();
+    }
   });
 });

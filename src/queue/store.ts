@@ -1,5 +1,8 @@
-import { and, asc, eq, isNotNull, isNull, lt, lte, notExists, or } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull, lt, lte, notExists, or, sql } from "drizzle-orm";
 import { type Db, type JobRow, jobs, processedDeliveries } from "#db";
+
+/** A claimed job not renewed for this long can be claimed by another worker. */
+export const LEASE_MS = 60_000;
 
 export interface JobInput {
   deliveryId: string;
@@ -8,63 +11,77 @@ export interface JobInput {
   raw: unknown;
 }
 
-/** Atomically reserve a GitHub delivery id and persist its durable job. */
+/**
+ * Reserve a GitHub delivery id and persist its durable job in one statement:
+ * the job row is inserted only from the marker row the same statement created,
+ * so a duplicate delivery inserts neither.
+ */
 export async function enqueueDeliveryJob(
   db: Db,
   input: JobInput,
 ): Promise<{ isNew: true; job: JobRow } | { isNew: false }> {
-  return db.transaction(async (tx) => {
-    const marker = await tx
-      .insert(processedDeliveries)
-      .values({ deliveryId: input.deliveryId })
-      .onConflictDoNothing({ target: processedDeliveries.deliveryId })
-      .returning();
-    if (marker.length === 0) return { isNew: false };
-
-    const [job] = await tx
-      .insert(jobs)
-      .values({ id: input.deliveryId, ...input, status: "pending", attempts: 0 })
-      .returning();
-    return { isNew: true, job: job as JobRow };
-  });
+  const marker = db
+    .$with("marker")
+    .as(
+      db
+        .insert(processedDeliveries)
+        .values({ deliveryId: input.deliveryId })
+        .onConflictDoNothing({ target: processedDeliveries.deliveryId })
+        .returning({ deliveryId: processedDeliveries.deliveryId }),
+    );
+  const [job] = await db
+    .with(marker)
+    .insert(jobs)
+    .select((qb) =>
+      qb
+        .select({
+          id: marker.deliveryId,
+          deliveryId: marker.deliveryId,
+          event: sql`${input.event}::text`.as("event"),
+          action: sql`${input.action}::text`.as("action"),
+          raw: sql`${JSON.stringify(input.raw)}::jsonb`.as("raw"),
+          status: sql`'pending'::job_status`.as("status"),
+          attempts: sql`0`.as("attempts"),
+          claimedAt: sql`null::timestamptz`.as("claimed_at"),
+          availableAt: sql`now()`.as("available_at"),
+          createdAt: sql`now()`.as("created_at"),
+        })
+        .from(marker),
+    )
+    .returning();
+  return job ? { isNew: true, job: job as JobRow } : { isNew: false };
 }
 
 /**
- * Claim the oldest pending job for a single worker (KTD10). `FOR UPDATE SKIP
- * LOCKED` inside the transaction means concurrent workers never grab the same
- * row. Returns undefined when the queue is empty.
+ * Claim the next due job in one statement: the oldest pending job whose time
+ * has come, or a processing job whose lease expired, ordered by available_at
+ * then created_at. `SKIP LOCKED` means concurrent workers never claim the same
+ * row. Each claim counts an attempt. Undefined when nothing is due.
  */
-export async function claimNextJob(
-  db: Db,
-  options: { now?: Date; leaseMs?: number } = {},
-): Promise<JobRow | undefined> {
-  const now = options.now ?? new Date();
-  const leaseMs = options.leaseMs ?? 60_000;
-  const leaseExpiredAt = new Date(now.getTime() - leaseMs);
-  return db.transaction(async (tx) => {
-    const [candidate] = await tx
-      .select()
-      .from(jobs)
-      .where(
-        or(
-          and(eq(jobs.status, "pending"), lte(jobs.availableAt, now)),
-          and(
-            eq(jobs.status, "processing"),
-            or(isNull(jobs.claimedAt), lte(jobs.claimedAt, leaseExpiredAt)),
-          ),
+export async function claimNextJob(db: Db): Promise<JobRow | undefined> {
+  const now = new Date();
+  const leaseExpiredAt = new Date(now.getTime() - LEASE_MS);
+  const next = db
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(
+      or(
+        and(eq(jobs.status, "pending"), lte(jobs.availableAt, now)),
+        and(
+          eq(jobs.status, "processing"),
+          or(isNull(jobs.claimedAt), lte(jobs.claimedAt, leaseExpiredAt)),
         ),
-      )
-      .orderBy(asc(jobs.availableAt), asc(jobs.createdAt))
-      .limit(1)
-      .for("update", { skipLocked: true });
-    if (!candidate) return undefined;
-    const [claimed] = await tx
-      .update(jobs)
-      .set({ status: "processing", claimedAt: now, attempts: candidate.attempts + 1 })
-      .where(eq(jobs.id, candidate.id))
-      .returning();
-    return claimed as JobRow;
-  });
+      ),
+    )
+    .orderBy(asc(jobs.availableAt), asc(jobs.createdAt))
+    .limit(1)
+    .for("update", { skipLocked: true });
+  const [claimed] = await db
+    .update(jobs)
+    .set({ status: "processing", claimedAt: now, attempts: sql`${jobs.attempts} + 1` })
+    .where(eq(jobs.id, next))
+    .returning();
+  return claimed as JobRow | undefined;
 }
 
 const currentClaim = (job: JobRow) =>
@@ -85,7 +102,7 @@ export async function renewJobLease(db: Db, job: JobRow, now: Date): Promise<Job
   return rows.length > 0 ? { ...job, claimedAt: now } : undefined;
 }
 
-/** Mark done and purge the raw payload (retention, KTD13). */
+/** Mark done and purge the raw payload (retention, KTD13). False when the claim was lost. */
 export async function completeJob(db: Db, job: JobRow): Promise<boolean> {
   const rows = await db
     .update(jobs)
@@ -104,32 +121,18 @@ export async function failJob(db: Db, job: JobRow): Promise<void> {
     .where(currentClaim(job));
 }
 
-export async function rescheduleOrFailJob(
-  db: Db,
-  job: JobRow,
-  options: { maxAttempts: number; retryAt: Date },
-): Promise<"pending" | "failed"> {
-  if (job.attempts >= options.maxAttempts) {
-    await failJob(db, job);
-    return "failed";
-  }
-
+export async function rescheduleJob(db: Db, job: JobRow, retryAt: Date): Promise<void> {
   await db
     .update(jobs)
-    .set({ status: "pending", claimedAt: null, availableAt: options.retryAt })
+    .set({ status: "pending", claimedAt: null, availableAt: retryAt })
     .where(currentClaim(job));
-  return "pending";
 }
 
 /** Reset one terminal failed job only when its replay payload is still present. */
-export async function resetFailedJob(
-  db: Db,
-  id: string,
-  availableAt = new Date(),
-): Promise<boolean> {
+export async function resetFailedJob(db: Db, id: string): Promise<boolean> {
   const rows = await db
     .update(jobs)
-    .set({ status: "pending", attempts: 0, claimedAt: null, availableAt })
+    .set({ status: "pending", attempts: 0, claimedAt: null, availableAt: new Date() })
     .where(and(eq(jobs.id, id), eq(jobs.status, "failed"), isNotNull(jobs.raw)))
     .returning({ id: jobs.id });
   return rows.length > 0;

@@ -249,13 +249,13 @@ const LAYERS: readonly (readonly string[])[] = [
   ["queue"],
   ["ingest"],
   ["app"],
-  ["admin", "main.ts"],
+  ["admin", "index.ts"],
 ];
 
 const THIRD_PARTY: Record<string, readonly string[]> = {
   "@slack/web-api": ["slack"],
   "@octokit/auth-app": ["github"],
-  "@hono/node-server": ["main.ts"],
+  "@hono/node-server": ["index.ts"],
   hono: ["ingest", "app", "identity", "github"],
   "drizzle-orm": ["db", "pr", "slack", "reminders", "identity", "queue"],
   postgres: ["db"],
@@ -280,22 +280,6 @@ const TABLE_READERS: Record<string, string> = {
   "db/readiness.ts": "probes every table's columns with a limit-0 select",
   "reminders/store.ts": "the due scan reads each reminder's PR and reviewer identity in one join",
 };
-
-/**
- * Code the later slices replace, with the slice that removes it. Each entry
- * must still match a violation, so the list can only shrink.
- */
-const PENDING: readonly { files: string; rule: string; slice: string }[] = [
-  // S6: queue worker, app context and HTTP, main.ts and the admin CLIs.
-  { files: "handlers/deps.ts", rule: "not in a layered module", slice: "S6" },
-  { files: "worker/loop.ts", rule: "not in a layered module", slice: "S6" },
-  { files: "scheduler/loop.ts", rule: "not in a layered module", slice: "S6" },
-  { files: "scheduler/dailyLoop.ts", rule: "not in a layered module", slice: "S6" },
-  { files: "routes/health.ts", rule: "", slice: "S6" },
-  { files: "server.ts", rule: "", slice: "S6" },
-  { files: "index.ts", rule: "", slice: "S6" },
-  { files: "admin/", rule: "", slice: "S6" },
-];
 
 const moduleOf = (file: string) => (file.includes("/") ? (file.split("/")[0] ?? file) : file);
 const layerOf = (mod: string) => LAYERS.findIndex((layer) => layer.includes(mod));
@@ -365,25 +349,15 @@ function layerViolations(): string[] {
     if (text.includes("process.env") && file !== "config/env.ts") {
       out.push(`${file}: reads process.env`);
     }
-    if (/process\.on\(/.test(text) && file !== "main.ts") {
+    if (/process\.on\(/.test(text) && file !== "index.ts") {
       out.push(`${file}: installs process handlers`);
     }
   }
   return out;
 }
 
-const pendingMatch = (violation: string, entry: (typeof PENDING)[number]) =>
-  violation.startsWith(entry.files) && violation.includes(entry.rule);
-
 describe("module layering", () => {
-  const violations = layerViolations();
-
-  it("has no violations outside the pending list", () => {
-    expect(violations.filter((v) => !PENDING.some((entry) => pendingMatch(v, entry)))).toEqual([]);
-  });
-
-  it("lists only pending entries that still match a violation", () => {
-    const stale = PENDING.filter((entry) => !violations.some((v) => pendingMatch(v, entry)));
-    expect(stale).toEqual([]);
+  it("has no violations", () => {
+    expect(layerViolations()).toEqual([]);
   });
 });

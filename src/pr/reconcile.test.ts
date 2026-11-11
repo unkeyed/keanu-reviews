@@ -12,6 +12,7 @@ import {
   type PullRequestSnapshotFetcher,
   createPullRequestSnapshotFetcher,
 } from "../github/pullRequestSnapshot.ts";
+import { handlerDeps } from "../testing/deps.ts";
 import { type PullRequestPayload, pullRequestEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { convergePullRequest } from "../testing/pr.ts";
@@ -32,7 +33,10 @@ beforeEach(async () => {
   events = [];
 });
 
-afterEach(() => close());
+afterEach(async () => {
+  vi.useRealTimers();
+  await close();
+});
 
 function logger(): Logger {
   const record = (level: string) => (msg: string, fields?: Record<string, unknown>) => {
@@ -49,7 +53,7 @@ function logger(): Logger {
 }
 
 function handler(over: Partial<PrDeps> = {}): PrDeps {
-  return { db, slack, logger: logger(), ...over };
+  return handlerDeps(db, slack, { logger: logger(), ...over });
 }
 
 function opened(number: number, githubId: number): PullRequestPayload {
@@ -395,7 +399,6 @@ describe("closed pull request reconciliation", () => {
     const deps = handler();
     await openPr(1, 101, deps);
     await openPr(2, 102, deps);
-    const sleep = vi.fn(async () => {});
     const fetchFn = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
       if (url.endsWith("/pulls/1")) {
@@ -428,22 +431,21 @@ describe("closed pull request reconciliation", () => {
     const auth: InstallationAuth = { getToken: async () => "token", invalidate: () => {} };
     const run = createClosedPullRequestReconciliation(
       deps,
-      createPullRequestSnapshotFetcher(auth, "42", {
-        fetch: fetchFn,
-        sleep,
-        logger: deps.logger,
-      }),
+      createPullRequestSnapshotFetcher(auth, "42", { fetch: fetchFn, logger: deps.logger }),
     );
 
-    await expect(run()).resolves.toMatchObject({
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    const running = run();
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(running).resolves.toMatchObject({
       checked: 2,
       merged: 2,
       archived: 2,
       failed: 0,
       rateLimited: false,
     });
-    expect(sleep).toHaveBeenCalledTimes(1);
-    expect(sleep).toHaveBeenCalledWith(2000);
     expect(slack.channel("C1")?.archived).toBe(true);
     expect(slack.channel("C2")?.archived).toBe(true);
     expect(events).toContainEqual(
@@ -459,7 +461,6 @@ describe("closed pull request reconciliation", () => {
     const deps = handler();
     await openPr(1, 101, deps);
     await openPr(2, 102, deps);
-    const sleep = vi.fn(async () => {});
     const fetchFn = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
       if (url.endsWith("/pulls/2")) throw new Error("second pull request should not be requested");
@@ -471,11 +472,7 @@ describe("closed pull request reconciliation", () => {
     const auth: InstallationAuth = { getToken: async () => "token", invalidate: () => {} };
     const run = createClosedPullRequestReconciliation(
       deps,
-      createPullRequestSnapshotFetcher(auth, "42", {
-        fetch: fetchFn,
-        sleep,
-        maxBackoffMs: 120_000,
-      }),
+      createPullRequestSnapshotFetcher(auth, "42", { fetch: fetchFn }),
     );
 
     await expect(run()).resolves.toMatchObject({
@@ -485,7 +482,6 @@ describe("closed pull request reconciliation", () => {
       failed: 0,
       rateLimited: true,
     });
-    expect(sleep).not.toHaveBeenCalled();
     expect(fetchFn).toHaveBeenCalledOnce();
     expect(slack.channel("C1")?.archived).toBe(false);
     expect(slack.channel("C2")?.archived).toBe(false);

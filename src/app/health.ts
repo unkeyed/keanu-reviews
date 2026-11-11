@@ -2,15 +2,13 @@ import { Hono } from "hono";
 import { serviceVersion } from "#config";
 import type { ReadyCheck } from "#db";
 
-/**
- * Liveness and readiness endpoints (U1). Liveness reports that the process is
- * serving; readiness additionally protects traffic from an unavailable or
- * unmigrated database.
- */
 const startedAt = Date.now();
-
 const version = serviceVersion();
 
+/**
+ * Liveness and readiness (U1). Liveness reports that the process is serving;
+ * readiness also protects traffic from an unavailable or unmigrated database.
+ */
 export function createHealthRoutes(checkReady: ReadyCheck): Hono {
   const health = new Hono();
 

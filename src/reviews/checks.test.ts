@@ -18,6 +18,7 @@ let jobs = 0;
 const work = () => ({
   arrivalKey: jobArrivalKey(new Date(0), `job-${String(++jobs).padStart(4, "0")}`),
   attempt: 1,
+  signal: new AbortController().signal,
 });
 const handleCheckRun = (deps: HandlerDeps, ev: CheckRunEvent) => onCheckRun(deps, ev, work());
 const handleReviewRequest = (deps: HandlerDeps, ev: Parameters<typeof onPr>[1]) =>

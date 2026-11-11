@@ -16,12 +16,21 @@ const locked = (pr: PrRow) => ({ kind: "existing", githubPrId: pr.githubPrId }) 
  * posts top-level, and a reply is threaded under the Slack message of the
  * comment it replies to, never under the PR root.
  */
-export async function onReviewComment(deps: MirrorDeps, ev: ReviewCommentEvent): Promise<void> {
+export async function onReviewComment(
+  deps: MirrorDeps,
+  ev: ReviewCommentEvent,
+  signal?: AbortSignal,
+): Promise<void> {
   const c = ev.comment;
   if (shouldSkipActor(c.author, deps.allowedBots)) return;
   if (ev.action === "deleted") {
-    return removeStored(deps, ev.pr.repo, ev.pr.number, c.author, (prId) =>
-      keys.reviewComment(prId, c.id),
+    return removeStored(
+      deps,
+      ev.pr.repo,
+      ev.pr.number,
+      c.author,
+      (prId) => keys.reviewComment(prId, c.id),
+      signal,
     );
   }
   const action = ev.action;
@@ -36,7 +45,7 @@ export async function onReviewComment(deps: MirrorDeps, ev: ReviewCommentEvent):
       // THREAD_COMMENTS=false keeps every comment top-level, and a reply whose
       // parent was never mirrored posts top-level too.
       const threadTs =
-        deps.threadComments !== false && c.inReplyTo !== undefined
+        deps.threadComments && c.inReplyTo !== undefined
           ? await s.sentTs(keys.reviewComment(pr.id, c.inReplyTo))
           : undefined;
       const item = { key: keys.reviewComment(pr.id, c.id), action, author: c.author, body: c.body };
@@ -60,6 +69,7 @@ export async function onReviewComment(deps: MirrorDeps, ev: ReviewCommentEvent):
       // PR author is already a member of their own channel.
       await s.inviteMentions(c.body, ev.pr.author.login);
     },
+    signal,
   );
 }
 
@@ -67,40 +77,54 @@ export async function onReviewComment(deps: MirrorDeps, ev: ReviewCommentEvent):
  * Mirror a PR conversation comment. It carries no PR object to build a channel
  * from, so it waits for the pull_request event that builds one.
  */
-export async function onIssueComment(deps: MirrorDeps, ev: IssueCommentEvent): Promise<void> {
+export async function onIssueComment(
+  deps: MirrorDeps,
+  ev: IssueCommentEvent,
+  signal?: AbortSignal,
+): Promise<void> {
   const c = ev.comment;
   // Bot comments (Vercel/Mintlify deploy previews, our own merge comment) are
   // skipped unless allow-listed. `type: "Bot"` covers our App's bot, so this
   // also keeps our merge comment from echoing (never allow-list our App's login).
   if (shouldSkipActor(c.author, deps.allowedBots)) return;
   if (ev.action === "deleted") {
-    return removeStored(deps, ev.repo, ev.number, c.author, (prId) =>
-      keys.issueComment(prId, c.id),
+    return removeStored(
+      deps,
+      ev.repo,
+      ev.number,
+      c.author,
+      (prId) => keys.issueComment(prId, c.id),
+      signal,
     );
   }
   const action = ev.action;
 
   const pr = await findByRepoNumber(deps.db, ev.repo, ev.number);
   if (!pr?.channelId) throw new Retry(`PR channel is not ready for ${ev.repo}#${ev.number}`);
-  await session(deps, locked(pr), async (s) => {
-    const item = { key: keys.issueComment(pr.id, c.id), action, author: c.author, body: c.body };
-    // GitHub has no threads here, so the comment posts top-level.
-    await upsertAuthored(deps, s, item, (author, images) => {
-      const { poster, label } = commentPresentation(author);
-      return {
-        poster,
-        message: {
-          kind: "issue_comment",
-          authorLogin: c.author.login,
-          body: c.body,
-          url: c.url,
-          label,
-          images,
-        },
-      };
-    });
-    await s.inviteMentions(c.body, ev.prAuthorLogin);
-  });
+  await session(
+    deps,
+    locked(pr),
+    async (s) => {
+      const item = { key: keys.issueComment(pr.id, c.id), action, author: c.author, body: c.body };
+      // GitHub has no threads here, so the comment posts top-level.
+      await upsertAuthored(deps, s, item, (author, images) => {
+        const { poster, label } = commentPresentation(author);
+        return {
+          poster,
+          message: {
+            kind: "issue_comment",
+            authorLogin: c.author.login,
+            body: c.body,
+            url: c.url,
+            label,
+            images,
+          },
+        };
+      });
+      await s.inviteMentions(c.body, ev.prAuthorLogin);
+    },
+    signal,
+  );
 }
 
 /** A deletion never creates a channel: without a stored one, nothing was mirrored. */
@@ -110,8 +134,9 @@ async function removeStored(
   number: number,
   author: GithubActor,
   key: (prId: PrId) => EffectKey,
+  signal: AbortSignal | undefined,
 ): Promise<void> {
   const pr = await findByRepoNumber(deps.db, repo, number);
   if (!pr?.channelId) return;
-  await session(deps, locked(pr), (s) => removeMirror(deps, s, key(pr.id), author));
+  await session(deps, locked(pr), (s) => removeMirror(deps, s, key(pr.id), author), signal);
 }

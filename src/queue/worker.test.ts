@@ -1,0 +1,476 @@
+import { eq } from "drizzle-orm";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDispatcher } from "#app";
+import type { JobRow } from "#db";
+import { type Logger, Retry, createLogger } from "#lib";
+import type { Db } from "../db/client.ts";
+import { jobs } from "../db/schema.ts";
+import { createTestDb } from "../db/testDb.ts";
+import { applyPullRequestSource, claimPullRequestLifecycle, prId } from "../pr/store.ts";
+import { keys } from "../slack/catalog.ts";
+import { channelSink, claim, createLedger } from "../slack/ledger.ts";
+import { handlerDeps } from "../testing/deps.ts";
+import { type PullRequestPayload, pullRequestEvent } from "../testing/events.ts";
+import { FakeSlackGateway } from "../testing/fakeSlack.ts";
+import { convergePullRequest } from "../testing/pr.ts";
+import { drainQueue, enqueueTestJob } from "../testing/queue.ts";
+import { LEASE_MS, claimNextJob } from "./store.ts";
+import { HANDLER_TIMEOUT_MS, MAX_ATTEMPTS, createWorker, startWorker } from "./worker.ts";
+
+let db: Db;
+
+const opened = async () => ({
+  message: {
+    kind: "root" as const,
+    pr: {
+      repo: "unkey/api",
+      number: 1,
+      title: "opened",
+      url: "https://github.com/unkey/api/pull/1",
+      authorLogin: "oz",
+    },
+  },
+});
+let close: () => Promise<void>;
+
+beforeEach(async () => {
+  const t = await createTestDb();
+  db = t.db;
+  close = () => t.client.close();
+});
+
+afterEach(async () => {
+  vi.useRealTimers();
+  await close();
+});
+
+const quiet = () => createLogger("error");
+const enqueue = (deliveryId: string, raw: unknown = {}) =>
+  enqueueTestJob(db, { deliveryId, event: "pull_request", action: "opened", raw });
+const row = async (id: string) => (await db.select().from(jobs).where(eq(jobs.id, id)))[0];
+
+describe("worker retries", () => {
+  it("backs off a failed job, then retains its payload for admin replay", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const job = await enqueue("retry-job", { private: "payload" });
+    const worker = createWorker(db, quiet(), async () => {
+      throw new Error("Slack unavailable");
+    });
+
+    const dueTimes: number[] = [];
+    for (let attempt = 1; attempt < MAX_ATTEMPTS; attempt += 1) {
+      const startedAt = Date.now();
+      expect(await worker.tick()).toBe(true);
+      const pending = await row(job.id);
+      expect(pending?.status).toBe("pending");
+      expect(pending?.raw).toEqual({ private: "payload" });
+      dueTimes.push((pending?.availableAt.getTime() ?? 0) - startedAt);
+      expect(await worker.tick()).toBe(false);
+      vi.setSystemTime(pending?.availableAt ?? new Date());
+    }
+    expect(dueTimes).toEqual([2_000, 4_000, 8_000, 16_000, 32_000, 64_000, 128_000]);
+
+    expect(await worker.tick()).toBe(true);
+    const failed = await row(job.id);
+    expect(failed?.status).toBe("failed");
+    expect(failed?.attempts).toBe(MAX_ATTEMPTS);
+    expect(failed?.raw).toEqual({ private: "payload" });
+  });
+
+  it("fails a job whose payload can never parse on the first attempt", async () => {
+    const job = await enqueue("malformed", {
+      action: "opened",
+      repository: { full_name: "unkey/api" },
+    });
+    const error = vi.fn();
+    const worker = createWorker(
+      db,
+      { ...quiet(), error },
+      createDispatcher(handlerDeps(db, new FakeSlackGateway())),
+    );
+
+    expect(await worker.tick()).toBe(true);
+    expect(await row(job.id)).toMatchObject({ status: "failed", attempts: 1, raw: job.raw });
+    expect(error).toHaveBeenCalledWith(
+      "job failed permanently",
+      expect.objectContaining({
+        jobId: job.id,
+        reason: "invalid pull_request payload",
+        issues: [expect.stringMatching(/^pull_request: /)],
+      }),
+    );
+  });
+
+  it("does not run a handler beyond the retry budget when reclaiming a crashed attempt", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const job = await enqueue("crashed-final-attempt", { private: "payload" });
+    await db
+      .update(jobs)
+      .set({ status: "processing", attempts: MAX_ATTEMPTS, claimedAt: new Date() })
+      .where(eq(jobs.id, job.id));
+    vi.setSystemTime(Date.now() + LEASE_MS);
+    const dispatch = vi.fn(async () => undefined);
+
+    expect(await createWorker(db, quiet(), dispatch).tick()).toBe(true);
+    expect(dispatch).not.toHaveBeenCalled();
+    const failed = await row(job.id);
+    expect(failed?.status).toBe("failed");
+    expect(failed?.raw).toEqual({ private: "payload" });
+  });
+});
+
+describe("worker retry hints", () => {
+  const availableAt = async (id: string) => {
+    const r = await row(id);
+    return { status: r?.status, at: r?.availableAt.getTime() };
+  };
+  // Run the job at each retry time it asks for until it stops retrying.
+  const settle = async (worker: { tick: () => Promise<boolean> }, id: string) => {
+    for (;;) {
+      await drainQueue(worker);
+      const r = await row(id);
+      if (r?.status !== "pending") return r;
+      vi.setSystemTime(r.availableAt);
+    }
+  };
+  const openedPayload = {
+    action: "opened",
+    repository: { full_name: "unkey/api" },
+    pull_request: {
+      number: 1423,
+      id: 999,
+      draft: false,
+      merged: false,
+      title: "Add auth",
+      html_url: "https://github.com/unkey/api/pull/1423",
+      user: { login: "oz", id: 100 },
+      head: { sha: "sha1" },
+      updated_at: "2026-08-11T12:00:00Z",
+    },
+  } satisfies PullRequestPayload;
+
+  it("waits out a hint longer than the backoff and caps it at five minutes", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const short = await enqueue("hint-short");
+    const long = await enqueue("hint-long");
+    const clock = Date.now();
+    const worker = createWorker(db, quiet(), async (job) => {
+      throw new Retry("busy", undefined, job.id === short.id ? 90_000 : 3_600_000);
+    });
+
+    await drainQueue(worker);
+
+    expect(await availableAt(short.id)).toEqual({ status: "pending", at: clock + 90_000 });
+    expect(await availableAt(long.id)).toEqual({ status: "pending", at: clock + 300_000 });
+  });
+
+  it("delivers a Slack effect once a crashed holder's lease lifts", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.now();
+    await applyPullRequestSource(db, {
+      repoFullName: "unkey/api",
+      number: 1,
+      githubPrId: 1,
+      currentState: "pr",
+    });
+    const effect = keys.root(prId("unkey/api", 1));
+    await claim(db, effect, new Date());
+    const slack = new FakeSlackGateway();
+    const job = await enqueue("effect-held");
+    const worker = createWorker(db, quiet(), async () => {
+      await createLedger(db).deliver(effect, channelSink(slack, "C1"), opened);
+    });
+
+    const settled = await settle(worker, job.id);
+
+    expect(settled?.status).toBe("done");
+    expect(Date.now()).toBeGreaterThanOrEqual(start + 2 * 60_000);
+    expect(slack.messages.map((m) => m.text)).toEqual(["PR #1: opened"]);
+  });
+
+  it("retries within seconds while a live run holds the Slack effect", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.now();
+    await applyPullRequestSource(db, {
+      repoFullName: "unkey/api",
+      number: 1,
+      githubPrId: 1,
+      currentState: "pr",
+    });
+    const effect = keys.root(prId("unkey/api", 1));
+    await claim(db, effect, new Date());
+    const job = await enqueue("effect-live");
+    const worker = createWorker(db, quiet(), async () => {
+      await createLedger(db).deliver(effect, channelSink(new FakeSlackGateway(), "C1"), opened);
+    });
+
+    await drainQueue(worker);
+    expect(await availableAt(job.id)).toEqual({ status: "pending", at: start + 2_000 });
+  });
+
+  it("retries a PR lifecycle event after a crashed holder's lease instead of failing it", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.now();
+    await claimPullRequestLifecycle(db, 999);
+    const slack = new FakeSlackGateway();
+    const job = await enqueue("lifecycle-held");
+    const worker = createWorker(db, quiet(), async () => {
+      await convergePullRequest(handlerDeps(db, slack), pullRequestEvent(openedPayload));
+    });
+
+    const settled = await settle(worker, job.id);
+
+    expect(settled?.status).toBe("done");
+    expect(Date.now()).toBeGreaterThanOrEqual(start + 5 * 60_000);
+    expect(slack.channels).toHaveLength(1);
+  });
+
+  it("retries within seconds while a live run holds the PR lifecycle", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.now();
+    await claimPullRequestLifecycle(db, 999, { now: new Date(start - 1_000) });
+    const job = await enqueue("lifecycle-live");
+    const worker = createWorker(db, quiet(), async () => {
+      await convergePullRequest(
+        handlerDeps(db, new FakeSlackGateway()),
+        pullRequestEvent(openedPayload),
+      );
+    });
+
+    await drainQueue(worker);
+    expect(await availableAt(job.id)).toEqual({ status: "pending", at: start + 2_000 });
+  });
+
+  it("waits only for the time left on a PR lifecycle lease a crashed holder left", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.now();
+    await claimPullRequestLifecycle(db, 999, { now: new Date(start - 4.5 * 60_000) });
+    const job = await enqueue("lifecycle-nearly-free");
+    const worker = createWorker(db, quiet(), async () => {
+      await convergePullRequest(
+        handlerDeps(db, new FakeSlackGateway()),
+        pullRequestEvent(openedPayload),
+      );
+    });
+
+    await drainQueue(worker);
+    expect(await availableAt(job.id)).toEqual({ status: "pending", at: start + 30_000 });
+  });
+});
+
+/** A handler that runs until the test releases it, recording the signal it got. */
+function heldHandler() {
+  let started!: () => void;
+  const running = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let finish!: () => void;
+  const finished = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  let signal: AbortSignal | undefined;
+  const dispatch = async (_job: JobRow, s: AbortSignal) => {
+    signal = s;
+    started();
+    await finished;
+  };
+  return { dispatch, running, finish, signal: () => signal };
+}
+
+/** Fake the clock and the lease and timeout timers, but not the I/O PGlite needs. */
+const fakeLeaseTimers = () =>
+  vi.useFakeTimers({
+    toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+  });
+
+describe("worker lease", () => {
+  it("keeps a job that outlives its lease from being claimed by another worker", async () => {
+    fakeLeaseTimers();
+    const job = await enqueue("slow-job");
+    const handler = heldHandler();
+    const ticking = createWorker(db, quiet(), handler.dispatch).tick();
+    await handler.running;
+
+    await vi.advanceTimersByTimeAsync(LEASE_MS + LEASE_MS / 3);
+    expect(await claimNextJob(db)).toBeUndefined();
+
+    handler.finish();
+    await ticking;
+    expect(await row(job.id)).toMatchObject({ status: "done", attempts: 1 });
+  });
+
+  it("aborts the handler and leaves the job alone once another worker holds its lease", async () => {
+    fakeLeaseTimers();
+    const job = await enqueue("stolen-job", { private: "payload" });
+    const handler = heldHandler();
+    const warn = vi.fn();
+    const ticking = createWorker(db, { ...quiet(), warn }, handler.dispatch).tick();
+    await handler.running;
+    const stolenAt = new Date(Date.now() + 1);
+    await db.update(jobs).set({ attempts: 2, claimedAt: stolenAt }).where(eq(jobs.id, job.id));
+
+    await vi.advanceTimersByTimeAsync(LEASE_MS / 3);
+
+    expect(await ticking).toBe(true);
+    expect(handler.signal()?.aborted).toBe(true);
+    expect(warn).toHaveBeenCalledWith("job lease lost to another worker", {
+      jobId: job.id,
+      event: "pull_request",
+    });
+    expect(await row(job.id)).toMatchObject({
+      status: "processing",
+      attempts: 2,
+      claimedAt: stolenAt,
+      raw: { private: "payload" },
+    });
+    handler.finish();
+  });
+
+  it("aborts a handler that runs past the timeout and retries its job", async () => {
+    fakeLeaseTimers();
+    const job = await enqueue("hung-job");
+    const handler = heldHandler();
+    const error = vi.fn();
+    const ticking = createWorker(db, { ...quiet(), error }, handler.dispatch).tick();
+    await handler.running;
+    const startedAt = Date.now();
+
+    await vi.advanceTimersByTimeAsync(HANDLER_TIMEOUT_MS - 1);
+    expect(handler.signal()?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(await ticking).toBe(true);
+    expect(handler.signal()?.aborted).toBe(true);
+    expect(error).toHaveBeenCalledWith("job failed", {
+      jobId: job.id,
+      event: "pull_request",
+      err: `job handler timed out after ${HANDLER_TIMEOUT_MS}ms`,
+    });
+    const retried = await row(job.id);
+    expect(retried).toMatchObject({ status: "pending", attempts: 1, claimedAt: null });
+    expect(retried?.availableAt.getTime()).toBe(startedAt + HANDLER_TIMEOUT_MS + 2_000);
+    handler.finish();
+  });
+
+  it("stays under the window in which another worker could take over a Slack effect", () => {
+    expect(HANDLER_TIMEOUT_MS + LEASE_MS / 3).toBeLessThanOrEqual(2 * 60_000);
+  });
+});
+
+describe("worker loop", () => {
+  const pendingTicks = () => {
+    const finishers: ((more: boolean) => void)[] = [];
+    const tick = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishers.push(resolve);
+        }),
+    );
+    return { tick, finish: (more: boolean) => finishers.shift()?.(more) };
+  };
+  const loopLogger = (): Logger => quiet();
+
+  it("does not overlap drains when one poll takes longer than the timer", async () => {
+    vi.useFakeTimers();
+    const { tick, finish } = pendingTicks();
+    const loop = startWorker({ tick }, loopLogger());
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(tick).toHaveBeenCalledTimes(1);
+
+    finish(false);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(tick).toHaveBeenCalledTimes(2);
+    finish(false);
+    await loop.stop();
+  });
+
+  it("stop resolves after the in-flight job finishes and claims no further jobs", async () => {
+    vi.useFakeTimers();
+    const { tick, finish } = pendingTicks();
+    const loop = startWorker({ tick }, loopLogger());
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    let stopped = false;
+    const stopping = loop.stop().then(() => {
+      stopped = true;
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(stopped).toBe(false);
+
+    finish(true);
+    await stopping;
+    expect(stopped).toBe(true);
+    expect(tick).toHaveBeenCalledTimes(1);
+  });
+
+  it("backs its idle poll off from one second to five, and back to one after work", async () => {
+    vi.useFakeTimers();
+    let queued = 0;
+    const polls: number[] = [];
+    const start = Date.now();
+    const tick = vi.fn(async () => {
+      polls.push(Date.now() - start);
+      if (queued === 0) return false;
+      queued -= 1;
+      return true;
+    });
+    const loop = startWorker({ tick }, loopLogger());
+
+    await vi.advanceTimersByTimeAsync(17_000);
+    expect(polls).toEqual([1_000, 3_000, 7_000, 12_000, 17_000]);
+
+    queued = 1;
+    polls.length = 0;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(polls).toEqual([22_000, 22_000]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(polls).toEqual([22_000, 22_000, 23_000]);
+    await loop.stop();
+  });
+
+  it("drains at once when nudged, even mid-backoff", async () => {
+    vi.useFakeTimers();
+    const tick = vi.fn(async () => false);
+    const loop = startWorker({ tick }, loopLogger());
+    await vi.advanceTimersByTimeAsync(7_000);
+    expect(tick).toHaveBeenCalledTimes(3);
+
+    loop.wake();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(tick).toHaveBeenCalledTimes(4);
+    await loop.stop();
+  });
+
+  it("drains again right after the run in flight when nudged during it", async () => {
+    vi.useFakeTimers();
+    const { tick, finish } = pendingTicks();
+    const loop = startWorker({ tick }, loopLogger());
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(tick).toHaveBeenCalledTimes(1);
+
+    loop.wake();
+    finish(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(tick).toHaveBeenCalledTimes(2);
+    finish(false);
+    await loop.stop();
+  });
+
+  it("runs a webhook's job as soon as the webhook nudges the worker", async () => {
+    const ran: string[] = [];
+    const loop = startWorker(
+      createWorker(db, quiet(), async (job) => {
+        ran.push(job.id);
+      }),
+      quiet(),
+    );
+    await enqueue("nudged");
+    const nudgedAt = Date.now();
+    loop.wake();
+    await vi.waitFor(() => expect(ran).toEqual(["nudged"]), { timeout: 900, interval: 5 });
+    expect(Date.now() - nudgedAt).toBeLessThan(900);
+    await loop.stop();
+    expect((await row("nudged"))?.status).toBe("done");
+  });
+});

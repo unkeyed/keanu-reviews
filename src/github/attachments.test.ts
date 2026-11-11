@@ -293,7 +293,8 @@ describe("commentImages", () => {
     ]);
   });
 
-  it("shows no images when no mirror is wired", async () => {
-    expect(await commentImages({}, body, { isBot: false })).toEqual([]);
+  it("shows no images for a comment that embeds none", async () => {
+    const mirror = createGithubAttachmentMirror({ publicUrl, secret, fetch: served("image/png") });
+    expect(await commentImages(mirror, "plain text, no images", { isBot: false })).toEqual([]);
   });
 });

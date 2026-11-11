@@ -32,7 +32,7 @@ const handleReviewRequest = inSession(onPullRequest);
 const reviewArrival = jobArrivalKey(new Date(0), "review");
 /** A review job as the worker runs it: reminder cancel, then the mirror. */
 const handleReview = (deps: HandlerDeps, ev: ReviewEvent, arrivalKey = reviewArrival) =>
-  handlers.review(deps, ev, { arrivalKey, attempt: 1 });
+  handlers.review(deps, ev, { arrivalKey, attempt: 1, signal: new AbortController().signal });
 
 let db: Db;
 let slack: FakeSlackGateway;
@@ -292,7 +292,11 @@ describe("review job (U6, R5)", () => {
         pull_request: review("approved").pull_request,
         requested_reviewer: { id: 7, login: "flo" },
       }),
-      { arrivalKey: jobArrivalKey(new Date(0), "delivery-request"), attempt: 1 },
+      {
+        arrivalKey: jobArrivalKey(new Date(0), "delivery-request"),
+        attempt: 1,
+        signal: new AbortController().signal,
+      },
     );
     expect(slack.invites).toHaveLength(0);
 
@@ -327,7 +331,11 @@ describe("review job (U6, R5)", () => {
           pull_requests: [{ number: 1 }],
         },
       }),
-      { arrivalKey: jobArrivalKey(new Date(0), "delivery-check"), attempt: 1 },
+      {
+        arrivalKey: jobArrivalKey(new Date(0), "delivery-check"),
+        attempt: 1,
+        signal: new AbortController().signal,
+      },
     );
     expect(slack.invites).toHaveLength(0);
     expect(slack.messages).toHaveLength(afterReview);

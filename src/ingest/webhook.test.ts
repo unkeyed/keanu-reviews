@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLogger } from "#lib";
 import type { Db } from "../db/client.ts";
 import { jobs } from "../db/schema.ts";
@@ -14,16 +14,19 @@ const sign = (body: string): string =>
 let db: Db;
 let close: () => Promise<void>;
 let app: ReturnType<typeof createGithubWebhookRoute>;
+let nudge: ReturnType<typeof vi.fn<() => void>>;
 
 beforeEach(async () => {
   const t = await createTestDb();
   db = t.db;
   close = () => t.client.close();
+  nudge = vi.fn<() => void>();
   app = createGithubWebhookRoute({
     db,
     logger: createLogger("error"),
     webhookSecret: SECRET,
     allowedInstallationIds: ALLOWED,
+    nudge,
   });
 });
 afterEach(() => close());
@@ -60,6 +63,7 @@ describe("github webhook route", () => {
     });
     expect(res.status).toBe(202);
     expect(await jobCount()).toBe(1);
+    expect(nudge).toHaveBeenCalledOnce();
   });
 
   it("rejects a tampered body with 401 and writes no job", async () => {
@@ -71,6 +75,7 @@ describe("github webhook route", () => {
     });
     expect(res.status).toBe(401);
     expect(await jobCount()).toBe(0);
+    expect(nudge).not.toHaveBeenCalled();
   });
 
   it("rejects a valid signature from a non-allowlisted installation (403, no job)", async () => {
@@ -95,5 +100,6 @@ describe("github webhook route", () => {
     const res = await post(b, headers);
     expect(res.status).toBe(200);
     expect(await jobCount()).toBe(1);
+    expect(nudge).toHaveBeenCalledOnce();
   });
 });

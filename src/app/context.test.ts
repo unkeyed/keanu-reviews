@@ -1,37 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadConfig } from "#config";
 import { getSlackUserTokenRow, upsertIdentity, upsertSlackUserToken } from "#identity";
 import { createLogger } from "#lib";
 import { onReviewComment } from "#mirror";
-import { loadConfig } from "../config/env.ts";
 import type { Db } from "../db/client.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { createTokenCipher } from "../lib/tokenCipher.ts";
 import { applyPullRequestSource, setChannel } from "../pr/store.ts";
 import { SLACK_POST_USER_SCOPE } from "../slack/oauth.ts";
+import { TEST_ENV } from "../testing/context.ts";
+import { handlerDeps } from "../testing/deps.ts";
 import { reviewCommentEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
-import { createServiceHandlers } from "./deps.ts";
+import { createContext, userTokenAccess } from "./context.ts";
 
 const ENC_KEY = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
 const ROTATED_KEY = "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100";
-
-const config = loadConfig({
-  GITHUB_APP_ID: "123456",
-  GITHUB_APP_PRIVATE_KEY: "-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----",
-  GITHUB_WEBHOOK_SECRET: "whsec_test_secret",
-  GITHUB_INSTALLATION_ID: "42",
-  GITHUB_OAUTH_CLIENT_ID: "Iv1.client-id",
-  GITHUB_OAUTH_CLIENT_SECRET: "github_oauth_client_secret",
-  OAUTH_STATE_SECRET: "oauth_state_secret_with_at_least_32_bytes",
-  PUBLIC_URL: "https://bot.example.com/",
-  SLACK_BOT_TOKEN: "xoxb-test-token",
-  SLACK_SIGNING_SECRET: "slack_signing_secret",
-  SLACK_TEAM_ID: "T123",
-  DATABASE_URL: "postgres://user:pass@localhost:5432/db",
-  SLACK_OAUTH_CLIENT_ID: "1234.5678",
-  SLACK_OAUTH_CLIENT_SECRET: "slack-oauth-secret",
-  SLACK_USER_TOKEN_ENC_KEY: ENC_KEY,
-});
 
 let db: Db;
 let slack: FakeSlackGateway;
@@ -45,7 +29,7 @@ beforeEach(async () => {
 });
 afterEach(() => close());
 
-describe("createServiceHandlers post-as-user", () => {
+describe("user token access", () => {
   it("posts as the bot when a stored token no longer decrypts, keeping the token", async () => {
     const row = (
       await applyPullRequestSource(db, {
@@ -70,12 +54,10 @@ describe("createServiceHandlers post-as-user", () => {
       scopes: SLACK_POST_USER_SCOPE,
     });
     const warn = vi.fn();
-    const { handler } = createServiceHandlers({
-      config,
-      db,
-      slack,
-      logger: { ...createLogger("error"), warn },
-      auth: { getToken: async () => "ghs_unused", invalidate: () => {} },
+    const logger = { ...createLogger("error"), warn };
+    const handler = handlerDeps(db, slack, {
+      logger,
+      ...userTokenAccess({ db, slack, logger, teamId: "T123", cipher: createTokenCipher(ENC_KEY) }),
     });
 
     await onReviewComment(
@@ -114,5 +96,50 @@ describe("createServiceHandlers post-as-user", () => {
       "Slack user token cannot be decrypted; posting as the bot",
       expect.objectContaining({ slackUserId: "U7" }),
     );
+  });
+});
+
+describe("createContext", () => {
+  const routePaths = (ctx: ReturnType<typeof createContext>) =>
+    ctx.routes.flatMap((route) => route.routes.map((r) => `${r.method} ${r.path}`));
+
+  it("builds every dependency from config, with Slack user OAuth off", async () => {
+    const ctx = createContext(loadConfig(TEST_ENV));
+    try {
+      expect(ctx.deps).toMatchObject({
+        slackTeamId: "T123",
+        shippedChannel: undefined,
+        commentOnMerge: false,
+        postPrComment: undefined,
+        quietArchive: undefined,
+        authorPoster: undefined,
+        threadComments: true,
+      });
+      expect(routePaths(ctx)).not.toContain("GET /oauth/slack/callback");
+      expect(routePaths(ctx)).toContain("GET /oauth/github/callback");
+      expect(routePaths(ctx)).toContain("POST /slack/commands");
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it("turns on post-as-user, quiet archive and the Slack OAuth route together", async () => {
+    const ctx = createContext(
+      loadConfig({
+        ...TEST_ENV,
+        SLACK_OAUTH_CLIENT_ID: "1234.5678",
+        SLACK_OAUTH_CLIENT_SECRET: "slack-oauth-secret",
+        SLACK_USER_TOKEN_ENC_KEY: ENC_KEY,
+        GITHUB_COMMENT_ON_MERGE: "true",
+      }),
+    );
+    try {
+      expect(ctx.deps.authorPoster).toBeDefined();
+      expect(ctx.deps.quietArchive).toBeDefined();
+      expect(ctx.deps.postPrComment).toBeDefined();
+      expect(routePaths(ctx)).toContain("GET /oauth/slack/callback");
+    } finally {
+      await ctx.close();
+    }
   });
 });

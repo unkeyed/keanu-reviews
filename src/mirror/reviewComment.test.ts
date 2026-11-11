@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertIdentity } from "#identity";
-import { createLogger } from "#lib";
 import type { Db } from "../db/client.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { applyPullRequestSource, setChannel } from "../pr/store.ts";
+import { handlerDeps } from "../testing/deps.ts";
 import { type ReviewCommentPayload, reviewCommentEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { onReviewComment } from "./comments.ts";
@@ -20,7 +20,7 @@ beforeEach(async () => {
 });
 afterEach(() => close());
 
-const deps = () => ({ db, slack, logger: createLogger("error") });
+const deps = () => handlerDeps(db, slack);
 const embedAll = async (images: readonly { url: string; alt: string }[]) =>
   images.map((img) => ({
     kind: "embed" as const,

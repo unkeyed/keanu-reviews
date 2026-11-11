@@ -1,11 +1,8 @@
 import { readFile, stat } from "node:fs/promises";
 import { extname, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
-import { type Config, ConfigError, loadConfig } from "#config";
-import { createDb } from "#db";
-import { createGithubUserFetcher, createInstallationAuth, octokitMintFn } from "#github";
-import { type ImportResult, type ImportRow, type LinkDeps, importIdentities } from "#identity";
-import { createSlackGateway } from "#slack";
+import { ConfigError } from "#config";
+import { type ImportRow, importIdentities } from "#identity";
+import { type CliIo, type OpenContext, runAsMain } from "./cli.ts";
 
 const MAX_IMPORT_BYTES = 1_048_576;
 const MAX_IMPORT_ROWS = 10_000;
@@ -175,40 +172,6 @@ export async function loadIdentityImport(fileName: string): Promise<ImportRow[]>
   return parseIdentityImport(await readFile(filePath, "utf8"), extension);
 }
 
-interface CliIo {
-  stdout(message: string): void;
-  stderr(message: string): void;
-}
-
-interface IdentityImportRuntime {
-  deps: LinkDeps;
-  close: () => Promise<void>;
-}
-
-interface IdentityImportCliServices {
-  loadRows(fileName: string): Promise<ImportRow[]>;
-  createRuntime(config: Config): IdentityImportRuntime | Promise<IdentityImportRuntime>;
-  importRows(deps: LinkDeps, rows: ImportRow[]): Promise<ImportResult>;
-}
-
-function productionImportDependencies(config: Config): IdentityImportRuntime {
-  const auth = createInstallationAuth(
-    octokitMintFn(config.GITHUB_APP_ID, config.GITHUB_APP_PRIVATE_KEY),
-  );
-  const slack = createSlackGateway(config.SLACK_BOT_TOKEN);
-  // Create the cleanup-bearing resource last so any dependency-construction
-  // failure before this point cannot strand an open database pool.
-  const database = createDb(config.DATABASE_URL);
-  return {
-    deps: {
-      db: database.db,
-      slack,
-      fetchGithubUser: createGithubUserFetcher(auth, config.GITHUB_INSTALLATION_ID),
-    },
-    close: database.close,
-  };
-}
-
 function safeErrorMessage(error: unknown): string {
   if (error instanceof ConfigError || error instanceof IdentityImportInputError)
     return error.message;
@@ -217,12 +180,8 @@ function safeErrorMessage(error: unknown): string {
 
 export async function runIdentityImportCli(
   args: string[],
-  env: NodeJS.ProcessEnv = process.env,
-  io: CliIo = {
-    stdout: (message) => console.log(message),
-    stderr: (message) => console.error(message),
-  },
-  serviceOverrides: Partial<IdentityImportCliServices> = {},
+  io: CliIo,
+  open: OpenContext,
 ): Promise<number> {
   // pnpm forwards the conventional option separator to this Node entrypoint.
   const positionalArgs = args[0] === "--" ? args.slice(1) : args;
@@ -237,13 +196,13 @@ export async function runIdentityImportCli(
 
   let close: (() => Promise<void>) | undefined;
   try {
-    const loadRows = serviceOverrides.loadRows ?? loadIdentityImport;
-    const createRuntime = serviceOverrides.createRuntime ?? productionImportDependencies;
-    const importRows = serviceOverrides.importRows ?? importIdentities;
-    const rows = await loadRows(positionalArgs[0] as string);
-    const runtime = await createRuntime(loadConfig(env));
-    close = runtime.close;
-    const result = await importRows(runtime.deps, rows);
+    const rows = await loadIdentityImport(positionalArgs[0] as string);
+    const ctx = open();
+    close = ctx.close;
+    const result = await importIdentities(
+      { db: ctx.db, slack: ctx.deps.slack, fetchGithubUser: ctx.fetchGithubUser },
+      rows,
+    );
     const skippedByReason = Object.fromEntries(
       [...new Set(result.skipped.map(({ reason }) => reason))].map((reason) => [
         reason,
@@ -266,6 +225,4 @@ export async function runIdentityImportCli(
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.exitCode = await runIdentityImportCli(process.argv.slice(2));
-}
+await runAsMain(import.meta.url, runIdentityImportCli);

@@ -32,20 +32,21 @@ export interface PrDeps {
   slack: SlackGateway;
   logger: Logger;
   /** GitHub email lookup, so the author resolves past the identity map. */
-  fetchGithubEmail?: GithubEmailFetcher;
-  /** #shipped channel (id or name) that announces merges; unset disables it. */
-  shippedChannel?: string;
+  fetchGithubEmail: GithubEmailFetcher;
+  /** #shipped channel (id or name) that announces merges; undefined disables it. */
+  shippedChannel: string | undefined;
   /** Opt-in: comment the Slack channel URL on the PR when it merges. */
-  commentOnMerge?: boolean;
-  postPrComment?: PrCommenter;
+  commentOnMerge: boolean;
+  /** Undefined unless `commentOnMerge`. */
+  postPrComment: PrCommenter | undefined;
   /** Slack workspace id for the merge comment's channel deep link. */
-  slackTeamId?: string;
+  slackTeamId: string;
   /**
    * Members who authorized us leave on their own token before an archive, so
    * Slack sends no "archived the channel" notice. Best-effort; never throws.
-   * Unset when Slack user OAuth is not configured.
+   * Undefined when Slack user OAuth is not configured.
    */
-  quietArchive?: (channelId: string) => Promise<void>;
+  quietArchive: ((channelId: string) => Promise<void>) | undefined;
 }
 
 export interface ConvergeOutcome {

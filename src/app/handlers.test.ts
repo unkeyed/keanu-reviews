@@ -21,6 +21,7 @@ beforeEach(async () => {
 });
 afterEach(() => close());
 
+const live = new AbortController().signal;
 const createdAt = new Date("2026-08-11T12:00:01.000Z");
 const job = (event: string, raw: Record<string, unknown>, attempts = 1): JobRow => ({
   id: "delivery-1",
@@ -53,7 +54,7 @@ const pullRequest = (action: string) => ({
 describe("createDispatcher", () => {
   it("stamps the job's arrival key on the PR snapshot", async () => {
     const dispatch = createDispatcher(handlerDeps(db, slack));
-    await dispatch(job("pull_request", pullRequest("opened")));
+    await dispatch(job("pull_request", pullRequest("opened")), live);
     const row = await findByRepoNumber(db, "unkey/api", 1423);
     expect(row?.sourceArrivalKey).toBe("2026-08-11T12:00:01.000Z:delivery-1");
   });
@@ -70,13 +71,13 @@ describe("createDispatcher", () => {
     );
 
     // No check runs yet: attempts below the absent-CI budget retry.
-    await expect(dispatch(job("pull_request", pullRequest("review_requested"), 1))).rejects.toThrow(
-      Retry,
-    );
+    await expect(
+      dispatch(job("pull_request", pullRequest("review_requested"), 1), live),
+    ).rejects.toThrow(Retry);
     expect(slack.channels).toHaveLength(1);
     expect(slack.invites).toEqual([]);
 
-    await dispatch(job("pull_request", pullRequest("review_requested"), 4));
+    await dispatch(job("pull_request", pullRequest("review_requested"), 4), live);
     expect(slack.invites).toEqual([{ channelId: "C1", userIds: ["U7"] }]);
   });
 
@@ -85,7 +86,7 @@ describe("createDispatcher", () => {
     const dispatch = createDispatcher(
       handlerDeps(db, slack, { logger: { ...createLogger("error"), debug } }),
     );
-    await dispatch(job("ping", { zen: "Design for failure." }));
+    await dispatch(job("ping", { zen: "Design for failure." }), live);
     expect(debug).toHaveBeenCalledWith("unhandled event", {
       event: "ping",
       action: null,
@@ -94,9 +95,22 @@ describe("createDispatcher", () => {
     expect(slack.channels).toEqual([]);
   });
 
+  it("does no Slack work for a job whose handler was already aborted", async () => {
+    const aborted = new AbortController();
+    aborted.abort(new Error("job lease lost to another worker"));
+    const dispatch = createDispatcher(handlerDeps(db, slack));
+    await expect(
+      dispatch(job("pull_request", pullRequest("opened")), aborted.signal),
+    ).rejects.toThrow("job lease lost to another worker");
+    expect(slack.channels).toEqual([]);
+    expect(await findByRepoNumber(db, "unkey/api", 1423)).toBeUndefined();
+  });
+
   it("rejects a malformed payload permanently", async () => {
     const dispatch = createDispatcher(handlerDeps(db, slack));
-    await expect(dispatch(job("pull_request", { action: "opened" }))).rejects.toThrow(Permanent);
+    await expect(dispatch(job("pull_request", { action: "opened" }), live)).rejects.toThrow(
+      Permanent,
+    );
     expect(slack.channels).toEqual([]);
   });
 });

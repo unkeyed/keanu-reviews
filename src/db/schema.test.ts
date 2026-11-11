@@ -2,13 +2,7 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { upsertIdentity } from "#identity";
 import { findAllByRepoHeadSha, findAllByRepoNumbers, findByRepoNumber } from "#pr";
-import {
-  claimNextJob,
-  completeJob,
-  enqueueDeliveryJob,
-  rescheduleOrFailJob,
-  resetFailedJob,
-} from "#queue";
+import { enqueueDeliveryJob } from "#queue";
 import {
   cancelForReviewer,
   claimReminder,
@@ -23,7 +17,6 @@ import {
   prId,
   releasePullRequestLifecycle,
 } from "../pr/store.ts";
-import { enqueueTestJob } from "../testing/queue.ts";
 import type { Db } from "./client.ts";
 import { jobs, messages, processedDeliveries, reminders } from "./schema.ts";
 import { createTestDb } from "./testDb.ts";
@@ -341,92 +334,5 @@ describe("identities", () => {
     });
     expect((await findByGithubId(db, 42))?.slackUserId).toBe("U123");
     expect(await findByGithubId(db, 99)).toBeUndefined();
-  });
-});
-
-describe("jobs", () => {
-  it("purges raw payload on completion (retention, KTD13)", async () => {
-    const job = await enqueueTestJob(db, {
-      deliveryId: "d1",
-      event: "pull_request",
-      action: "opened",
-      raw: { secret: "private-repo-diff" },
-    });
-    const claimed = await claimNextJob(db, { now: job.availableAt });
-    expect(claimed?.id).toBe(job.id);
-    if (!claimed) throw new Error("expected job claim");
-    await completeJob(db, claimed);
-    const [row] = await db.select().from(jobs).where(eq(jobs.id, job.id)).limit(1);
-    expect(row?.status).toBe("done");
-    expect(row?.raw).toBeNull();
-  });
-
-  it("reclaims a processing job after its lease expires", async () => {
-    const job = await enqueueTestJob(db, {
-      deliveryId: "lease-job",
-      event: "pull_request",
-      action: "opened",
-      raw: {},
-    });
-    const now = job.availableAt.getTime();
-    const first = await claimNextJob(db, { now: new Date(now), leaseMs: 5_000 });
-    expect(first?.id).toBe(job.id);
-    expect(await claimNextJob(db, { now: new Date(now + 4_999), leaseMs: 5_000 })).toBeUndefined();
-    const reclaimed = await claimNextJob(db, {
-      now: new Date(now + 5_000),
-      leaseMs: 5_000,
-    });
-    expect(reclaimed?.id).toBe(job.id);
-    expect(reclaimed?.attempts).toBe(2);
-  });
-
-  it("fences a stale worker after its processing lease is reclaimed", async () => {
-    const job = await enqueueTestJob(db, {
-      deliveryId: "fenced-job",
-      event: "pull_request",
-      action: "opened",
-      raw: {},
-    });
-    const now = job.availableAt.getTime();
-    const staleClaim = await claimNextJob(db, { now: new Date(now), leaseMs: 5_000 });
-    const currentClaim = await claimNextJob(db, {
-      now: new Date(now + 5_000),
-      leaseMs: 5_000,
-    });
-    if (!staleClaim || !currentClaim) throw new Error("expected both job claims");
-
-    expect(await completeJob(db, staleClaim)).toBe(false);
-    expect(await completeJob(db, currentClaim)).toBe(true);
-    const [row] = await db.select().from(jobs).where(eq(jobs.id, job.id));
-    expect(row?.status).toBe("done");
-  });
-
-  it("retains a terminal payload for one explicit safe replay", async () => {
-    const job = await enqueueTestJob(db, {
-      deliveryId: "terminal-job",
-      event: "pull_request",
-      action: "opened",
-      raw: { secret: "private-repo-diff" },
-    });
-    const now = job.availableAt.getTime();
-    const claimed = await claimNextJob(db, { now: new Date(now), leaseMs: 5_000 });
-    expect(claimed?.id).toBe(job.id);
-    if (!claimed) throw new Error("expected job claim");
-    await rescheduleOrFailJob(db, claimed, {
-      maxAttempts: 1,
-      retryAt: new Date(now + 1_000),
-    });
-
-    const [row] = await db.select().from(jobs).where(eq(jobs.id, job.id));
-    expect(row?.status).toBe("failed");
-    expect(row?.raw).toEqual({ secret: "private-repo-diff" });
-
-    expect(await resetFailedJob(db, job.id, new Date(now + 2_000))).toBe(true);
-    const [reset] = await db.select().from(jobs).where(eq(jobs.id, job.id));
-    expect(reset?.status).toBe("pending");
-    expect(reset?.attempts).toBe(0);
-    expect(reset?.raw).toEqual({ secret: "private-repo-diff" });
-    expect(reset?.availableAt.getTime()).toBe(now + 2_000);
-    expect(await resetFailedJob(db, job.id)).toBe(false);
   });
 });

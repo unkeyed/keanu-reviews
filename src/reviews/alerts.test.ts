@@ -69,7 +69,11 @@ const readyPayload = (over: Partial<PullRequestPayload["pull_request"]> = {}) =>
 
 const deps = (over: Partial<HandlerDeps> = {}) => handlerDeps(db, slack, over);
 /** The job a step runs in; ids sort in call order, as arrival keys do. */
-const work = (id: string, attempt = 1) => ({ arrivalKey: jobArrivalKey(new Date(0), id), attempt });
+const work = (id: string, attempt = 1) => ({
+  arrivalKey: jobArrivalKey(new Date(0), id),
+  attempt,
+  signal: new AbortController().signal,
+});
 let jobs = 0;
 const nextJob = (attempt = 1) => work(`job-${String(++jobs).padStart(4, "0")}`, attempt);
 

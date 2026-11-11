@@ -15,26 +15,28 @@ import {
 } from "#slack";
 
 export interface MirrorDeps extends PrDeps {
-  embedImages?: ImageEmbedder;
+  embedImages: ImageEmbedder;
   /** Bot logins (normalized) whose comments/reviews should be mirrored anyway. */
-  allowedBots?: ReadonlySet<string>;
+  allowedBots: ReadonlySet<string>;
   /**
-   * When true (default), a reply within a GitHub review thread is posted as a
-   * Slack threaded reply under the original comment's message. When false, every
+   * When true, a reply within a GitHub review thread is posted as a Slack
+   * threaded reply under the original comment's message. When false, every
    * comment posts top-level (flat). Thread-starting comments and PR conversation
    * comments are always top-level regardless.
    */
-  threadComments?: boolean;
+  threadComments: boolean;
   /**
-   * Optional post-as-user capability. When wired (Slack user-OAuth configured),
+   * Post-as-user, when Slack user OAuth is configured (undefined otherwise):
    * mirrored comments/reviews are authored with the linked user's own token
    * instead of the bot. `getUserToken` returns a decrypted token ONLY when the
    * user granted `chat:write`; `onInvalidToken` drops a token Slack reports dead.
    */
-  authorPoster?: {
-    getUserToken: (slackUserId: string) => Promise<string | undefined>;
-    onInvalidToken: (slackUserId: string) => Promise<void>;
-  };
+  authorPoster:
+    | {
+        getUserToken: (slackUserId: string) => Promise<string | undefined>;
+        onInvalidToken: (slackUserId: string) => Promise<void>;
+      }
+    | undefined;
 }
 
 /**
@@ -134,14 +136,14 @@ export function reviewPresentation(author: Author): Presentation {
   }
 }
 
-/** Images a comment embeds, mirrored when a mirror is wired. Bot comments show none. */
+/** Images a comment embeds, mirrored through the attachment proxy. Bot comments show none. */
 export async function commentImages(
-  deps: { embedImages?: ImageEmbedder },
+  deps: { embedImages: ImageEmbedder },
   body: string,
   author: { isBot: boolean },
 ): Promise<MessageImage[]> {
   if (author.isBot) return [];
-  return deps.embedImages ? deps.embedImages(extractEmbeddedImages(body)) : [];
+  return deps.embedImages(extractEmbeddedImages(body));
 }
 
 export interface AuthoredItem {

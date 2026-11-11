@@ -300,17 +300,16 @@ export async function listOpenPullRequestsForReconciliation(db: Db): Promise<PrR
   return rows as PrRow[];
 }
 
+/** The most terminal PRs one re-archive sweep checks. */
+const RE_ARCHIVE_LIMIT = 500;
+
 /**
  * Recently closed/merged PRs that still have a channel, for the re-archive sweep.
  * A late write (CI/comment/review) can unarchive a terminal PR's channel via the
  * Slack client's `is_archived` recovery; this bounds the sweep to PRs that went
  * terminal since `since`, where such drift happens, instead of all history.
  */
-export async function listRecentlyClosedPullRequests(
-  db: Db,
-  since: Date,
-  limit = 500,
-): Promise<PrRow[]> {
+export async function listRecentlyClosedPullRequests(db: Db, since: Date): Promise<PrRow[]> {
   const rows = await db
     .select()
     .from(pullRequests)
@@ -323,7 +322,7 @@ export async function listRecentlyClosedPullRequests(
       ),
     )
     .orderBy(desc(pullRequests.sourceUpdatedAt))
-    .limit(limit);
+    .limit(RE_ARCHIVE_LIMIT);
   return rows as PrRow[];
 }
 

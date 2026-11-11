@@ -11,6 +11,8 @@ export interface WebhookDeps {
   webhookSecret: string;
   /** Numeric installation ids allowed to reach this service (U3 allowlist). */
   allowedInstallationIds: string[];
+  /** Wakes this process's worker for a newly stored job. */
+  nudge: () => void;
 }
 
 /**
@@ -74,6 +76,7 @@ export function createGithubWebhookRoute(deps: WebhookDeps): Hono {
       return c.json({ ok: true, deduped: true }, 200);
     }
 
+    deps.nudge();
     return c.json({ ok: true }, 202);
   });
 

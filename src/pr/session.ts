@@ -90,22 +90,24 @@ const inSession = new AsyncLocalStorage<number>();
  * lease, which is renewed while the work runs. A `pull_request` or
  * `reconcile` cause converges the channel before `body` runs; a child event
  * converges only when the body asks for a ready PR. Sessions do not nest,
- * since a nested one would wait on its own queue.
+ * since a nested one would wait on its own queue. Once `signal` aborts, the
+ * session stops renewing its lease and starts no further Slack delivery.
  */
 export async function session<T>(
   deps: PrDeps,
   source: PrSource,
   body: (s: PrSession) => Promise<T>,
+  signal?: AbortSignal,
 ): Promise<T> {
   const outer = inSession.getStore();
   if (outer !== undefined) throw new Error(`PR session for ${outer} cannot open another`);
   const githubPrId = source.kind === "snapshot" ? source.snapshot.githubPrId : source.githubPrId;
   return inLane(githubPrId, () =>
     inSession.run(githubPrId, () =>
-      leased(deps, githubPrId, async () => {
+      leased(deps, githubPrId, signal, async () => {
         if (source.kind === "existing") {
           return body(
-            prSession(deps, undefined, {
+            prSession(deps, signal, undefined, {
               ready: () => stored(deps, githubPrId),
               channel: () => storedChannel(deps, githubPrId),
             }),
@@ -116,7 +118,7 @@ export async function session<T>(
             ? undefined
             : await converge(deps, source.snapshot, source.cause);
         const readyPr = () => ready(deps, source.snapshot);
-        return body(prSession(deps, converged, { ready: readyPr, channel: readyPr }));
+        return body(prSession(deps, signal, converged, { ready: readyPr, channel: readyPr }));
       }),
     ),
   );
@@ -125,6 +127,7 @@ export async function session<T>(
 /** Each lookup runs at most once: under the lease, nothing else changes the row it reads. */
 function prSession(
   deps: PrDeps,
+  signal: AbortSignal | undefined,
   converged: ConvergeOutcome | undefined,
   find: { ready: () => Promise<ReadyPr>; channel: () => Promise<ChannelPr> },
 ): PrSession {
@@ -146,8 +149,11 @@ function prSession(
       channel ??= s.channelPr().then((row) => prChannel(deps, row.channelId));
       return channel;
     },
-    deliver: (async (key, build, opts) =>
-      ledger.deliver(key, await s.channel(), build, opts)) as PrSession["deliver"],
+    deliver: (async (key, build, opts) => {
+      const channel = await s.channel();
+      signal?.throwIfAborted();
+      return ledger.deliver(key, channel, build, opts);
+    }) as PrSession["deliver"],
     sentTs: (key) => ledger.sentTs(key),
     inviteMentions: async (body, excludeLogin) =>
       inviteMentions(deps, await s.channel(), body, excludeLogin),
@@ -168,8 +174,14 @@ function inLane<T>(githubPrId: number, run: () => Promise<T>): Promise<T> {
   return result;
 }
 
-async function leased<T>(deps: PrDeps, githubPrId: number, run: () => Promise<T>): Promise<T> {
+async function leased<T>(
+  deps: PrDeps,
+  githubPrId: number,
+  signal: AbortSignal | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
   const { db, logger } = deps;
+  signal?.throwIfAborted();
   const claim = await claimPullRequestLifecycle(db, githubPrId);
   if (!claim) {
     throw new PullRequestLifecycleBusyError(
@@ -182,6 +194,10 @@ async function leased<T>(deps: PrDeps, githubPrId: number, run: () => Promise<T>
     );
   }
   const renewal = setInterval(() => {
+    if (signal?.aborted) {
+      clearInterval(renewal);
+      return;
+    }
     renewPullRequestLifecycle(db, claim, new Date()).then(
       (held) => {
         if (!held) clearInterval(renewal);

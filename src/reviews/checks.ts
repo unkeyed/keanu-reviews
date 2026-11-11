@@ -53,8 +53,11 @@ export async function onCheckRun(deps: ReviewDeps, ev: CheckRunEvent, work: Work
       continue;
     }
     try {
-      await session(deps, { kind: "existing", githubPrId: row.githubPrId }, (s) =>
-        releaseAlerts(deps, s, row, { kind: "check_run" }, work.attempt),
+      await session(
+        deps,
+        { kind: "existing", githubPrId: row.githubPrId },
+        (s) => releaseAlerts(deps, s, row, { kind: "check_run" }, work.attempt),
+        work.signal,
       );
     } catch (err) {
       if (!(err instanceof Retry)) throw err;

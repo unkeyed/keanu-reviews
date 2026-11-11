@@ -1,27 +1,28 @@
 import { createHmac } from "node:crypto";
+import type { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createDispatcher } from "#app";
-import { createLogger } from "#lib";
+import { createDispatcher, createHttpApp } from "#app";
 import type { Db } from "./db/client.ts";
 import { createTestDb } from "./db/testDb.ts";
-import { createGithubWebhookRoute } from "./ingest/webhook.ts";
-import { handlerDeps } from "./testing/deps.ts";
+import { createWorker } from "./queue/worker.ts";
+import { TEST_ENV, testContext } from "./testing/context.ts";
 import { FakeSlackGateway } from "./testing/fakeSlack.ts";
-import { createWorker } from "./worker/loop.ts";
+import { drainQueue } from "./testing/queue.ts";
 
 /**
  * Offline end-to-end smoke (Verification Contract). Replays signed webhook
- * fixtures through the real ingestion route -> job queue -> worker -> handlers,
+ * fixtures through the service's HTTP app -> job queue -> worker -> handlers,
  * with a fake Slack client. The live gate (real Slack workspace + GitHub App)
  * still needs credentials; this proves the wiring end to end.
  */
-const SECRET = "whsec_test";
+const SECRET = TEST_ENV.GITHUB_WEBHOOK_SECRET;
 const REPO = "unkey/api";
 let db: Db;
 let slack: FakeSlackGateway;
 let close: () => Promise<void>;
-let route: ReturnType<typeof createGithubWebhookRoute>;
+let route: Hono;
 let worker: ReturnType<typeof createWorker>;
+let nudges = 0;
 let delivery = 0;
 
 beforeEach(async () => {
@@ -29,14 +30,11 @@ beforeEach(async () => {
   db = t.db;
   close = () => t.client.close();
   slack = new FakeSlackGateway();
-  const logger = createLogger("error");
-  const dispatch = createDispatcher(handlerDeps(db, slack, { logger }));
-  worker = createWorker({ db, logger, dispatch });
-  route = createGithubWebhookRoute({
-    db,
-    logger,
-    webhookSecret: SECRET,
-    allowedInstallationIds: ["42"],
+  const ctx = testContext(db, slack);
+  worker = createWorker(db, ctx.logger, createDispatcher(ctx.deps));
+  nudges = 0;
+  route = createHttpApp(ctx, () => {
+    nudges += 1;
   });
 });
 afterEach(() => close());
@@ -58,7 +56,7 @@ async function deliver(event: string, payload: object): Promise<void> {
     },
   });
   expect([202, 200]).toContain(res.status);
-  await worker.drain();
+  await drainQueue(worker);
 }
 
 const pr = (over: object = {}) => ({
@@ -123,7 +121,8 @@ describe("end-to-end webhook -> Slack smoke", () => {
     expect(slack.channel("C1")?.name).toBe("merged-oz-unkey-api-1423-add-auth");
     expect(slack.channel("C1")?.archived).toBe(true);
 
-    // Still exactly one channel throughout.
+    // Still exactly one channel throughout, and each delivery woke the worker.
     expect(slack.channels).toHaveLength(1);
+    expect(nudges).toBe(delivery);
   });
 });
