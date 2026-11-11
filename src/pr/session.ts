@@ -5,6 +5,7 @@ import {
   type DeliverOptions,
   type Delivered,
   type EffectKey,
+  type EffectState,
   type Outgoing,
   createLedger,
 } from "#slack";
@@ -61,6 +62,7 @@ export interface PrSession {
     build: () => Promise<B>,
     opts?: DeliverOptions,
   ): Promise<Delivered<B>>;
+  state(key: EffectKey): Promise<EffectState>;
   /** The Slack ts of an effect already posted, else undefined. */
   sentTs(key: EffectKey): Promise<string | undefined>;
   /** Keep an effect from ever posting; returns the ts of one that already posted. */
@@ -156,6 +158,7 @@ function prSession(
       signal?.throwIfAborted();
       return ledger.deliver(key, channel, build, opts);
     }) as PrSession["deliver"],
+    state: (key) => ledger.state(key),
     sentTs: (key) => ledger.sentTs(key),
     tombstone: (key) => ledger.tombstone(key),
     inviteMentions: async (body, excludeLogin) =>

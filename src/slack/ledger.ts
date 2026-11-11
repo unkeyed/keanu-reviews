@@ -163,6 +163,7 @@ export interface Ledger {
     build: () => Promise<B>,
     opts?: DeliverOptions,
   ): Promise<Delivered<B>>;
+  state(key: EffectKey): Promise<EffectState>;
   /** The Slack ts of an effect that was sent, else undefined. */
   sentTs(key: EffectKey): Promise<string | undefined>;
   /**
@@ -173,10 +174,32 @@ export interface Ledger {
   tombstone(key: EffectKey): Promise<string | undefined>;
 }
 
-/** `sent` with no ts is a tombstone: the effect was withdrawn before it posted. */
-const sentTsOf = (row: MessageRow | undefined) =>
-  row?.status === "sent" && row.slackTs ? row.slackTs : undefined;
-const isTombstone = (row: MessageRow | undefined) => row?.status === "sent" && !row.slackTs;
+/**
+ * Where an effect stands: never claimed, claimed but not yet posted (pending
+ * or sending), posted, or withdrawn before it posted.
+ */
+export type EffectState =
+  | { status: "none" | "in-flight" | "tombstoned" }
+  | { status: "sent"; ts: string };
+
+/** `sent` with no ts is a tombstone. */
+function stateOf(row: MessageRow | undefined): EffectState {
+  if (!row) return { status: "none" };
+  if (row.status !== "sent") return { status: "in-flight" };
+  return row.slackTs ? { status: "sent", ts: row.slackTs } : { status: "tombstoned" };
+}
+
+const sentTsOf = (row: MessageRow | undefined) => {
+  const state = stateOf(row);
+  return state.status === "sent" ? state.ts : undefined;
+};
+
+/** A sent or tombstoned effect never posts again. */
+function settled(state: EffectState): Delivered | undefined {
+  if (state.status === "sent") return { status: "already-sent", ts: state.ts };
+  if (state.status === "tombstoned") return { status: "tombstoned" };
+  return undefined;
+}
 
 const busy = (key: EffectKey, row: MessageRow | undefined, now: Date) =>
   new Retry(
@@ -192,10 +215,8 @@ export function createLedger(db: Db, clock: Clock = systemClock): Ledger {
     build: () => Promise<Outgoing | null>,
     opts: DeliverOptions = {},
   ): Promise<Delivered> => {
-    const before = await find(db, key);
-    const already = sentTsOf(before);
-    if (already) return { status: "already-sent", ts: already };
-    if (isTombstone(before)) return { status: "tombstoned" };
+    const before = settled(stateOf(await find(db, key)));
+    if (before) return before;
 
     const out = await build();
     if (!out) return { status: "skipped" };
@@ -203,9 +224,8 @@ export function createLedger(db: Db, clock: Clock = systemClock): Ledger {
     const row = await claim(db, key, clock.now());
     if (!row) {
       const existing = await find(db, key);
-      const ts = sentTsOf(existing);
-      if (ts) return { status: "already-sent", ts };
-      if (isTombstone(existing)) return { status: "tombstoned" };
+      const after = settled(stateOf(existing));
+      if (after) return after;
       throw busy(key, existing, clock.now());
     }
 
@@ -228,6 +248,9 @@ export function createLedger(db: Db, clock: Clock = systemClock): Ledger {
   };
   return {
     deliver: deliver as Ledger["deliver"],
+    async state(key) {
+      return stateOf(await find(db, key));
+    },
     async sentTs(key) {
       return sentTsOf(await find(db, key));
     },

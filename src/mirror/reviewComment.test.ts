@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { handlers } from "#app";
+import { jobArrivalKey } from "#events";
 import { upsertIdentity } from "#identity";
+import { Retry } from "#lib";
 import type { Db } from "../db/client.ts";
 import { createTestDb } from "../db/testDb.ts";
 import { applyPullRequestSource, setChannel } from "../pr/store.ts";
@@ -486,6 +489,58 @@ describe("onReviewComment (U6)", () => {
       reviewCommentEvent(payload({ id: 56, in_reply_to_id: 55, body: "agreed" })),
     );
     expect(slack.messages.at(-1)?.threadTs).toBe(parentTs);
+  });
+
+  describe("a reply whose parent is still being delivered (B7)", () => {
+    const attempt = (n: number) => ({
+      arrivalKey: jobArrivalKey(new Date(0), "reply"),
+      attempt: n,
+      signal: new AbortController().signal,
+    });
+    const reply = reviewCommentEvent(payload({ id: 56, in_reply_to_id: 55, body: "agreed" }));
+    const failParentOnce = () => {
+      const post = slack.post.bind(slack);
+      let fail = true;
+      slack.post = async (channel, message, opts) => {
+        if (fail) {
+          fail = false;
+          throw new Error("transient Slack failure");
+        }
+        return post(channel, message, opts);
+      };
+    };
+
+    it("waits for the parent, then threads under it", async () => {
+      await seedChannel();
+      failParentOnce();
+      await expect(
+        onReviewComment(deps(), reviewCommentEvent(payload({ id: 55 }))),
+      ).rejects.toThrow();
+
+      await expect(handlers.review_comment(deps(), reply, attempt(1))).rejects.toBeInstanceOf(
+        Retry,
+      );
+      expect(slack.messages).toHaveLength(0);
+
+      await onReviewComment(deps(), reviewCommentEvent(payload({ id: 55 })));
+      await handlers.review_comment(deps(), reply, attempt(2));
+      expect(slack.messages.at(-1)?.threadTs).toBe(slack.messages[0]?.ts);
+    });
+
+    it("posts top-level on the third attempt when the parent never lands", async () => {
+      await seedChannel();
+      failParentOnce();
+      await expect(
+        onReviewComment(deps(), reviewCommentEvent(payload({ id: 55 }))),
+      ).rejects.toThrow();
+
+      await expect(handlers.review_comment(deps(), reply, attempt(2))).rejects.toBeInstanceOf(
+        Retry,
+      );
+      await handlers.review_comment(deps(), reply, attempt(3));
+      expect(slack.messages).toHaveLength(1);
+      expect(slack.messages[0]?.threadTs).toBeUndefined();
+    });
   });
 
   it("posts a reply top-level when THREAD_COMMENTS is disabled", async () => {

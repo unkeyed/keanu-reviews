@@ -31,7 +31,7 @@ export const handlers: HandlerTable = {
       work.signal,
     );
   },
-  review_comment: (deps, ev, work) => onReviewComment(deps, ev, work.signal),
+  review_comment: (deps, ev, work) => onReviewComment(deps, ev, work),
   review: async (deps, ev, work) => {
     if (shouldSkipActor(ev.review.author, deps.allowedBots)) return;
     await session(

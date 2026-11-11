@@ -1,11 +1,14 @@
-import type { GithubActor, IssueCommentEvent, ReviewCommentEvent } from "#events";
+import type { GithubActor, IssueCommentEvent, ReviewCommentEvent, Work } from "#events";
 import { shouldSkipActor } from "#github";
 import { type PrId, Retry } from "#lib";
-import { type PrRow, findByRepoNumber, session } from "#pr";
+import { type PrRow, type PrSession, findByRepoNumber, session } from "#pr";
 import { type EffectKey, keys } from "#slack";
 import { type MirrorDeps, commentPresentation, removeMirror, upsertAuthored } from "./author.ts";
 
 const locked = (pr: PrRow) => ({ kind: "existing", githubPrId: pr.githubPrId }) as const;
+
+/** A reply waits this many job attempts for a parent still being delivered. */
+const PARENT_WAIT_ATTEMPTS = 3;
 
 /**
  * Mirror an inline review comment into the PR channel. A comment that arrives
@@ -19,8 +22,9 @@ const locked = (pr: PrRow) => ({ kind: "existing", githubPrId: pr.githubPrId }) 
 export async function onReviewComment(
   deps: MirrorDeps,
   ev: ReviewCommentEvent,
-  signal?: AbortSignal,
+  work: Pick<Work, "attempt"> & { signal?: AbortSignal } = { attempt: 1 },
 ): Promise<void> {
+  const { signal } = work;
   const c = ev.comment;
   if (shouldSkipActor(c.author, deps.allowedBots)) return;
   if (ev.action === "deleted") {
@@ -42,11 +46,10 @@ export async function onReviewComment(
     { kind: "snapshot", snapshot: ev.pr, cause: { kind: "child" } },
     async (s) => {
       const pr = await s.ready();
-      // THREAD_COMMENTS=false keeps every comment top-level, and a reply whose
-      // parent was never mirrored posts top-level too.
+      // THREAD_COMMENTS=false keeps every comment top-level.
       const threadTs =
         deps.threadComments && c.inReplyTo !== undefined
-          ? await s.sentTs(keys.reviewComment(pr.id, c.inReplyTo))
+          ? await parentTs(s, keys.reviewComment(pr.id, c.inReplyTo), work.attempt)
           : undefined;
       const item = { key: keys.reviewComment(pr.id, c.id), action, author: c.author, body: c.body };
       await upsertAuthored(deps, s, item, (author, images) => {
@@ -71,6 +74,24 @@ export async function onReviewComment(
     },
     signal,
   );
+}
+
+/**
+ * The Slack ts a reply threads under. A parent still being delivered is waited
+ * for over the first PARENT_WAIT_ATTEMPTS attempts; one never mirrored,
+ * deleted, or still not posted by then leaves the reply top-level.
+ */
+async function parentTs(
+  s: PrSession,
+  parent: EffectKey,
+  attempt: number,
+): Promise<string | undefined> {
+  const state = await s.state(parent);
+  if (state.status === "sent") return state.ts;
+  if (state.status === "in-flight" && attempt < PARENT_WAIT_ATTEMPTS) {
+    throw new Retry("parent review comment is still being mirrored", { ref: parent.ref });
+  }
+  return undefined;
 }
 
 /**

@@ -30,6 +30,7 @@ export {
   type ChannelSink,
   type DeliverOptions,
   type Delivered,
+  type EffectState,
   type Sent,
   type Ledger,
   type Outgoing,
