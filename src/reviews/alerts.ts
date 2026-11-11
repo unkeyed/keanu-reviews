@@ -1,4 +1,4 @@
-import type { ReminderRow } from "#db";
+import type { Db, ReminderRow } from "#db";
 import {
   type GithubActor,
   type PullRequestEvent,
@@ -19,7 +19,7 @@ import {
 import { keys } from "#slack";
 import type { ReviewDeps } from "./deps.ts";
 
-type Reviewer = Pick<GithubActor, "id" | "login">;
+export type Reviewer = Pick<GithubActor, "id" | "login">;
 
 /**
  * What released a review alert. A pull_request event names its reviewers and
@@ -284,8 +284,27 @@ async function sendAlert(
     // A request older than the reminder's end does not revive it.
     if (ended(current)) return;
   }
+  await deliverAlert(deps, s, prId, reviewer, current.generation, (tx, dueAt) =>
+    pushReminderDue(tx, prId, reviewer.id, dueAt),
+  );
+}
+
+/**
+ * Post a reviewer's review-request alert for one reminder generation,
+ * inviting them first when they resolve to a Slack user. `restartClock`
+ * commits with the sent mark and moves the reminder due `reminderHours`
+ * after the post.
+ */
+export async function deliverAlert(
+  deps: ReviewDeps,
+  s: PrSession,
+  prId: PrId,
+  reviewer: Reviewer,
+  generation: number,
+  restartClock: (tx: Db, dueAt: Date) => Promise<void>,
+): Promise<void> {
   await s.deliver(
-    keys.reviewRequest(prId, reviewer.id, current.generation),
+    keys.reviewRequest(prId, reviewer.id, generation),
     async () => {
       const slackUserId = await resolveSlackUser(deps, {
         githubId: reviewer.id,
@@ -307,9 +326,7 @@ async function sendAlert(
         beforePost: () => channel.invite([slackUserId], { prId, role: "reviewer" }),
       };
     },
-    {
-      onSentTx: (tx) => pushReminderDue(tx, prId, reviewer.id, hoursAfter(deps, deps.clock.now())),
-    },
+    { onSentTx: (tx) => restartClock(tx, hoursAfter(deps, deps.clock.now())) },
   );
 }
 

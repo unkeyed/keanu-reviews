@@ -251,6 +251,18 @@ export async function rescheduleOrFailReminder(
   return terminal ? "failed" : "pending";
 }
 
+/**
+ * Release a claim back to pending, due at `dueAt` with a fresh attempt
+ * budget: the scan posted the reviewer's review alert in place of the nudge,
+ * and the clock restarts at the alert.
+ */
+export async function restartReminderClaim(db: Db, claim: ReminderRow, dueAt: Date): Promise<void> {
+  await db
+    .update(reminders)
+    .set({ status: "pending", claimedAt: null, dueAt, availableAt: dueAt, attempts: 0 })
+    .where(currentClaim(claim));
+}
+
 export async function cancelReminderClaim(db: Db, claim: ReminderRow): Promise<void> {
   await db
     .update(reminders)

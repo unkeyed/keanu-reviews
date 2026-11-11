@@ -11,6 +11,7 @@ export {
   type GithubEmailFetcher,
   type GithubUserFetcher,
   type PullRequestFetcher,
+  type PullRequestMergeability,
   type ReviewApprovalFetcher,
 } from "./users.ts";
 export {

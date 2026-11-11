@@ -13,5 +13,6 @@ export {
   markReminderSent,
   pushReminderDue,
   rescheduleOrFailReminder,
+  restartReminderClaim,
   scheduleReminder,
 } from "./store.ts";

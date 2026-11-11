@@ -1,5 +1,7 @@
+import type { ReminderRow } from "#db";
 import { isTerminal } from "#events";
-import { errMessage } from "#lib";
+import type { PullRequestMergeability } from "#github";
+import { type PrId, errMessage } from "#lib";
 import { type PrSession, PullRequestLifecycleBusyError, session } from "#pr";
 import {
   type DuePr,
@@ -11,8 +13,10 @@ import {
   listDueWithContext,
   markReminderSent,
   rescheduleOrFailReminder,
+  restartReminderClaim,
 } from "#reminders";
 import { keys } from "#slack";
+import { deliverAlert } from "./alerts.ts";
 import type { ReviewDeps } from "./deps.ts";
 import { isWithinWindow } from "./window.ts";
 
@@ -93,6 +97,7 @@ async function remind(
   now: Date,
 ): Promise<number> {
   const { db, logger } = deps;
+  let pull: Promise<PullRequestMergeability | undefined> | undefined;
   let suppressed: Promise<boolean> | undefined;
   let posted = 0;
   for (const { reminder, reviewerSlackUserId } of rows) {
@@ -103,7 +108,8 @@ async function remind(
         await cancelReminderClaim(db, claim);
         continue;
       }
-      suppressed ??= noLongerNeeded(deps, prId, pr);
+      pull ??= deps.fetchPullRequest(pr.repoFullName, pr.number);
+      suppressed ??= noLongerNeeded(deps, prId, pr, pull);
       if (await suppressed) {
         await cancelReminderClaim(db, claim);
         logger.info("reminder suppressed: PR ready to merge or already approved", {
@@ -114,6 +120,10 @@ async function remind(
       }
       if (!(await isReminderClaimCurrent(db, claim))) continue;
       const { id } = await s.channelPr();
+      if (!(await s.sentTs(keys.reviewRequest(id, claim.reviewerGithubId, claim.generation)))) {
+        await healAlert(deps, s, id, claim, await pull);
+        continue;
+      }
       await s.deliver(keys.reminder(id, claim.reviewerGithubId, claim.generation), async () => ({
         message: { kind: "reminder", reviewer: reviewerSlackUserId, hours: deps.reminderHours },
       }));
@@ -129,6 +139,38 @@ async function remind(
     }
   }
   return posted;
+}
+
+/**
+ * The reviewer's review alert never posted: the check run that would have
+ * released it was lost. They were never invited, so the scan posts that alert
+ * in place of the nudge, and the alert restarts the reminder clock. A reviewer
+ * GitHub no longer lists was removed or already reviewed, so the reminder ends.
+ */
+async function healAlert(
+  deps: ReviewDeps,
+  s: PrSession,
+  prId: PrId,
+  claim: ReminderRow,
+  pull: PullRequestMergeability | undefined,
+): Promise<void> {
+  if (!pull) throw new Error(`pull request ${prId} is not readable`);
+  const reviewer = pull.requestedReviewers?.find((one) => one.id === claim.reviewerGithubId);
+  if (!reviewer) {
+    await cancelReminderClaim(deps.db, claim);
+    deps.logger.info("reminder cancelled: reviewer is no longer requested", {
+      prId,
+      reviewerGithubId: claim.reviewerGithubId,
+    });
+    return;
+  }
+  await deliverAlert(deps, s, prId, reviewer, claim.generation, (tx, dueAt) =>
+    restartReminderClaim(tx, claim, dueAt),
+  );
+  deps.logger.info("posted a review alert the scan found missing", {
+    prId,
+    reviewerGithubId: claim.reviewerGithubId,
+  });
 }
 
 /** Why an open PR's due reminders cannot be claimed yet, if anything. */
@@ -169,9 +211,14 @@ async function ciHolds(
  * enough. Fails open: a failed read delivers anyway rather than silently drop
  * a needed nudge.
  */
-async function noLongerNeeded(deps: ReviewDeps, prId: string, pr: DuePr): Promise<boolean> {
+async function noLongerNeeded(
+  deps: ReviewDeps,
+  prId: string,
+  pr: DuePr,
+  pullRead: Promise<PullRequestMergeability | undefined>,
+): Promise<boolean> {
   const [pull, approvals] = await Promise.allSettled([
-    deps.fetchPullRequest(pr.repoFullName, pr.number),
+    pullRead,
     deps.fetchApprovalCount(pr.repoFullName, pr.number),
   ]);
   const deliverAnyway = (err: unknown) => {

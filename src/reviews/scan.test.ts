@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { upsertIdentity } from "#identity";
 import type { PrId } from "#lib";
 import {
   cancelForReviewer,
@@ -9,6 +10,7 @@ import {
   pushReminderDue,
   scheduleReminder,
 } from "#reminders";
+import { createLedger, keys } from "#slack";
 import type { Db } from "../db/client.ts";
 import { reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
@@ -66,13 +68,25 @@ const stamp = (at: number) => ({
   version: String(++versions).padStart(6, "0"),
 });
 
-const request = (pr: PrId, reviewer: number, at = clock) =>
+/** A request recorded while CI held its alert, so the reviewer was never alerted. */
+const heldRequest = (pr: PrId, reviewer: number, at = clock) =>
   scheduleReminder(db, {
     prId: pr,
     reviewerGithubId: reviewer,
     dueAt: new Date(at + HOURS * 60 * 60_000),
     stamp: stamp(at),
   });
+
+/** A request whose review alert posted, as every reminder's does unless its release was lost. */
+const request = async (pr: PrId, reviewer: number, at = clock) => {
+  const row = await heldRequest(pr, reviewer, at);
+  await createLedger(db).deliver(
+    keys.reviewRequest(pr, reviewer, row.generation),
+    { channel: "C-alert", post: async () => `ts-alert-${reviewer}` },
+    async () => ({ message: { kind: "review_request", reviewerLogin: `user-${reviewer}` } }),
+  );
+  return row;
+};
 
 const cancel = (pr: PrId, reviewer: number, at = clock) =>
   cancelForReviewer(db, pr, reviewer, stamp(at));
@@ -515,6 +529,61 @@ describe("reminder scan (U8, R9)", () => {
 
     advanceHours(HOURS);
     expect(await scan()).toBe(1);
+  });
+
+  it("posts the lost review alert and invite instead of a reminder, then reminds 12h later", async () => {
+    await upsertIdentity(db, {
+      githubUserId: 7,
+      githubLogin: "flo",
+      slackUserId: "U7",
+      source: "self-link",
+    });
+    const flo = {
+      mergeableState: "blocked",
+      draft: false,
+      requestedReviewers: [{ id: 7, login: "flo" }],
+    };
+    const held = await heldRequest(PR, 7);
+    advanceHours(HOURS);
+
+    await scan({ fetchPullRequest: async () => flo });
+
+    expect(slack.invites).toEqual([{ channelId: "C1", userIds: ["U7"] }]);
+    expect(slack.messages.map((m) => m.text)).toEqual(["Review requested from flo"]);
+    const [row] = await rowsOf(PR);
+    expect(row).toMatchObject({ status: "pending", attempts: 0, generation: held.generation });
+    expect(row?.dueAt.getTime()).toBe(clock + HOURS * 60 * 60_000);
+
+    advanceHours(HOURS);
+    expect(await scan({ fetchPullRequest: async () => flo })).toBe(1);
+    expect(slack.messages.at(-1)?.text).toBe("Reminder: this PR is still waiting for review");
+  });
+
+  it("retries a lost alert with backoff when GitHub's PR read fails", async () => {
+    await heldRequest(PR, 7);
+    advanceHours(HOURS);
+
+    await scan({
+      fetchPullRequest: async () => {
+        throw new Error("GitHub 502");
+      },
+    });
+
+    expect(slack.messages).toHaveLength(0);
+    const [row] = await rowsOf(PR);
+    expect(row).toMatchObject({ status: "pending", attempts: 1 });
+    expect(row?.availableAt.getTime()).toBe(clock + RETRY_BASE_MS);
+  });
+
+  it("cancels a never-alerted reminder whose reviewer GitHub no longer lists", async () => {
+    await heldRequest(PR, 7);
+    advanceHours(HOURS);
+
+    expect(await scan()).toBe(0);
+
+    expect(slack.messages).toHaveLength(0);
+    const [row] = await rowsOf(PR);
+    expect(row?.status).toBe("cancelled");
   });
 
   it("releases an expired sending lease back to pending when the reminder is held", async () => {
