@@ -9,6 +9,7 @@ export {
 } from "./session.ts";
 export {
   type PrRow,
+  deleteLifecycleClaimsBefore,
   findAllByRepoHeadSha,
   findAllByRepoNumbers,
   findByRepoNumber,

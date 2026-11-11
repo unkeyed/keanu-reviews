@@ -1,5 +1,6 @@
-import { errMessage, every } from "#lib";
-import { createClosedPullRequestReconciliation } from "#pr";
+import type { Db } from "#db";
+import { type Logger, errMessage, every } from "#lib";
+import { createClosedPullRequestReconciliation, deleteLifecycleClaimsBefore } from "#pr";
 import { createWorker, pruneJobHistory, startWorker } from "#queue";
 import { scanDue } from "#reviews";
 import type { AppContext } from "./context.ts";
@@ -12,6 +13,8 @@ import { createDispatcher } from "./handlers.ts";
  */
 export const DAILY_RECONCILE_HOUR_UTC = 8;
 const JOB_RETENTION_MS = 14 * 24 * 60 * 60_000;
+// 288 lifecycle leases; a live holder renews every 100 seconds.
+const ORPHANED_CLAIM_MS = 24 * 60 * 60_000;
 
 /**
  * Milliseconds until the next `hourUtc:00:00.000` UTC. An exact hit waits a full
@@ -26,6 +29,16 @@ export function millisecondsUntilUtcHour(now: Date, hourUtc: number): number {
   );
   if (next.getTime() <= now.getTime()) next.setUTCDate(next.getUTCDate() + 1);
   return next.getTime() - now.getTime();
+}
+
+/** Daily cleanup: finished job history, and lifecycle claims a crash left behind. Failed jobs stay. */
+export async function pruneHistory(db: Db, logger: Logger, now = new Date()): Promise<void> {
+  const pruned = await pruneJobHistory(db, new Date(now.getTime() - JOB_RETENTION_MS));
+  const lifecycleClaims = await deleteLifecycleClaimsBefore(
+    db,
+    new Date(now.getTime() - ORPHANED_CLAIM_MS),
+  );
+  logger.info("pruned job history", { ...pruned, lifecycleClaims });
 }
 
 /**
@@ -46,10 +59,6 @@ export function startBackground(ctx: AppContext): { nudge: () => void; stop: () 
   });
 
   const reconcile = createClosedPullRequestReconciliation(deps, ctx.fetchSnapshot);
-  const prune = async () => {
-    const pruned = await pruneJobHistory(db, new Date(Date.now() - JOB_RETENTION_MS));
-    logger.info("pruned job history", pruned);
-  };
   const isolated = (task: string, run: () => Promise<unknown>) =>
     run().catch((err) => {
       logger.error("daily task failed", { task, err: errMessage(err) });
@@ -59,7 +68,7 @@ export function startBackground(ctx: AppContext): { nudge: () => void; stop: () 
     run: () =>
       Promise.all([
         isolated("reconcile closed pull requests", reconcile),
-        isolated("prune job history", prune),
+        isolated("prune job history", () => pruneHistory(db, logger)),
       ]),
     logger,
     failure: "daily task failed",

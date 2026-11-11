@@ -182,6 +182,20 @@ export async function releasePullRequestLifecycle(
   return rows.length > 0;
 }
 
+/**
+ * Delete lifecycle claims nobody renewed since `before`. A live holder renews
+ * every 100 seconds and releases its claim when done, so a claim this old was
+ * left by a crash. Any claimer could already take it over; this only stops
+ * such rows piling up.
+ */
+export async function deleteLifecycleClaimsBefore(db: Db, before: Date): Promise<number> {
+  const rows = await db
+    .delete(pullRequestLifecycleClaims)
+    .where(lt(pullRequestLifecycleClaims.claimedAt, before))
+    .returning({ githubPrId: pullRequestLifecycleClaims.githubPrId });
+  return rows.length;
+}
+
 export async function setChannel(
   db: Db,
   id: PrId,
