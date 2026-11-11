@@ -28,6 +28,7 @@ export {
 } from "./gateway.ts";
 export {
   type ChannelSink,
+  type DeliverOptions,
   type Delivered,
   type Sent,
   type Ledger,

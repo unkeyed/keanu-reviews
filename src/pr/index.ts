@@ -1,5 +1,5 @@
 export type { PrDeps } from "./converge.ts";
-export { inviteToChannel } from "./invite.ts";
+export { type PrChannel, prChannel } from "./channel.ts";
 export { createClosedPullRequestReconciliation } from "./reconcile.ts";
 export { type PrSession, session } from "./session.ts";
 export {

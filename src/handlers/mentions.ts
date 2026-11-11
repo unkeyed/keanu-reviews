@@ -1,6 +1,6 @@
 import { findSlackUsersByGithubLogins } from "#identity";
 import { errMessage } from "#lib";
-import { inviteToChannel } from "#pr";
+import { prChannel } from "#pr";
 import type { PrHandlerDeps } from "./deps.ts";
 
 // GitHub logins are 1–39 chars: alphanumerics with single internal hyphens, no
@@ -42,7 +42,7 @@ export async function inviteMentionedUsers(
   try {
     const linked = await findSlackUsersByGithubLogins(deps.db, logins);
     const ids = new Set(logins.flatMap((login) => linked.get(login) ?? []));
-    if (ids.size > 0) await inviteToChannel(deps, channelId, [...ids], { role: "mention" });
+    if (ids.size > 0) await prChannel(deps, channelId).invite([...ids], { role: "mention" });
   } catch (error) {
     deps.logger.warn("failed to invite mentioned users into channel", {
       channelId,

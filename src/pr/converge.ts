@@ -9,13 +9,12 @@ import {
   type PrView,
   SlackApiError,
   type SlackGateway,
-  channelSink,
   channelTopic,
   createLedger,
   keys,
   slackChannelUrl,
 } from "#slack";
-import { inviteToChannel } from "./invite.ts";
+import { prChannel } from "./channel.ts";
 import { type ChannelStep, type ConvergeCause, causeClaim, planChannel } from "./plan.ts";
 import { notifyShipped } from "./shipped.ts";
 import {
@@ -139,7 +138,7 @@ async function execute(
       case "post-root": {
         const root = await ledger.deliver(
           keys.root(row.id),
-          channelSink(slack, channel()),
+          prChannel(deps, channel()),
           async () => ({ message: { kind: "root", pr: view } }),
         );
         await setChannel(db, row.id, channel(), root.ts);
@@ -154,20 +153,15 @@ async function execute(
       case "invite-author": {
         const slackUserId = authorSlackId;
         if (!slackUserId) break;
-        const channelIdNow = channel();
-        await ledger.deliver(
-          keys.authorInvite(row.id, snapshot.author.id),
-          channelSink(slack, channelIdNow),
-          async () => ({
-            message: {
-              kind: "author_invite",
-              authorLogin: snapshot.author.login,
-              authorLabel: await displayName(slack, slackUserId, snapshot.author.login),
-            },
-            beforePost: () =>
-              inviteToChannel(deps, channelIdNow, [slackUserId], { prId: row.id, role: "author" }),
-          }),
-        );
+        const sink = prChannel(deps, channel());
+        await ledger.deliver(keys.authorInvite(row.id, snapshot.author.id), sink, async () => ({
+          message: {
+            kind: "author_invite",
+            authorLogin: snapshot.author.login,
+            authorLabel: await displayName(slack, slackUserId, snapshot.author.login),
+          },
+          beforePost: () => sink.invite([slackUserId], { prId: row.id, role: "author" }),
+        }));
         break;
       }
       case "cancel-reminders":
@@ -184,7 +178,7 @@ async function execute(
       case "lifecycle-note":
         await ledger.deliver(
           keys.lifecycle(row.id, step.action, step.state, snapshot.headSha, snapshot.updatedAt),
-          channelSink(slack, channel()),
+          prChannel(deps, channel()),
           async () => ({
             message: { kind: "lifecycle", pr: view, action: step.action, state: step.state },
           }),

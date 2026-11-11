@@ -4,7 +4,7 @@ import { reconcileArrivalKey } from "#events";
 import { upsertIdentity } from "#identity";
 import { type ArrivalKey, Retry, createLogger } from "#lib";
 import { scheduleReminder } from "#reminders";
-import { SlackApiError } from "#slack";
+import { SlackApiError, keys } from "#slack";
 import type { Db } from "../db/client.ts";
 import { pullRequests, reminders } from "../db/schema.ts";
 import { createTestDb } from "../db/testDb.ts";
@@ -13,11 +13,13 @@ import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { convergePullRequest } from "../testing/pr.ts";
 import { PullRequestLifecycleBusyError, session } from "./session.ts";
 import {
+  applyPullRequestSource,
   claimPullRequestLifecycle,
   findByRepoNumber,
   prId,
   pullRequestLifecycleClaimedAt,
   releasePullRequestLifecycle,
+  setChannel,
 } from "./store.ts";
 
 let db: Db;
@@ -897,6 +899,54 @@ describe("PR session", () => {
     await expect(
       session(deps(), existing, async (s) => ({ converged: s.converged, ready: await s.ready() })),
     ).resolves.toMatchObject({ converged: undefined, ready: { channelId: "C1" } });
+  });
+
+  it("delivers a child event's message into the channel it builds, once per key", async () => {
+    const key = keys.issueComment(prId("unkey/api", 1423), 1);
+    const build = vi.fn(async () => ({ message: { kind: "reminder", hours: 12 } as const }));
+
+    const first = await session(deps(), child(), (s) => s.deliver(key, build));
+    const again = await session(deps(), child(), async (s) => ({
+      delivered: await s.deliver(key, build),
+      ts: await s.sentTs(key),
+    }));
+
+    expect(first).toEqual({ status: "posted", ts: "ts-2" });
+    expect(again).toEqual({ delivered: { status: "already-sent", ts: "ts-2" }, ts: "ts-2" });
+    expect(build).toHaveBeenCalledTimes(1);
+    expect(slack.messages.map((m) => [m.channel, m.ts])).toEqual([
+      ["C1", "ts-1"],
+      ["C1", "ts-2"],
+    ]);
+  });
+
+  it("writes into an existing PR's stored channel, which needs no root", async () => {
+    const row = (
+      await applyPullRequestSource(db, {
+        repoFullName: "unkey/api",
+        number: 1423,
+        githubPrId: 999,
+        currentState: "pr",
+      })
+    ).row;
+    const existing = { kind: "existing", githubPrId: 999 } as const;
+    const key = keys.issueComment(row.id, 1);
+    const note = { message: { kind: "reminder", hours: 12 } as const };
+    const post = () => session(deps(), existing, (s) => s.deliver(key, async () => note));
+
+    await expect(post()).rejects.toThrow(new Retry("PR channel is not ready for GitHub PR 999"));
+    await setChannel(db, row.id, "C9", null);
+    await expect(post()).resolves.toEqual({ status: "posted", ts: "ts-1" });
+    await session(deps(), existing, async (s) => {
+      const channel = await s.channel();
+      await channel.update("ts-1", { kind: "reminder", hours: 24 });
+      await channel.invite(["U1"], { role: "mention" });
+      await channel.remove("ts-1");
+    });
+
+    expect(slack.updates.map((u) => [u.channel, u.ts])).toEqual([["C9", "ts-1"]]);
+    expect(slack.invites).toEqual([{ channelId: "C9", userIds: ["U1"] }]);
+    expect(slack.deletes).toEqual([{ channel: "C9", ts: "ts-1", authorUserToken: undefined }]);
   });
 
   it("refuses a session opened inside another and releases the outer lease", async () => {

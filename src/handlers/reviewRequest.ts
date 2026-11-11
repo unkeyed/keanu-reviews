@@ -2,9 +2,9 @@ import { type GithubActor, type PullRequestEvent, isTerminal } from "#events";
 import type { GithubEmailFetcher } from "#github";
 import { displayName, resolveSlackUser } from "#identity";
 import { type PrId, Retry } from "#lib";
-import { type PrRow, type PrSession, inviteToChannel } from "#pr";
+import { type PrRow, type PrSession, prChannel } from "#pr";
 import { findReminderForReviewer } from "#reminders";
-import { channelSink, createLedger, keys } from "#slack";
+import { createLedger, keys } from "#slack";
 import type { PrHandlerDeps } from "./deps.ts";
 
 export interface ReviewRequestDeps extends PrHandlerDeps {
@@ -311,9 +311,10 @@ async function inviteReviewer(
   round: number | string,
 ): Promise<boolean> {
   const { db, slack, logger } = deps;
+  const channel = prChannel(deps, channelId);
   const delivered = await createLedger(db).deliver(
     keys.reviewRequest(prId, reviewer.id, round),
-    channelSink(slack, channelId),
+    channel,
     async () => {
       const slackUserId = await resolveSlackUser(deps, {
         githubId: reviewer.id,
@@ -329,8 +330,7 @@ async function inviteReviewer(
           reviewerLogin: reviewer.login,
           reviewerLabel: await displayName(slack, slackUserId, reviewer.login),
         },
-        beforePost: () =>
-          inviteToChannel(deps, channelId, [slackUserId], { prId, role: "reviewer" }),
+        beforePost: () => channel.invite([slackUserId], { prId, role: "reviewer" }),
       };
     },
   );

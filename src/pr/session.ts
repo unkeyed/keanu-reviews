@@ -1,6 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { PrSnapshot } from "#events";
 import { Retry, errMessage, leaseWaitMs } from "#lib";
+import {
+  type DeliverOptions,
+  type Delivered,
+  type EffectKey,
+  type Outgoing,
+  createLedger,
+} from "#slack";
+import { type PrChannel, prChannel } from "./channel.ts";
 import { type ConvergeOutcome, type PrDeps, converge } from "./converge.ts";
 import type { ConvergeCause } from "./plan.ts";
 import {
@@ -26,6 +34,9 @@ export type PrSource =
 /** A PR row whose channel and root message exist. */
 export type ReadyPr = PrRow & { channelId: string; rootMessageTs: string };
 
+type ChannelPr = PrRow & { channelId: string };
+
+/** Work inside a session writes to the PR's channel only through it. */
 export interface PrSession {
   /** The channel convergence this session ran on entry; undefined for a child event or an existing PR. */
   readonly converged: ConvergeOutcome | undefined;
@@ -34,6 +45,19 @@ export interface PrSession {
    * as a child event would; still missing means retry later.
    */
   ready(): Promise<ReadyPr>;
+  /**
+   * The PR channel's writer: a snapshot's ready channel, or an existing PR's
+   * stored channel, which needs no root. A missing channel means retry later.
+   */
+  channel(): Promise<PrChannel>;
+  /** Post into the PR channel at most once per key. */
+  deliver<B extends Outgoing | null>(
+    key: EffectKey,
+    build: () => Promise<B>,
+    opts?: DeliverOptions,
+  ): Promise<Delivered<B>>;
+  /** The Slack ts of an effect already posted, else undefined. */
+  sentTs(key: EffectKey): Promise<string | undefined>;
 }
 
 /** Another replica holds the PR; a retry waits until a crashed holder's lease can be taken over. */
@@ -70,16 +94,48 @@ export async function session<T>(
     inSession.run(githubPrId, () =>
       leased(deps, githubPrId, async () => {
         if (source.kind === "existing") {
-          return body({ converged: undefined, ready: () => stored(deps, githubPrId) });
+          return body(
+            prSession(deps, undefined, {
+              ready: () => stored(deps, githubPrId),
+              channel: () => storedChannel(deps, githubPrId),
+            }),
+          );
         }
         const converged =
           source.cause.kind === "child"
             ? undefined
             : await converge(deps, source.snapshot, source.cause);
-        return body({ converged, ready: () => ready(deps, source.snapshot) });
+        const readyPr = () => ready(deps, source.snapshot);
+        return body(prSession(deps, converged, { ready: readyPr, channel: readyPr }));
       }),
     ),
   );
+}
+
+/** Each lookup runs at most once: under the lease, nothing else changes the row it reads. */
+function prSession(
+  deps: PrDeps,
+  converged: ConvergeOutcome | undefined,
+  find: { ready: () => Promise<ReadyPr>; channel: () => Promise<ChannelPr> },
+): PrSession {
+  const ledger = createLedger(deps.db);
+  let readyPr: Promise<ReadyPr> | undefined;
+  let channel: Promise<PrChannel> | undefined;
+  const s: PrSession = {
+    converged,
+    ready: () => {
+      readyPr ??= find.ready();
+      return readyPr;
+    },
+    channel: () => {
+      channel ??= find.channel().then((row) => prChannel(deps, row.channelId));
+      return channel;
+    },
+    deliver: (async (key, build, opts) =>
+      ledger.deliver(key, await s.channel(), build, opts)) as PrSession["deliver"],
+    sentTs: (key) => ledger.sentTs(key),
+  };
+  return s;
 }
 
 function inLane<T>(githubPrId: number, run: () => Promise<T>): Promise<T> {
@@ -145,6 +201,16 @@ async function stored(deps: PrDeps, githubPrId: number): Promise<ReadyPr> {
   const row = await findByGithubPrId(deps.db, githubPrId);
   if (!isReady(row)) throw new Retry(`PR channel is not ready for GitHub PR ${githubPrId}`);
   return row;
+}
+
+async function storedChannel(deps: PrDeps, githubPrId: number): Promise<ChannelPr> {
+  const row = await findByGithubPrId(deps.db, githubPrId);
+  if (!hasChannel(row)) throw new Retry(`PR channel is not ready for GitHub PR ${githubPrId}`);
+  return row;
+}
+
+function hasChannel(row: PrRow | undefined): row is ChannelPr {
+  return Boolean(row?.channelId);
 }
 
 function isReady(row: PrRow | undefined): row is ReadyPr {
