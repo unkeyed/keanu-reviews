@@ -28,7 +28,7 @@ export async function runReconcileClosedPullRequestsCli(
   try {
     const ctx = open();
     close = ctx.close;
-    const summary = await createClosedPullRequestReconciliation(ctx.deps, ctx.fetchSnapshot)();
+    const summary = await createClosedPullRequestReconciliation(ctx.deps, ctx.deps.fetchSnapshot)();
     io.stdout(JSON.stringify(summary));
     return summary.failed > 0 ? 1 : 0;
   } catch (error) {

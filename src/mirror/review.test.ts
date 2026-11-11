@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type HandlerDeps, handlers } from "#app";
 import { type ReviewEvent, jobArrivalKey, parseEvent } from "#events";
 import { upsertIdentity } from "#identity";
+import { mergeCommentBody } from "#pr";
 import { scheduleReminder } from "#reminders";
 import { onCheckRun, onPullRequest } from "#reviews";
 import { SlackApiError } from "#slack";
@@ -445,6 +446,22 @@ describe("onIssueComment (U6)", () => {
     bot.comment.user.type = "Bot";
     await onIssueComment(deps(), issueCommentEvent(bot));
     expect(slack.messages).toHaveLength(0);
+  });
+
+  it("never echoes the merge comment, even when its bot is allow-listed", async () => {
+    const fromApp = (body: string) => {
+      const input = issueComment(true);
+      input.comment.user = { id: 9, login: "keanu-reviews[bot]", type: "Bot" };
+      input.comment.body = body;
+      return issueCommentEvent(input);
+    };
+    const allowed = deps({ allowedBots: new Set(["keanu-reviews"]) });
+
+    await onIssueComment(allowed, fromApp(mergeCommentBody("https://slack.com/app_redirect?x")));
+    expect(slack.messages).toHaveLength(0);
+
+    await onIssueComment(allowed, fromApp("deploy preview ready"));
+    expect(slack.messages).toHaveLength(1);
   });
 
   it("retries while another replica holds the PR's lease", async () => {

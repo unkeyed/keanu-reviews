@@ -3,7 +3,6 @@ import { type Config, SECRET_KEYS } from "#config";
 import { type Db, createDb } from "#db";
 import {
   type GithubUserFetcher,
-  type PullRequestSnapshotFetcher,
   createCiReadinessFetcher,
   createGithubAttachmentMirror,
   createGithubEmailFetcher,
@@ -48,7 +47,6 @@ export interface AppContext {
   logger: Logger;
   db: Db;
   deps: HandlerDeps;
-  fetchSnapshot: PullRequestSnapshotFetcher;
   fetchGithubUser: GithubUserFetcher;
   routes: readonly Hono[];
   close(): Promise<void>;
@@ -84,7 +82,6 @@ export function createContext(config: Config): AppContext {
   const userTokens =
     slackOAuth && userTokenAccess({ db, slack, logger, teamId, cipher: slackOAuth.cipher });
 
-  const fetchSnapshot = createPullRequestSnapshotFetcher(auth, installationId);
   const deps: HandlerDeps = {
     db,
     slack,
@@ -112,7 +109,7 @@ export function createContext(config: Config): AppContext {
     authorPoster: userTokens?.authorPoster,
     allowedBots: config.ALLOWED_BOTS,
     threadComments: config.THREAD_COMMENTS,
-    fetchSnapshot,
+    fetchSnapshot: createPullRequestSnapshotFetcher(auth, installationId),
   };
 
   const githubOauthCallbackUrl = `${config.PUBLIC_URL}/oauth/github/callback`;
@@ -164,7 +161,6 @@ export function createContext(config: Config): AppContext {
     logger,
     db,
     deps,
-    fetchSnapshot,
     fetchGithubUser: createGithubUserFetcher(auth, installationId),
     routes,
     close,

@@ -1,5 +1,5 @@
 import type { Db } from "#db";
-import { type PrSnapshot, isTerminal, nextState } from "#events";
+import { type GithubActor, type PrSnapshot, isTerminal, nextState } from "#events";
 import type { GithubEmailFetcher, PrCommenter } from "#github";
 import { displayName, resolveSlackUser } from "#identity";
 import { type Logger, errMessage } from "#lib";
@@ -277,13 +277,20 @@ function createMayHaveSucceeded(error: unknown): boolean {
   return error instanceof SlackApiError && (error.ambiguous || error.code === "name_taken");
 }
 
+const MERGE_COMMENT_LEAD = "💬 Slack discussion for this PR: ";
+
+export const mergeCommentBody = (channelUrl: string) => `${MERGE_COMMENT_LEAD}${channelUrl}`;
+
+export const isMergeComment = (author: Pick<GithubActor, "isBot">, body: string) =>
+  author.isBot && body.startsWith(MERGE_COMMENT_LEAD);
+
 async function commentOnMerge(deps: PrDeps, row: PrRow, channelId: string): Promise<void> {
   const { db, logger, postPrComment, slackTeamId } = deps;
   if (!postPrComment) return;
   try {
     if (await claimMergeComment(db, row.id, new Date())) {
       const url = slackChannelUrl(slackTeamId, channelId);
-      await postPrComment(row.repoFullName, row.number, `💬 Slack discussion for this PR: ${url}`);
+      await postPrComment(row.repoFullName, row.number, mergeCommentBody(url));
       logger.info("posted merge comment to PR", { prId: row.id, number: row.number });
     }
   } catch (err) {

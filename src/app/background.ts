@@ -45,7 +45,7 @@ export function startBackground(ctx: AppContext): { nudge: () => void; stop: () 
     failure: "reminder scan failed",
   });
 
-  const reconcile = createClosedPullRequestReconciliation(deps, ctx.fetchSnapshot);
+  const reconcile = createClosedPullRequestReconciliation(deps, deps.fetchSnapshot);
   const isolated = (task: string, run: () => Promise<unknown>) =>
     run().catch((err) => {
       logger.error("daily task failed", { task, err: errMessage(err) });

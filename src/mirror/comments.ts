@@ -1,7 +1,14 @@
 import type { GithubActor, IssueCommentEvent, ReviewCommentEvent, Work } from "#events";
 import { shouldSkipActor } from "#github";
 import { type PrId, Retry } from "#lib";
-import { type PrRow, type PrSession, type PrSource, findByRepoNumber, session } from "#pr";
+import {
+  type PrRow,
+  type PrSession,
+  type PrSource,
+  findByRepoNumber,
+  isMergeComment,
+  session,
+} from "#pr";
 import { type EffectKey, keys } from "#slack";
 import { type MirrorDeps, commentPresentation, removeMirror, upsertAuthored } from "./author.ts";
 
@@ -80,7 +87,7 @@ export async function onIssueComment(
   signal?: AbortSignal,
 ): Promise<void> {
   const c = ev.comment;
-  if (shouldSkipActor(c.author, deps.allowedBots)) return;
+  if (shouldSkipActor(c.author, deps.allowedBots) || isMergeComment(c.author, c.body)) return;
   if (ev.action === "deleted") {
     return removeStored(
       deps,

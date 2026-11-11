@@ -32,7 +32,6 @@ export function testContext(
     logger,
     db,
     deps: handlerDeps(db, slack, { logger }),
-    fetchSnapshot: async () => ({ snapshot: undefined, remaining: undefined }),
     fetchGithubUser: async () => undefined,
     routes: [],
     close: async () => {

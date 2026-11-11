@@ -1,4 +1,4 @@
-export type { PrDeps } from "./converge.ts";
+export { type PrDeps, isMergeComment, mergeCommentBody } from "./converge.ts";
 export { createClosedPullRequestReconciliation } from "./reconcile.ts";
 export {
   type ChannelPr,
