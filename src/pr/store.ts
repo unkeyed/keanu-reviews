@@ -16,8 +16,6 @@ export interface PrSourceInput {
   githubPrId: number;
   currentState: PrState;
   headSha?: string | null;
-  channelId?: string | null;
-  rootMessageTs?: string | null;
   sourceUpdatedAt?: Date | null;
   sourceArrivalKey?: ArrivalKey | null;
 }
@@ -41,8 +39,6 @@ export async function applyPullRequestSource(db: Db, input: PrSourceInput): Prom
     githubPrId: input.githubPrId,
     currentState: input.currentState,
     headSha: input.headSha ?? null,
-    channelId: input.channelId ?? null,
-    rootMessageTs: input.rootMessageTs ?? null,
     sourceUpdatedAt: input.sourceUpdatedAt ?? null,
     sourceArrivalKey: input.sourceArrivalKey ?? null,
     updatedAt: now,

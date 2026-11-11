@@ -16,6 +16,7 @@ import {
   claimPullRequestLifecycle,
   prId,
   releasePullRequestLifecycle,
+  setChannel,
 } from "../pr/store.ts";
 import type { Db } from "./client.ts";
 import { jobs, messages, processedDeliveries, reminders } from "./schema.ts";
@@ -272,9 +273,9 @@ describe("reminders", () => {
       number: 2,
       githubPrId: 2,
       currentState: "draft",
-      channelId: "C2",
       headSha: "sha-2",
     });
+    await setChannel(db, prId("unkey/api", 2), "C2", null);
     await scheduleReminder(db, {
       prId: prId("unkey/api", 2),
       reviewerGithubId: 7,
