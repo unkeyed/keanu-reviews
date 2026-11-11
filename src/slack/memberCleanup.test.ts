@@ -23,7 +23,7 @@ describe("quietlyRemoveMembers", () => {
       {
         slack,
         logger,
-        getUserToken: async (id) => tokens[id],
+        getUserTokens: async () => new Map(Object.entries(tokens)),
         onInvalidToken: async () => {},
       },
       channelId,
@@ -42,7 +42,12 @@ describe("quietlyRemoveMembers", () => {
     const onInvalidToken = vi.fn(async () => {});
 
     const summary = await quietlyRemoveMembers(
-      { slack, logger, getUserToken: async () => "tok-dead", onInvalidToken },
+      {
+        slack,
+        logger,
+        getUserTokens: async (ids) => new Map(ids.map((id) => [id, "tok-dead"])),
+        onInvalidToken,
+      },
       channelId,
     );
 
@@ -58,7 +63,12 @@ describe("quietlyRemoveMembers", () => {
     };
 
     const summary = await quietlyRemoveMembers(
-      { slack, logger, getUserToken: async () => "tok", onInvalidToken: async () => {} },
+      {
+        slack,
+        logger,
+        getUserTokens: async (ids) => new Map(ids.map((id) => [id, "tok"])),
+        onInvalidToken: async () => {},
+      },
       channelId,
     );
     expect(summary).toMatchObject({ failed: 1 });
@@ -72,10 +82,35 @@ describe("quietlyRemoveMembers", () => {
     const leaveSpy = vi.spyOn(slack, "leave");
 
     const summary = await quietlyRemoveMembers(
-      { slack, logger, getUserToken: async () => "tok", onInvalidToken: async () => {} },
+      {
+        slack,
+        logger,
+        getUserTokens: async (ids) => new Map(ids.map((id) => [id, "tok"])),
+        onInvalidToken: async () => {},
+      },
       channelId,
     );
     expect(summary.members).toBe(0);
+    expect(leaveSpy).not.toHaveBeenCalled();
+  });
+
+  it("leaves everyone in place when the token read fails", async () => {
+    const { slack, channelId } = await seededChannel();
+    await slack.invite(channelId, ["U1", "U2"]);
+    const leaveSpy = vi.spyOn(slack, "leave");
+
+    const summary = await quietlyRemoveMembers(
+      {
+        slack,
+        logger,
+        getUserTokens: async () => {
+          throw new Error("db down");
+        },
+        onInvalidToken: async () => {},
+      },
+      channelId,
+    );
+    expect(summary).toMatchObject({ members: 2, failed: 2, left: 0 });
     expect(leaveSpy).not.toHaveBeenCalled();
   });
 });

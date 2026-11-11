@@ -8,8 +8,9 @@ export { displayName, resolveSlackUser } from "./resolve.ts";
 export {
   deleteSlackUserToken,
   findByGithubId,
-  findByGithubLogin,
+  findSlackUsersByGithubLogins,
   getSlackUserTokenRow,
+  getSlackUserTokenRows,
   upsertIdentity,
   upsertSlackUserToken,
 } from "./store.ts";

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "#db";
 import { createTestDb } from "../db/testDb.ts";
-import { findByGithubLogin, upsertIdentity } from "./store.ts";
+import { findSlackUsersByGithubLogins, upsertIdentity } from "./store.ts";
 
 let db: Db;
 let close: () => Promise<void>;
@@ -13,7 +13,7 @@ beforeEach(async () => {
 });
 afterEach(() => close());
 
-describe("findByGithubLogin", () => {
+describe("findSlackUsersByGithubLogins", () => {
   it("resolves a linked login case-insensitively", async () => {
     await upsertIdentity(db, {
       githubUserId: 7,
@@ -21,11 +21,43 @@ describe("findByGithubLogin", () => {
       slackUserId: "Udave",
       source: "self-link",
     });
-    expect((await findByGithubLogin(db, "dave-hawkins"))?.slackUserId).toBe("Udave");
-    expect((await findByGithubLogin(db, "DAVE-HAWKINS"))?.slackUserId).toBe("Udave");
+    expect(await findSlackUsersByGithubLogins(db, ["dave-hawkins"])).toEqual(
+      new Map([["dave-hawkins", "Udave"]]),
+    );
+    expect(await findSlackUsersByGithubLogins(db, ["DAVE-HAWKINS"])).toEqual(
+      new Map([["dave-hawkins", "Udave"]]),
+    );
   });
 
-  it("returns undefined for an unlinked login", async () => {
-    expect(await findByGithubLogin(db, "nobody")).toBeUndefined();
+  it("leaves an unlinked login out", async () => {
+    expect(await findSlackUsersByGithubLogins(db, ["nobody"])).toEqual(new Map());
+  });
+
+  it("resolves several logins at once, preferring the most recently linked row", async () => {
+    await upsertIdentity(db, {
+      githubUserId: 1,
+      githubLogin: "reused",
+      slackUserId: "Uold",
+      source: "self-link",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await upsertIdentity(db, {
+      githubUserId: 2,
+      githubLogin: "Reused",
+      slackUserId: "Unew",
+      source: "self-link",
+    });
+    await upsertIdentity(db, {
+      githubUserId: 3,
+      githubLogin: "bob",
+      slackUserId: "Ubob",
+      source: "self-link",
+    });
+    expect(await findSlackUsersByGithubLogins(db, ["reused", "bob", "nobody"])).toEqual(
+      new Map([
+        ["reused", "Unew"],
+        ["bob", "Ubob"],
+      ]),
+    );
   });
 });

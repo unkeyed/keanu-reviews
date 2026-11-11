@@ -16,7 +16,12 @@ import {
   createPullRequestFetcher,
   createReviewApprovalFetcher,
 } from "#github";
-import { createSlackOAuthRoute, deleteSlackUserToken, getSlackUserTokenRow } from "#identity";
+import {
+  createSlackOAuthRoute,
+  deleteSlackUserToken,
+  getSlackUserTokenRow,
+  getSlackUserTokenRows,
+} from "#identity";
 import { type Logger, createTokenCipher, errMessage } from "#lib";
 import type { PrDeps } from "#pr";
 import {
@@ -114,11 +119,9 @@ export function createServiceHandlers(input: {
       deleteSlackUserToken(db, config.SLACK_TEAM_ID, slackUserId);
     // A token that no longer decrypts falls back to the bot but is kept: a
     // misconfigured key at deploy would otherwise wipe every stored token.
-    const readUserToken = async (slackUserId: string, requiredScope?: string) => {
-      const row = await getSlackUserTokenRow(db, config.SLACK_TEAM_ID, slackUserId);
-      if (!row || (requiredScope && !hasScope(row.scopes, requiredScope))) return undefined;
+    const decrypt = (slackUserId: string, encryptedToken: string) => {
       try {
-        return cipher.decrypt(row.encryptedToken);
+        return cipher.decrypt(encryptedToken);
       } catch (error) {
         logger.warn("Slack user token cannot be decrypted; posting as the bot", {
           slackUserId,
@@ -127,12 +130,26 @@ export function createServiceHandlers(input: {
         return undefined;
       }
     };
+    const readUserToken = async (slackUserId: string, requiredScope: string) => {
+      const row = await getSlackUserTokenRow(db, config.SLACK_TEAM_ID, slackUserId);
+      if (!row || !hasScope(row.scopes, requiredScope)) return undefined;
+      return decrypt(slackUserId, row.encryptedToken);
+    };
     quietArchive = async (channelId) => {
       await quietlyRemoveMembers(
         {
           slack,
           logger,
-          getUserToken: (slackUserId) => readUserToken(slackUserId),
+          getUserTokens: async (slackUserIds) => {
+            const rows = await getSlackUserTokenRows(db, config.SLACK_TEAM_ID, slackUserIds);
+            const tokens = new Map<string, string>();
+            for (const slackUserId of slackUserIds) {
+              const row = rows.get(slackUserId);
+              const token = row && decrypt(slackUserId, row.encryptedToken);
+              if (token) tokens.set(slackUserId, token);
+            }
+            return tokens;
+          },
           onInvalidToken: dropToken,
         },
         channelId,

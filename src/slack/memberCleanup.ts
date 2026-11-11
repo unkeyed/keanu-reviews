@@ -4,8 +4,8 @@ import type { SlackGateway } from "./gateway.ts";
 export interface MemberCleanupDeps {
   slack: SlackGateway;
   logger: Logger;
-  /** Decrypted Slack user token for a member, or undefined if none is stored. */
-  getUserToken: (slackUserId: string) => Promise<string | undefined>;
+  /** Decrypted Slack user tokens for the members that have one, keyed by Slack user id. */
+  getUserTokens: (slackUserIds: readonly string[]) => Promise<Map<string, string>>;
   /** Drop a token Slack reported dead so it isn't retried on future archives. */
   onInvalidToken: (slackUserId: string) => Promise<void>;
 }
@@ -53,18 +53,21 @@ export async function quietlyRemoveMembers(
   }
   summary.members = members.length;
 
+  let tokens: Map<string, string>;
+  try {
+    tokens = await deps.getUserTokens(members);
+  } catch (err) {
+    summary.failed = members.length;
+    deps.logger.warn("quiet archive: reading member tokens failed", {
+      channelId,
+      err: errMessage(err),
+    });
+    deps.logger.info("quiet archive member cleanup", { channelId, ...summary });
+    return summary;
+  }
+
   for (const member of members) {
-    let token: string | undefined;
-    try {
-      token = await deps.getUserToken(member);
-    } catch (err) {
-      summary.failed += 1;
-      deps.logger.warn("quiet archive: reading a member token failed", {
-        channelId,
-        err: errMessage(err),
-      });
-      continue;
-    }
+    const token = tokens.get(member);
     if (!token) {
       summary.noToken += 1;
       continue;

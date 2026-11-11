@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, desc, eq, gt, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, lte, sql } from "drizzle-orm";
 import {
   type Db,
   type IdentityRow,
@@ -47,22 +47,30 @@ export async function findByGithubId(
 }
 
 /**
- * Resolve a bare GitHub @-mention login to a linked identity. GitHub logins are
- * case-insensitive, so we match case-folded; if a login was ever reused across
- * ids we prefer the most recently linked row. The identity map is people-sized
- * (one row per linked user), so the case-folded scan is cheap and needs no index.
+ * Resolve @-mentioned GitHub logins to linked Slack users, keyed by the
+ * lowercased login. GitHub logins are case-insensitive, so they match
+ * case-folded; if a login was ever reused across ids the most recently linked
+ * row wins. The identity map is people-sized, so the case-folded scan needs no index.
  */
-export async function findByGithubLogin(
+export async function findSlackUsersByGithubLogins(
   db: Db,
-  githubLogin: string,
-): Promise<IdentityRow | undefined> {
-  const [row] = await db
-    .select()
+  githubLogins: readonly string[],
+): Promise<Map<string, string>> {
+  const found = new Map<string, string>();
+  if (githubLogins.length === 0) return found;
+  const login = sql<string>`lower(${identities.githubLogin})`;
+  const rows = await db
+    .select({ login, slackUserId: identities.slackUserId })
     .from(identities)
-    .where(eq(sql`lower(${identities.githubLogin})`, githubLogin.toLowerCase()))
-    .orderBy(desc(identities.updatedAt))
-    .limit(1);
-  return row;
+    .where(
+      inArray(
+        login,
+        githubLogins.map((l) => l.toLowerCase()),
+      ),
+    )
+    .orderBy(desc(identities.updatedAt));
+  for (const row of rows) if (!found.has(row.login)) found.set(row.login, row.slackUserId);
+  return found;
 }
 
 export type SelfLinkIdentityResult =
@@ -318,6 +326,29 @@ export async function getSlackUserTokenRow(
     )
     .limit(1);
   return row;
+}
+
+/** Stored tokens for several Slack users in one read, keyed by Slack user id. */
+export async function getSlackUserTokenRows(
+  db: Db,
+  slackTeamId: string,
+  slackUserIds: readonly string[],
+): Promise<Map<string, { encryptedToken: string; scopes: string }>> {
+  if (slackUserIds.length === 0) return new Map();
+  const rows = await db
+    .select({
+      slackUserId: slackUserTokens.slackUserId,
+      encryptedToken: slackUserTokens.encryptedToken,
+      scopes: slackUserTokens.scopes,
+    })
+    .from(slackUserTokens)
+    .where(
+      and(
+        eq(slackUserTokens.slackTeamId, slackTeamId),
+        inArray(slackUserTokens.slackUserId, [...slackUserIds]),
+      ),
+    );
+  return new Map(rows.map(({ slackUserId, ...row }) => [slackUserId, row]));
 }
 
 /**

@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "#db";
 import { createTestDb } from "../db/testDb.ts";
-import { deleteSlackUserToken, getSlackUserTokenRow, upsertSlackUserToken } from "./store.ts";
+import {
+  deleteSlackUserToken,
+  getSlackUserTokenRow,
+  getSlackUserTokenRows,
+  upsertSlackUserToken,
+} from "./store.ts";
 
 let db: Db;
 let close: () => Promise<void>;
@@ -59,5 +64,27 @@ describe("Slack user tokens", () => {
     });
     await deleteSlackUserToken(db, "T1", "U1");
     expect(await getSlackUserTokenRow(db, "T1", "U1")).toBeUndefined();
+  });
+
+  it("reads several users' tokens in one call, scoped to the workspace", async () => {
+    for (const [slackUserId, slackTeamId] of [
+      ["U1", "T1"],
+      ["U2", "T1"],
+      ["U3", "TOTHER"],
+    ] as const) {
+      await upsertSlackUserToken(db, {
+        slackUserId,
+        slackTeamId,
+        encryptedToken: `cipher-${slackUserId}`,
+        scopes: "channels:write",
+      });
+    }
+    expect(await getSlackUserTokenRows(db, "T1", ["U1", "U2", "U3", "U4"])).toEqual(
+      new Map([
+        ["U1", { encryptedToken: "cipher-U1", scopes: "channels:write" }],
+        ["U2", { encryptedToken: "cipher-U2", scopes: "channels:write" }],
+      ]),
+    );
+    expect(await getSlackUserTokenRows(db, "T1", [])).toEqual(new Map());
   });
 });
