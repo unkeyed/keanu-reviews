@@ -97,6 +97,7 @@ export class FakeSlackGateway implements SlackGateway {
       const error = this.uninvitableUsers.get(userId);
       return error ? [{ userId, error }] : [];
     });
+    if (requested.length > 0) this.unarchiveForWrite(channelId);
     const userIds = requested.filter((userId) => !this.uninvitableUsers.has(userId));
     const missing = userIds.filter(
       (userId) =>
@@ -139,7 +140,7 @@ export class FakeSlackGateway implements SlackGateway {
         this.memberships.set(channel, members);
       }
     }
-    if (this.channel(channel)?.archived) throw fail("chat.postMessage", "is_archived");
+    this.unarchiveForWrite(channel);
     const ts = `ts-${++this.tsSeq}`;
     this.messages.push({
       channel,
@@ -195,5 +196,11 @@ export class FakeSlackGateway implements SlackGateway {
 
   channel(id: string) {
     return this.channels.find((c) => c.id === id);
+  }
+
+  /** The real gateway answers `is_archived` by unarchiving and retrying the write. */
+  private unarchiveForWrite(channelId: string): void {
+    const ch = this.channel(channelId);
+    if (ch?.archived) ch.archived = false;
   }
 }
