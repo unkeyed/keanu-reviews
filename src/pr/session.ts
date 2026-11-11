@@ -10,7 +10,7 @@ import {
   createLedger,
 } from "#slack";
 import { type PrChannel, prChannel } from "./channel.ts";
-import { type ConvergeOutcome, type PrDeps, converge } from "./converge.ts";
+import { type ConvergeOutcome, type PrDeps, converge, followNewerSnapshot } from "./converge.ts";
 import { inviteMentions } from "./mentions.ts";
 import type { ConvergeCause } from "./plan.ts";
 import {
@@ -93,7 +93,8 @@ const inSession = new AsyncLocalStorage<number>();
  * in this process's queue for the PR, then under the cross-replica lifecycle
  * lease, which is renewed while the work runs. A `pull_request` or
  * `reconcile` cause converges the channel before `body` runs; a child event
- * converges only when the body asks for a ready PR. Sessions do not nest,
+ * follows a strictly newer title or draft flag of an open PR's channel, and
+ * builds a missing channel only when the body asks for a ready PR. Sessions do not nest,
  * since a nested one would wait on its own queue. Once `signal` aborts, the
  * session stops renewing its lease and starts no further Slack delivery.
  */
@@ -117,10 +118,9 @@ export async function session<T>(
             }),
           );
         }
-        const converged =
-          source.cause.kind === "child"
-            ? undefined
-            : await converge(deps, source.snapshot, source.cause);
+        let converged: ConvergeOutcome | undefined;
+        if (source.cause.kind === "child") await followNewerSnapshot(deps, source.snapshot);
+        else converged = await converge(deps, source.snapshot, source.cause);
         const readyPr = () => ready(deps, source.snapshot);
         return body(prSession(deps, signal, converged, { ready: readyPr, channel: readyPr }));
       }),

@@ -1,5 +1,5 @@
 import type { Db } from "#db";
-import { type PrSnapshot, nextState } from "#events";
+import { type PrSnapshot, isTerminal, nextState } from "#events";
 import type { GithubEmailFetcher, PrCommenter } from "#github";
 import { displayName, resolveSlackUser } from "#identity";
 import { type Logger, errMessage } from "#lib";
@@ -89,12 +89,54 @@ export async function converge(
     });
     return { accepted: false, skippedShipped: false, skippedMergeComment: false };
   }
-  const steps = planChannel(source.row, snapshot, cause, {
+  const steps = planChannel(source.row, snapshot, cause, features(deps));
+  return execute(deps, source.row, snapshot, cause, steps);
+}
+
+/**
+ * Bring an open PR's channel to the title and draft flag of a review's or
+ * review comment's embedded PR, when GitHub's `updated_at` on it is strictly
+ * newer than the stored source. A stale view never flips a PR back. It never
+ * revives or closes a PR. The stored source time and arrival key stay put, so
+ * a lifecycle event GitHub sent earlier still applies when it arrives late,
+ * with its note and review work. A failure is logged, not thrown, so the
+ * review itself is still mirrored; the next event tries again.
+ */
+export async function followNewerSnapshot(deps: PrDeps, snapshot: PrSnapshot): Promise<void> {
+  const { db, logger } = deps;
+  const row = await findByGithubPrId(db, snapshot.githubPrId);
+  if (!row?.channelId || !row.rootMessageTs || isTerminal(row.currentState)) return;
+  // Without a stored source time there is nothing to be newer than.
+  if (!row.sourceUpdatedAt || Date.parse(snapshot.updatedAt) <= row.sourceUpdatedAt.getTime()) {
+    return;
+  }
+  const cause = { kind: "child" } as const;
+  const currentState = nextState(row.currentState, causeClaim(cause, snapshot));
+  const steps = planChannel({ ...row, currentState }, snapshot, cause, features(deps));
+  if (!steps.some((step) => step.kind === "mark-applied")) return;
+  try {
+    const { row: stored } = await applyPullRequestSource(db, {
+      repoFullName: row.repoFullName,
+      number: row.number,
+      githubPrId: row.githubPrId,
+      currentState,
+    });
+    await execute(deps, stored, snapshot, cause, steps);
+  } catch (err) {
+    logger.warn("PR channel did not follow a newer PR snapshot", {
+      prId: row.id,
+      githubPrId: snapshot.githubPrId,
+      err: errMessage(err),
+    });
+  }
+}
+
+function features(deps: PrDeps) {
+  return {
     shipped: Boolean(deps.shippedChannel),
     commentOnMerge: Boolean(deps.commentOnMerge),
     quietLeave: Boolean(deps.quietArchive),
-  });
-  return execute(deps, source.row, snapshot, cause, steps);
+  };
 }
 
 async function execute(

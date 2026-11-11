@@ -14,7 +14,8 @@ import type { PrRow } from "./store.ts";
  * - `pull_request`: a lifecycle webhook. Its action may assert the state and
  *   post a lifecycle note, and a merge is announced.
  * - `child`: the PR object inside a review or review comment. It only hints at
- *   draft, carries no arrival key, and converges only a missing channel or root.
+ *   draft and carries no arrival key. It builds a missing channel or root, and
+ *   an open PR's channel follows a strictly newer one's title and draft flag.
  * - `reconcile`: the daily catch-up of a close GitHub already reported. It
  *   archives like the webhook would but announces nothing.
  */

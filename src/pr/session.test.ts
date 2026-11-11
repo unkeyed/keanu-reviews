@@ -886,7 +886,7 @@ describe("PR session", () => {
     expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
   });
 
-  it("leaves a ready PR's stored facts alone for a child event", async () => {
+  it("flips a ready PR to draft when a review's newer snapshot says draft (B1)", async () => {
     await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
     const before = await findByRepoNumber(db, "unkey/api", 1423);
 
@@ -896,9 +896,97 @@ describe("PR session", () => {
       async (s) => s.ready(),
     );
 
-    expect(ready.currentState).toBe("pr");
+    expect(ready.currentState).toBe("draft");
+    expect(slack.channel("C1")?.name).toBe("draft-oz-unkey-api-1423-add-auth");
     expect(ready.sourceUpdatedAt).toEqual(before?.sourceUpdatedAt);
+    expect(ready.sourceArrivalKey).toBe(before?.sourceArrivalKey);
+  });
+
+  it("renames a PR's channel to a review's newer title (B1)", async () => {
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
+
+    await session(
+      deps(),
+      child({ title: "Add auth v2", updated_at: "2026-08-11T13:00:00Z" }),
+      async (s) => s.ready(),
+    );
+
+    expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth-v2");
+  });
+
+  it("ignores a review snapshot no newer than the stored source (B1)", async () => {
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })));
+    await convergePullRequest(
+      deps(),
+      pullRequestEvent(
+        payload("ready_for_review", { draft: false, updated_at: "2026-08-11T12:05:00Z" }),
+      ),
+    );
+
+    for (const updated_at of ["2026-08-11T12:03:00Z", "2026-08-11T12:05:00Z"]) {
+      await session(deps(), child({ draft: true, title: "Stale", updated_at }), (s) => s.ready());
+    }
+
     expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
+    expect((await findByRepoNumber(db, "unkey/api", 1423))?.currentState).toBe("pr");
+  });
+
+  it("never revives a merged PR from a review's newer snapshot (B1)", async () => {
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
+    await convergePullRequest(deps(), pullRequestEvent(payload("closed", { merged: true })));
+
+    await session(
+      deps(),
+      child({ title: "Renamed after merge", updated_at: "2026-08-11T13:00:00Z" }),
+      async () => undefined,
+    );
+
+    expect(slack.channel("C1")).toMatchObject({
+      name: "merged-oz-unkey-api-1423-add-auth",
+      archived: true,
+    });
+    expect((await findByRepoNumber(db, "unkey/api", 1423))?.currentState).toBe("merged");
+  });
+
+  it("still applies a late lifecycle event GitHub sent before the review (B1)", async () => {
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })));
+    await session(deps(), child({ draft: false, updated_at: "2026-08-11T12:10:00Z" }), async (s) =>
+      s.ready(),
+    );
+    expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
+
+    await convergePullRequest(
+      deps(),
+      pullRequestEvent(
+        payload("converted_to_draft", { draft: true, updated_at: "2026-08-11T12:05:00Z" }),
+      ),
+    );
+
+    expect(slack.channel("C1")?.name).toBe("draft-oz-unkey-api-1423-add-auth");
+    expect((await findByRepoNumber(db, "unkey/api", 1423))?.sourceUpdatedAt).toEqual(
+      new Date("2026-08-11T12:05:00Z"),
+    );
+  });
+
+  it("still runs the review's work when following its snapshot fails (B1)", async () => {
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
+    slack.rename = async () => {
+      throw new SlackApiError("conversations.rename", "invalid_name");
+    };
+    const warn = vi.fn();
+    const d = { ...deps(), logger: { ...createLogger("error"), warn } };
+
+    const ran = await session(
+      d,
+      child({ title: "Add auth v2", updated_at: "2026-08-11T13:00:00Z" }),
+      async (s) => (await s.ready()).channelId,
+    );
+
+    expect(ran).toBe("C1");
+    expect(warn).toHaveBeenCalledWith(
+      "PR channel did not follow a newer PR snapshot",
+      expect.objectContaining({ githubPrId: 999, err: expect.stringContaining("invalid_name") }),
+    );
   });
 
   it("retries a child event whose stale snapshot cannot build the missing channel", async () => {
