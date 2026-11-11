@@ -986,6 +986,73 @@ describe("PR session", () => {
     );
   });
 
+  it.each([
+    ["a Slack rate limit", new Retry("Slack rate limited; retry after 30s", undefined, 30_000)],
+    ["a transient Slack error", new SlackApiError("conversations.rename", "internal_error")],
+  ])("retries the review when following its snapshot hits %s (B1)", async (_, failure) => {
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
+    slack.rename = async () => {
+      throw failure;
+    };
+    const body = vi.fn(async () => undefined);
+
+    await expect(
+      session(deps(), child({ title: "Add auth v2", updated_at: "2026-08-11T13:00:00Z" }), body),
+    ).rejects.toBe(failure);
+    expect(body).not.toHaveBeenCalled();
+  });
+
+  it("stops the review when the job is aborted while following its snapshot (B1)", async () => {
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
+    const job = new AbortController();
+    const lost = new Error("job lease lost to another worker");
+    slack.rename = async () => {
+      job.abort(lost);
+      throw new SlackApiError("conversations.rename", "invalid_name");
+    };
+    const body = vi.fn(async () => undefined);
+
+    await expect(
+      session(
+        deps(),
+        child({ title: "Add auth v2", updated_at: "2026-08-11T13:00:00Z" }),
+        body,
+        job.signal,
+      ),
+    ).rejects.toBe(lost);
+    expect(body).not.toHaveBeenCalled();
+  });
+
+  it("brings the channel to the stored state on the next PR event after a failed follow (B1)", async () => {
+    await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
+    const rename = slack.rename.bind(slack);
+    slack.rename = async () => {
+      throw new SlackApiError("conversations.rename", "invalid_name");
+    };
+    await session(
+      deps(),
+      child({ draft: true, updated_at: "2026-08-11T13:00:00Z" }),
+      async () => {},
+    );
+    expect(await findByRepoNumber(db, "unkey/api", 1423)).toMatchObject({
+      currentState: "draft",
+      appliedState: "pr",
+    });
+    expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
+
+    slack.rename = rename;
+    await convergePullRequest(
+      deps(),
+      pullRequestEvent(payload("synchronize", { draft: true, updated_at: "2026-08-11T14:00:00Z" })),
+    );
+
+    expect(slack.channel("C1")?.name).toBe("draft-oz-unkey-api-1423-add-auth");
+    expect(await findByRepoNumber(db, "unkey/api", 1423)).toMatchObject({
+      currentState: "draft",
+      appliedState: "draft",
+    });
+  });
+
   it("retries a child event whose stale snapshot cannot build the missing channel", async () => {
     slack.createChannel = async () => {
       throw new SlackApiError("conversations.create", "invalid_name");

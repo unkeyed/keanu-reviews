@@ -81,7 +81,7 @@ export async function session<T>(
           );
         }
         let converged: ConvergeOutcome | undefined;
-        if (source.cause.kind === "child") await followNewerSnapshot(deps, source.snapshot);
+        if (source.cause.kind === "child") await followNewerSnapshot(deps, source.snapshot, signal);
         else converged = await converge(deps, source.snapshot, source.cause);
         const readyPr = () => ready(deps, source.snapshot);
         return body(prSession(deps, signal, converged, { ready: readyPr, channel: readyPr }));

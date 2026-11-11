@@ -2,7 +2,7 @@ import type { Db } from "#db";
 import { type GithubActor, type PrSnapshot, isTerminal, nextState } from "#events";
 import type { GithubEmailFetcher, PrCommenter } from "#github";
 import { displayName, resolveSlackUser } from "#identity";
-import { type Logger, errMessage } from "#lib";
+import { type Logger, Retry, errMessage } from "#lib";
 import { cancelForPr } from "#reminders";
 import {
   CURRENT_CHANNEL_NAME_VERSION,
@@ -75,7 +75,11 @@ export async function converge(
   return execute(deps, source.row, snapshot, cause, steps);
 }
 
-export async function followNewerSnapshot(deps: PrDeps, snapshot: PrSnapshot): Promise<void> {
+export async function followNewerSnapshot(
+  deps: PrDeps,
+  snapshot: PrSnapshot,
+  signal: AbortSignal | undefined,
+): Promise<void> {
   const { db, logger } = deps;
   const row = await findByGithubPrId(db, snapshot.githubPrId);
   if (!row?.channelId || !row.rootMessageTs || isTerminal(row.currentState)) return;
@@ -95,6 +99,8 @@ export async function followNewerSnapshot(deps: PrDeps, snapshot: PrSnapshot): P
     });
     await execute(deps, stored, snapshot, cause, steps);
   } catch (err) {
+    signal?.throwIfAborted();
+    if (err instanceof Retry || (err instanceof SlackApiError && err.transient)) throw err;
     logger.warn("PR channel did not follow a newer PR snapshot", {
       prId: row.id,
       githubPrId: snapshot.githubPrId,
