@@ -6,6 +6,15 @@ const DEAD_TOKEN_CODES: ReadonlySet<string> = new Set([
   "token_expired",
 ]);
 
+/** Slack-side failures a later attempt of the same call can get past. */
+const TRANSIENT_CODES: ReadonlySet<string> = new Set([
+  "ratelimited",
+  "internal_error",
+  "fatal_error",
+  "service_unavailable",
+  "request_timeout",
+]);
+
 /**
  * Every failure the Slack gateway throws. `code` is Slack's `error` string for
  * a platform error, `ratelimited` for a 429, `no_response` when the call failed
@@ -46,6 +55,11 @@ export class SlackApiError extends Error {
   /** No usable answer arrived, so the call may have taken effect in Slack. */
   get ambiguous(): boolean {
     return this.code === "no_response" || this.code === "invalid_response";
+  }
+
+  /** Retrying the same call later can succeed, or it may already have taken effect. */
+  get transient(): boolean {
+    return this.ambiguous || TRANSIENT_CODES.has(this.code);
   }
 
   /** A user token Slack will never accept again. */

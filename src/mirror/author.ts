@@ -158,9 +158,11 @@ type Present = (author: Author, images: readonly MessageImage[]) => Outgoing | n
 /**
  * Post a mirrored item as its author, or apply an edit to the message already
  * posted for it. The author and images are resolved only when something will
- * be written. A dead user token is dropped and the item posts as the bot under
- * the same key and client_msg_id. An edit is best-effort: one Slack cannot
- * apply (authorship changed, message gone) leaves the original standing.
+ * be written. When Slack refuses the author's own token for a reason a retry
+ * cannot fix, the item posts as the bot under the same key and client_msg_id;
+ * a dead token is also dropped. A rate limit or transient failure retries the
+ * job. An edit is best-effort: one Slack cannot apply (message gone) leaves
+ * the original standing.
  */
 export async function upsertAuthored(
   deps: MirrorDeps,
@@ -204,10 +206,15 @@ export async function upsertAuthored(
       return out;
     });
   } catch (error) {
-    const dead = error instanceof SlackApiError && error.deadToken;
-    if (!triedUser || !deps.authorPoster || !dead) throw error;
+    if (!triedUser || !(error instanceof SlackApiError) || error.transient) throw error;
     const { login, slackUserId, profile } = triedUser;
-    await deps.authorPoster.onInvalidToken(slackUserId);
+    if (error.deadToken) await deps.authorPoster?.onInvalidToken(slackUserId);
+    else {
+      deps.logger.warn("Slack refused the author's token; posting as the bot", {
+        slackUserId,
+        slackError: error.code,
+      });
+    }
     const { images } = await enrich();
     await s.deliver(item.key, async () =>
       present({ kind: "linked", login, slackUserId, profile }, images),

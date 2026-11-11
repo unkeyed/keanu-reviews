@@ -5,7 +5,9 @@ import { upsertIdentity } from "#identity";
 import { Retry } from "#lib";
 import type { Db } from "../db/client.ts";
 import { createTestDb } from "../db/testDb.ts";
-import { applyPullRequestSource, setChannel } from "../pr/store.ts";
+import { applyPullRequestSource, prId, setChannel } from "../pr/store.ts";
+import { SlackApiError, keys } from "../slack/index.ts";
+import { clientMsgId, naturalKey } from "../slack/ledger.ts";
 import { handlerDeps } from "../testing/deps.ts";
 import { type ReviewCommentPayload, reviewCommentEvent } from "../testing/events.ts";
 import { FakeSlackGateway } from "../testing/fakeSlack.ts";
@@ -147,6 +149,62 @@ describe("onReviewComment (U6)", () => {
     expect(msg?.authorUserToken).toBeUndefined(); // fell back off the user token
     expect(msg?.username).toBe("Flo Rider"); // bot impersonation instead
     expect(slack.messages).toHaveLength(1); // exactly one post, not two
+  });
+
+  describe("when Slack refuses the author's own token (B4)", () => {
+    const failUserPosts = (code: string) => {
+      const post = slack.post.bind(slack);
+      slack.post = async (channel, message, opts) => {
+        if (opts.poster.kind === "user") throw new SlackApiError("chat.postMessage", code);
+        return post(channel, message, opts);
+      };
+    };
+    const linkedWithToken = async (dropped: string[]) => {
+      await seedChannel();
+      await upsertIdentity(db, {
+        githubUserId: 7,
+        githubLogin: "flo",
+        slackUserId: "U7",
+        source: "self-link",
+      });
+      slack.profiles.set("U7", { name: "Flo Rider", iconUrl: "https://slack/avatar.png" });
+      return {
+        ...deps(),
+        authorPoster: {
+          getUserToken: async () => "xoxp-flo",
+          onInvalidToken: async (id: string) => {
+            dropped.push(id);
+          },
+        },
+      };
+    };
+
+    it("posts as the bot under the same client_msg_id and keeps the token", async () => {
+      const dropped: string[] = [];
+      const withToken = await linkedWithToken(dropped);
+      failUserPosts("restricted_action");
+
+      await onReviewComment(withToken, reviewCommentEvent(payload()));
+
+      expect(slack.messages).toHaveLength(1);
+      expect(slack.messages[0]?.username).toBe("Flo Rider");
+      expect(slack.messages[0]?.authorUserToken).toBeUndefined();
+      expect(slack.messages[0]?.clientMsgId).toBe(
+        clientMsgId(naturalKey(keys.reviewComment(prId("unkey/api", 1423), 55))),
+      );
+      expect(dropped).toEqual([]);
+    });
+
+    it("still retries the job on a rate limit or an ambiguous failure", async () => {
+      const withToken = await linkedWithToken([]);
+      for (const code of ["ratelimited", "no_response"]) {
+        failUserPosts(code);
+        await expect(
+          onReviewComment(withToken, reviewCommentEvent(payload())),
+        ).rejects.toMatchObject({ code });
+      }
+      expect(slack.messages).toHaveLength(0);
+    });
   });
 
   it("posts as the bot with a plain login label when the author is unlinked", async () => {

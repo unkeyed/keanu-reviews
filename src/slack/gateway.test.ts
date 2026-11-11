@@ -165,6 +165,30 @@ describe("Slack Web API adapter", () => {
     expect(web.chat).not.toHaveBeenCalled(); // never posted as the bot
   });
 
+  it("unarchives with the bot and retries a user post that hits is_archived (B4)", async () => {
+    const web = fakeWebApi();
+    const userPost = vi
+      .fn()
+      .mockRejectedValueOnce({ data: { error: "is_archived" } })
+      .mockResolvedValueOnce({ ts: "9.9" });
+    const slack = createSlackGateway("unused", {
+      web,
+      userWebFactory: () => ({ apiCall: userPost }) as never,
+    });
+
+    await expect(
+      postMessage(slack, {
+        channel: "C123",
+        text: "hi",
+        authorUserToken: "xoxp-flo",
+        authorUserId: "U7",
+      }),
+    ).resolves.toEqual({ ts: "9.9" });
+    expect(web.conversations.unarchive).toHaveBeenCalledWith({ channel: "C123" });
+    expect(userPost).toHaveBeenCalledTimes(2);
+    expect(web.chat).not.toHaveBeenCalled();
+  });
+
   it("propagates a dead user token so the caller can drop it and fall back", async () => {
     const web = fakeWebApi();
     const userWebFactory = vi.fn(

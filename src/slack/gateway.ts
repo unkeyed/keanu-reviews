@@ -407,9 +407,10 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
     }
   };
 
-  // Posting as a user requires channel membership, so on `not_in_channel` the
-  // bot invites them once and retries. Any other error, a dead token included,
-  // propagates so the caller can drop the token and post as the bot.
+  // Posting as a user requires channel membership and an unarchived channel,
+  // so the bot invites them on `not_in_channel` and unarchives on
+  // `is_archived`, with the same two recoveries a bot write gets. Any other
+  // error, a dead token included, propagates so the caller can post as the bot.
   const postAsUser = async (
     channel: string,
     msg: RenderedMessage,
@@ -431,23 +432,30 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
         unfurl_links: false,
         unfurl_media: false,
       });
-    try {
-      return await post();
-    } catch (error) {
-      if (error instanceof SlackApiError && error.code === "not_in_channel") {
-        try {
-          await bot("conversations.invite", { channel, users: opts.poster.userId });
-        } catch (inviteError) {
-          if (
-            !(inviteError instanceof SlackApiError) ||
-            inviteError.code !== "already_in_channel"
-          ) {
-            throw inviteError;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await post();
+      } catch (error) {
+        const code = error instanceof SlackApiError ? error.code : undefined;
+        if (attempt < 2 && code === "not_in_channel") {
+          try {
+            await bot("conversations.invite", { channel, users: opts.poster.userId });
+          } catch (inviteError) {
+            if (
+              !(inviteError instanceof SlackApiError) ||
+              inviteError.code !== "already_in_channel"
+            ) {
+              throw inviteError;
+            }
           }
+          continue;
         }
-        return post();
+        if (attempt < 2 && code === "is_archived") {
+          await bot("conversations.unarchive", { channel });
+          continue;
+        }
+        throw error;
       }
-      throw error;
     }
   };
 
