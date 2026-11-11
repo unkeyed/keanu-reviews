@@ -285,6 +285,40 @@ describe("onReviewComment (U6)", () => {
     expect(slack.messages).toHaveLength(0);
   });
 
+  it("never posts a comment deleted before its create was mirrored (B6)", async () => {
+    await seedChannel();
+    await onReviewComment(deps(), reviewCommentEvent({ ...payload(), action: "deleted" }));
+    await onReviewComment(deps(), reviewCommentEvent(payload()));
+    await onReviewComment(
+      deps(),
+      reviewCommentEvent({ ...payload({ body: "v2" }), action: "edited" }),
+    );
+
+    expect(slack.messages).toHaveLength(0);
+    expect(slack.updates).toHaveLength(0);
+  });
+
+  it("never posts a failed create once the comment is deleted before the retry (B6)", async () => {
+    await seedChannel();
+    const post = slack.post.bind(slack);
+    let fail = true;
+    slack.post = async (channel, message, opts) => {
+      if (fail) {
+        fail = false;
+        throw new Error("transient Slack failure");
+      }
+      return post(channel, message, opts);
+    };
+    await expect(onReviewComment(deps(), reviewCommentEvent(payload()))).rejects.toThrow(
+      "transient Slack failure",
+    );
+
+    await onReviewComment(deps(), reviewCommentEvent({ ...payload(), action: "deleted" }));
+    await onReviewComment(deps(), reviewCommentEvent(payload()));
+
+    expect(slack.messages).toHaveLength(0);
+  });
+
   it("does not create a channel when a comment is deleted for an untracked PR", async () => {
     // No seedChannel: the PR was never tracked.
     await onReviewComment(deps(), reviewCommentEvent({ ...payload(), action: "deleted" }));

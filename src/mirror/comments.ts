@@ -127,7 +127,7 @@ export async function onIssueComment(
   );
 }
 
-/** A deletion never creates a channel: without a stored one, nothing was mirrored. */
+/** A deletion never creates a channel or a PR row; without a row there is no key to tombstone. */
 async function removeStored(
   deps: MirrorDeps,
   repo: string,
@@ -137,6 +137,6 @@ async function removeStored(
   signal: AbortSignal | undefined,
 ): Promise<void> {
   const pr = await findByRepoNumber(deps.db, repo, number);
-  if (!pr?.channelId) return;
+  if (!pr) return;
   await session(deps, locked(pr), (s) => removeMirror(deps, s, key(pr.id), author), signal);
 }

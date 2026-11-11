@@ -34,8 +34,6 @@ export async function claim(
   leaseMs = MESSAGE_LEASE_MS,
 ): Promise<MessageRow | undefined> {
   const natural = naturalKey(key);
-  const leaseExpiredAt = new Date(now.getTime() - leaseMs);
-
   await db
     .insert(messages)
     .values({
@@ -52,21 +50,23 @@ export async function claim(
   const [claimed] = await db
     .update(messages)
     .set({ status: "sending", claimedAt: now })
-    .where(
-      and(
-        eq(messages.naturalKey, natural),
-        or(
-          eq(messages.status, "pending"),
-          and(
-            eq(messages.status, "sending"),
-            or(isNull(messages.claimedAt), lte(messages.claimedAt, leaseExpiredAt)),
-          ),
-        ),
-      ),
-    )
+    .where(claimable(natural, now, leaseMs))
     .returning();
   return claimed as MessageRow | undefined;
 }
+
+/** Pending, or sending under a lease that expired. */
+const claimable = (natural: string, now: Date, leaseMs: number) =>
+  and(
+    eq(messages.naturalKey, natural),
+    or(
+      eq(messages.status, "pending"),
+      and(
+        eq(messages.status, "sending"),
+        or(isNull(messages.claimedAt), lte(messages.claimedAt, new Date(now.getTime() - leaseMs))),
+      ),
+    ),
+  );
 
 const currentClaim = (row: MessageRow) =>
   and(
@@ -135,10 +135,14 @@ export interface Outgoing {
 
 export type Sent = { status: "posted" | "already-sent"; ts: string };
 
-/** A build that can return null may also come back `skipped`. */
-export type Delivered<B extends Outgoing | null = Outgoing | null> = B extends null
-  ? { status: "skipped" }
-  : Sent;
+/**
+ * A build that can return null may also come back `skipped`. A tombstoned
+ * effect was withdrawn before it posted (its comment was deleted) and never
+ * posts.
+ */
+export type Delivered<B extends Outgoing | null = Outgoing | null> =
+  | (B extends null ? { status: "skipped" } : Sent)
+  | { status: "tombstoned" };
 
 export interface DeliverOptions {
   /** A dependent write committed in the same transaction that marks the effect sent. */
@@ -161,10 +165,25 @@ export interface Ledger {
   ): Promise<Delivered<B>>;
   /** The Slack ts of an effect that was sent, else undefined. */
   sentTs(key: EffectKey): Promise<string | undefined>;
+  /**
+   * Withdraw an effect: one already posted returns its ts for the caller to
+   * delete; any other is written `sent` with no ts, so it never posts. An
+   * effect another holder is sending right now asks for a retry.
+   */
+  tombstone(key: EffectKey): Promise<string | undefined>;
 }
 
+/** `sent` with no ts is a tombstone: the effect was withdrawn before it posted. */
 const sentTsOf = (row: MessageRow | undefined) =>
   row?.status === "sent" && row.slackTs ? row.slackTs : undefined;
+const isTombstone = (row: MessageRow | undefined) => row?.status === "sent" && !row.slackTs;
+
+const busy = (key: EffectKey, row: MessageRow | undefined, now: Date) =>
+  new Retry(
+    `Slack effect is already being delivered: ${key.kind}`,
+    { kind: key.kind },
+    leaseWaitMs(row?.claimedAt, MESSAGE_LEASE_MS, now),
+  );
 
 export function createLedger(db: Db, clock: Clock = systemClock): Ledger {
   const deliver = async (
@@ -173,8 +192,10 @@ export function createLedger(db: Db, clock: Clock = systemClock): Ledger {
     build: () => Promise<Outgoing | null>,
     opts: DeliverOptions = {},
   ): Promise<Delivered> => {
-    const already = sentTsOf(await find(db, key));
+    const before = await find(db, key);
+    const already = sentTsOf(before);
     if (already) return { status: "already-sent", ts: already };
+    if (isTombstone(before)) return { status: "tombstoned" };
 
     const out = await build();
     if (!out) return { status: "skipped" };
@@ -184,11 +205,8 @@ export function createLedger(db: Db, clock: Clock = systemClock): Ledger {
       const existing = await find(db, key);
       const ts = sentTsOf(existing);
       if (ts) return { status: "already-sent", ts };
-      throw new Retry(
-        `Slack effect is already being delivered: ${key.kind}`,
-        { kind: key.kind },
-        leaseWaitMs(existing?.claimedAt, MESSAGE_LEASE_MS, clock.now()),
-      );
+      if (isTombstone(existing)) return { status: "tombstoned" };
+      throw busy(key, existing, clock.now());
     }
 
     try {
@@ -212,6 +230,34 @@ export function createLedger(db: Db, clock: Clock = systemClock): Ledger {
     deliver: deliver as Ledger["deliver"],
     async sentTs(key) {
       return sentTsOf(await find(db, key));
+    },
+    async tombstone(key) {
+      const natural = naturalKey(key);
+      const tombstone = { status: "sent" as const, slackTs: null, claimedAt: null };
+      const [inserted] = await db
+        .insert(messages)
+        .values({
+          id: randomUUID(),
+          naturalKey: natural,
+          prId: key.prId,
+          kind: key.kind,
+          githubEventRef: key.ref,
+          clientMsgId: clientMsgId(natural),
+          ...tombstone,
+        })
+        .onConflictDoNothing({ target: messages.naturalKey })
+        .returning({ id: messages.id });
+      if (inserted) return undefined;
+      const now = clock.now();
+      const [withdrawn] = await db
+        .update(messages)
+        .set(tombstone)
+        .where(claimable(natural, now, MESSAGE_LEASE_MS))
+        .returning({ id: messages.id });
+      if (withdrawn) return undefined;
+      const row = await find(db, key);
+      if (row?.status === "sent") return sentTsOf(row);
+      throw busy(key, row, now);
     },
   };
 }

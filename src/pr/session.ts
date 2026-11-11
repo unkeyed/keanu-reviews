@@ -63,6 +63,8 @@ export interface PrSession {
   ): Promise<Delivered<B>>;
   /** The Slack ts of an effect already posted, else undefined. */
   sentTs(key: EffectKey): Promise<string | undefined>;
+  /** Keep an effect from ever posting; returns the ts of one that already posted. */
+  tombstone(key: EffectKey): Promise<string | undefined>;
   /**
    * Invite the Slack users linked to the GitHub logins @-mentioned in `body`,
    * except `excludeLogin`. A lookup or invite failure is logged, not thrown.
@@ -155,6 +157,7 @@ function prSession(
       return ledger.deliver(key, channel, build, opts);
     }) as PrSession["deliver"],
     sentTs: (key) => ledger.sentTs(key),
+    tombstone: (key) => ledger.tombstone(key),
     inviteMentions: async (body, excludeLogin) =>
       inviteMentions(deps, await s.channel(), body, excludeLogin),
   };

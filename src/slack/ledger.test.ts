@@ -141,6 +141,41 @@ describe("deliver", () => {
     expect(await rows()).toHaveLength(0);
   });
 
+  it("posts nothing for a tombstoned effect instead of asking for a retry forever (B6)", async () => {
+    const key = keys.reviewComment(PR, 55);
+    await db.insert(messages).values({
+      id: "tombstone",
+      naturalKey: naturalKey(key),
+      prId: PR,
+      kind: key.kind,
+      githubEventRef: key.ref,
+      clientMsgId: clientMsgId(naturalKey(key)),
+      status: "sent",
+      slackTs: null,
+    });
+    const ledger = createLedger(db);
+
+    await expect(ledger.deliver(key, sink(), root)).resolves.toEqual({ status: "tombstoned" });
+    expect(await ledger.sentTs(key)).toBeUndefined();
+    expect(slack.messages).toHaveLength(0);
+  });
+
+  it("tombstones only what has not posted, and waits out a live claim (B6)", async () => {
+    const ledger = createLedger(db);
+    await ledger.deliver(keys.root(PR), sink(), root);
+    expect(await ledger.tombstone(keys.root(PR))).toBe("ts-1");
+
+    const live = keys.reviewComment(PR, 56);
+    await claim(db, live, new Date());
+    await expect(ledger.tombstone(live)).rejects.toBeInstanceOf(Retry);
+
+    const orphaned = keys.reviewComment(PR, 57);
+    await claim(db, orphaned, new Date(0));
+    expect(await ledger.tombstone(orphaned)).toBeUndefined();
+    await expect(ledger.deliver(orphaned, sink(), root)).resolves.toEqual({ status: "tombstoned" });
+    expect(slack.messages).toHaveLength(1);
+  });
+
   it("runs beforePost after the claim and before the post", async () => {
     const order: string[] = [];
     const post = slack.post.bind(slack);

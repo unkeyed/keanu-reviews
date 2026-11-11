@@ -217,8 +217,9 @@ export async function upsertAuthored(
 
 /**
  * Delete a mirrored item's Slack message, if it was posted, with the token
- * that would post as its author now. Best-effort: a failure (already gone,
- * authorship changed, transient) is logged, not thrown.
+ * that would post as its author now. One not yet posted is tombstoned, so a
+ * retried or late create never posts it. The Slack delete is best-effort: a
+ * failure (already gone, authorship changed, transient) is logged, not thrown.
  */
 export async function removeMirror(
   deps: MirrorDeps,
@@ -226,7 +227,7 @@ export async function removeMirror(
   key: EffectKey,
   actor: GithubActor,
 ): Promise<void> {
-  const ts = await s.sentTs(key);
+  const ts = await s.tombstone(key);
   if (!ts) return;
   const slackUserId = await resolveSlackUser(deps, { githubId: actor.id, login: actor.login });
   const token =

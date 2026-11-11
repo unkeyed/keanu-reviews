@@ -142,6 +142,7 @@ async function execute(
           prChannel(deps, channel()),
           async () => ({ message: { kind: "root", pr: view } }),
         );
+        if (root.status === "tombstoned") throw new Error(`PR root was tombstoned: ${row.id}`);
         await setChannel(db, row.id, channel(), root.ts);
         break;
       }
