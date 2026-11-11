@@ -256,7 +256,7 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
 
     expect(slack.messages.some((message) => message.channel === "C0SHIPPED")).toBe(false);
     expect(postPrComment).not.toHaveBeenCalled();
-    expect(slack.channel("C1")?.name).toBe("merged-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("merged-1423-oz-unkey-api-add-auth");
     expect(slack.channel("C1")?.archived).toBe(true);
     const row = await findByRepoNumber(db, "unkey/api", 1423);
     expect(row?.currentState).toBe("merged");
@@ -296,7 +296,7 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
   it("opened draft creates a draft-* channel, stores mapping + root ts", async () => {
     await convergePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })));
     expect(slack.channels).toHaveLength(1);
-    expect(slack.channels[0]?.name).toBe("draft-oz-unkey-api-1423-add-auth");
+    expect(slack.channels[0]?.name).toBe("draft-1423-oz-unkey-api-add-auth");
     const row = await findByRepoNumber(db, "unkey/api", 1423);
     expect(row?.channelId).toBe("C1");
     expect(row?.rootMessageTs).toBe("ts-1");
@@ -305,14 +305,14 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
 
   it("heals a stuck draft channel when ready_for_review was missed (state follows facts)", async () => {
     await convergePullRequest(deps(), pullRequestEvent(payload("opened", { draft: true })));
-    expect(slack.channel("C1")?.name).toBe("draft-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("draft-1423-oz-unkey-api-add-auth");
     await convergePullRequest(
       deps(),
       pullRequestEvent(
         payload("synchronize", { draft: false, updated_at: "2026-08-11T12:01:00Z" }),
       ),
     );
-    expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("pr-1423-oz-unkey-api-add-auth");
   });
 
   it("keeps a draft channel draft on a synchronize that is still a draft", async () => {
@@ -321,20 +321,20 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
       deps(),
       pullRequestEvent(payload("synchronize", { draft: true, updated_at: "2026-08-11T12:01:00Z" })),
     );
-    expect(slack.channel("C1")?.name).toBe("draft-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("draft-1423-oz-unkey-api-add-auth");
   });
 
   it("does not revive a merged PR from a stray synchronize", async () => {
     await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
     await convergePullRequest(deps(), pullRequestEvent(payload("closed", { merged: true })));
-    expect(slack.channel("C1")?.name).toBe("merged-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("merged-1423-oz-unkey-api-add-auth");
     await convergePullRequest(
       deps(),
       pullRequestEvent(
         payload("synchronize", { draft: false, updated_at: "2026-08-11T13:00:00Z" }),
       ),
     );
-    expect(slack.channel("C1")?.name).toBe("merged-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("merged-1423-oz-unkey-api-add-auth");
     expect(slack.channel("C1")?.archived).toBe(true);
   });
 
@@ -344,26 +344,26 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
       deps(),
       pullRequestEvent(payload("ready_for_review", { draft: false })),
     );
-    expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("pr-1423-oz-unkey-api-add-auth");
     await convergePullRequest(
       deps(),
       pullRequestEvent(payload("converted_to_draft", { draft: true })),
     );
-    expect(slack.channel("C1")?.name).toBe("draft-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("draft-1423-oz-unkey-api-add-auth");
   });
 
   it("closed+merged renames to merged then archives (rename precedes archive)", async () => {
     await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
     await convergePullRequest(deps(), pullRequestEvent(payload("closed", { merged: true })));
     const ch = slack.channel("C1");
-    expect(ch?.name).toBe("merged-oz-unkey-api-1423-add-auth");
+    expect(ch?.name).toBe("merged-1423-oz-unkey-api-add-auth");
     expect(ch?.archived).toBe(true);
   });
 
   it("closed without merge renames to closed then archives", async () => {
     await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
     await convergePullRequest(deps(), pullRequestEvent(payload("closed", { merged: false })));
-    expect(slack.channel("C1")?.name).toBe("closed-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("closed-1423-oz-unkey-api-add-auth");
     expect(slack.channel("C1")?.archived).toBe(true);
   });
 
@@ -372,7 +372,7 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
     await convergePullRequest(deps(), pullRequestEvent(payload("closed", { merged: false })));
     await convergePullRequest(deps(), pullRequestEvent(payload("reopened")));
     expect(slack.channel("C1")?.archived).toBe(false);
-    expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("pr-1423-oz-unkey-api-add-auth");
   });
 
   it("does not write to an archived channel on a later event for a merged PR (no is_archived)", async () => {
@@ -468,7 +468,7 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
   });
 
   it("recovers name_taken by looking up only the exact deterministic channel name", async () => {
-    await slack.createChannel("pr-oz-unkey-api-1423-add-auth");
+    await slack.createChannel("pr-1423-oz-unkey-api-add-auth");
 
     await convergePullRequest(deps(), pullRequestEvent(payload("opened")));
 
@@ -550,7 +550,7 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
     expect(pending?.appliedState).toBe("draft");
     await convergePullRequest(deps(), pullRequestEvent(ready));
 
-    expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("pr-1423-oz-unkey-api-add-auth");
   });
 
   it("retries archive after rename succeeded but archive failed", async () => {
@@ -576,7 +576,7 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
     expect(pending?.appliedState).toBe("pr");
     await convergePullRequest(deps(), pullRequestEvent(closed));
 
-    expect(slack.channel("C1")?.name).toBe("closed-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("closed-1423-oz-unkey-api-add-auth");
     expect(slack.channel("C1")?.archived).toBe(true);
   });
 
@@ -685,7 +685,7 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
     await convergePullRequest(deps(), pullRequestEvent(closed));
 
     expect(slack.channels).toHaveLength(1);
-    expect(slack.channel("C1")?.name).toBe("merged-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("merged-1423-oz-unkey-api-add-auth");
     expect(slack.channel("C1")?.archived).toBe(true);
     expect(operations).toEqual(["rename", "archive"]);
   });
@@ -713,7 +713,7 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
     const row = await findByRepoNumber(db, "unkey/api", 1423);
     expect(row?.currentState).toBe("merged");
     expect(row?.sourceUpdatedAt?.toISOString()).toBe("2026-08-11T12:02:00.000Z");
-    expect(slack.channel("C1")?.name).toBe("merged-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("merged-1423-oz-unkey-api-add-auth");
     expect(slack.channel("C1")?.archived).toBe(true);
   });
 
@@ -787,7 +787,7 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
     await expect(newer).resolves.toMatchObject({ accepted: true });
 
     expect(slack.channels).toHaveLength(1);
-    expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("pr-1423-oz-unkey-api-add-auth");
     expect((await findByRepoNumber(db, "unkey/api", 1423))?.currentState).toBe("pr");
   });
 
@@ -825,10 +825,10 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
     const renamed = await findByRepoNumber(db, "unkey/platform", 1423);
     expect(renamed?.id).toBe(original?.id);
     expect(renamed?.channelId).toBe("C1");
-    expect(renamed?.appliedChannelName).toBe("pr-oz-unkey-platform-1423-add-auth");
+    expect(renamed?.appliedChannelName).toBe("pr-1423-oz-unkey-platform-add-auth");
     expect(await findByRepoNumber(db, "unkey/api", 1423)).toBeUndefined();
     expect(slack.channels).toHaveLength(1);
-    expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-platform-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("pr-1423-oz-unkey-platform-add-auth");
   });
 
   it("keeps a legacy (v1) channel on its author-less scheme across renames (backwards compat)", async () => {
@@ -865,6 +865,44 @@ describe("PR session channel convergence (U4 channel lifecycle)", () => {
     expect(slack.channel("C-LEGACY")?.name).toBe("closed-unkey-api-1423-add-better-auth");
     expect((await findByRepoNumber(db, "unkey/api", 1423))?.channelNameVersion).toBe(1);
   });
+
+  it("keeps a v2 channel on its author-first scheme across renames (backwards compat)", async () => {
+    slack.channels.push({ id: "C-V2", name: "pr-oz-unkey-api-1423-add-auth", archived: false });
+    await db.insert(pullRequests).values({
+      id: prId("unkey/api", 1423),
+      repoFullName: "unkey/api",
+      number: 1423,
+      githubPrId: 999,
+      channelId: "C-V2",
+      currentState: "pr",
+      appliedState: "pr",
+      appliedChannelName: "pr-oz-unkey-api-1423-add-auth",
+      channelNameVersion: 2,
+      rootMessageTs: "ts-v2",
+      sourceUpdatedAt: new Date("2026-08-10T12:00:00Z"),
+    });
+
+    await convergePullRequest(
+      deps(),
+      pullRequestEvent(
+        payload("edited", { title: "Add better auth", updated_at: "2026-08-11T12:00:00Z" }),
+      ),
+    );
+    expect(slack.channel("C-V2")?.name).toBe("pr-oz-unkey-api-1423-add-better-auth");
+
+    await convergePullRequest(
+      deps(),
+      pullRequestEvent(
+        payload("closed", { title: "Add better auth", updated_at: "2026-08-11T13:00:00Z" }),
+      ),
+    );
+    expect(slack.channel("C-V2")).toMatchObject({
+      name: "closed-oz-unkey-api-1423-add-better-auth",
+      archived: true,
+    });
+    expect(slack.channels).toHaveLength(1);
+    expect((await findByRepoNumber(db, "unkey/api", 1423))?.channelNameVersion).toBe(2);
+  });
 });
 
 describe("PR session", () => {
@@ -880,7 +918,7 @@ describe("PR session", () => {
 
     expect(ready).toMatchObject({ channelId: "C1", rootMessageTs: "ts-1", currentState: "pr" });
     expect(ready.sourceArrivalKey).toBeNull();
-    expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("pr-1423-oz-unkey-api-add-auth");
   });
 
   it("flips a ready PR to draft when a review's newer snapshot says draft (B1)", async () => {
@@ -894,7 +932,7 @@ describe("PR session", () => {
     );
 
     expect(ready.currentState).toBe("draft");
-    expect(slack.channel("C1")?.name).toBe("draft-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("draft-1423-oz-unkey-api-add-auth");
     expect(ready.sourceUpdatedAt).toEqual(before?.sourceUpdatedAt);
     expect(ready.sourceArrivalKey).toBe(before?.sourceArrivalKey);
   });
@@ -908,7 +946,7 @@ describe("PR session", () => {
       async (s) => s.ready(),
     );
 
-    expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth-v2");
+    expect(slack.channel("C1")?.name).toBe("pr-1423-oz-unkey-api-add-auth-v2");
   });
 
   it("ignores a review snapshot no newer than the stored source (B1)", async () => {
@@ -924,7 +962,7 @@ describe("PR session", () => {
       await session(deps(), child({ draft: true, title: "Stale", updated_at }), (s) => s.ready());
     }
 
-    expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("pr-1423-oz-unkey-api-add-auth");
     expect((await findByRepoNumber(db, "unkey/api", 1423))?.currentState).toBe("pr");
   });
 
@@ -939,7 +977,7 @@ describe("PR session", () => {
     );
 
     expect(slack.channel("C1")).toMatchObject({
-      name: "merged-oz-unkey-api-1423-add-auth",
+      name: "merged-1423-oz-unkey-api-add-auth",
       archived: true,
     });
     expect((await findByRepoNumber(db, "unkey/api", 1423))?.currentState).toBe("merged");
@@ -950,7 +988,7 @@ describe("PR session", () => {
     await session(deps(), child({ draft: false, updated_at: "2026-08-11T12:10:00Z" }), async (s) =>
       s.ready(),
     );
-    expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("pr-1423-oz-unkey-api-add-auth");
 
     await convergePullRequest(
       deps(),
@@ -959,7 +997,7 @@ describe("PR session", () => {
       ),
     );
 
-    expect(slack.channel("C1")?.name).toBe("draft-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("draft-1423-oz-unkey-api-add-auth");
     expect((await findByRepoNumber(db, "unkey/api", 1423))?.sourceUpdatedAt).toEqual(
       new Date("2026-08-11T12:05:00Z"),
     );
@@ -1038,7 +1076,7 @@ describe("PR session", () => {
       currentState: "draft",
       appliedState: "pr",
     });
-    expect(slack.channel("C1")?.name).toBe("pr-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("pr-1423-oz-unkey-api-add-auth");
 
     slack.rename = rename;
     await convergePullRequest(
@@ -1046,7 +1084,7 @@ describe("PR session", () => {
       pullRequestEvent(payload("synchronize", { draft: true, updated_at: "2026-08-11T14:00:00Z" })),
     );
 
-    expect(slack.channel("C1")?.name).toBe("draft-oz-unkey-api-1423-add-auth");
+    expect(slack.channel("C1")?.name).toBe("draft-1423-oz-unkey-api-add-auth");
     expect(await findByRepoNumber(db, "unkey/api", 1423)).toMatchObject({
       currentState: "draft",
       appliedState: "draft",
