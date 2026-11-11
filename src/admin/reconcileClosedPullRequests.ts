@@ -1,13 +1,6 @@
-import { pathToFileURL } from "node:url";
-import { ConfigError, SECRET_KEYS, loadConfig } from "../config.ts";
-import { createDb } from "../db/client.ts";
-import { createInstallationAuth } from "../github/auth.ts";
-import { octokitMintFn } from "../github/octokitAuth.ts";
-import { createPullRequestSnapshotFetcher } from "../github/pullRequestSnapshot.ts";
-import { createServiceHandlers } from "../handlers/deps.ts";
-import { createLogger, registerSecretValues } from "../logger.ts";
-import { createClosedPullRequestReconciliation } from "../scheduler/reconcileClosedPullRequests.ts";
-import { createWebApiSlackClient } from "../slack/webApiClient.ts";
+import { ConfigError } from "#config";
+import { createClosedPullRequestReconciliation } from "#pr";
+import { type CliIo, type OpenContext, runAsMain } from "./cli.ts";
 
 const USAGE = `Usage: pnpm jobs:reconcile-closed-prs
 
@@ -17,12 +10,10 @@ There is no HTTP trigger.`;
 
 export async function runReconcileClosedPullRequestsCli(
   args: string[],
-  env: NodeJS.ProcessEnv = process.env,
-  io: { stdout: (message: string) => void; stderr: (message: string) => void } = {
-    stdout: (message) => console.log(message),
-    stderr: (message) => console.error(message),
-  },
+  io: CliIo,
+  open: OpenContext,
 ): Promise<number> {
+  // pnpm forwards the conventional option separator to this Node entrypoint.
   const positional = args[0] === "--" ? args.slice(1) : args;
   if (positional.length === 1 && (positional[0] === "--help" || positional[0] === "-h")) {
     io.stdout(USAGE);
@@ -35,29 +26,9 @@ export async function runReconcileClosedPullRequestsCli(
 
   let close: (() => Promise<void>) | undefined;
   try {
-    const config = loadConfig(env);
-    registerSecretValues(
-      SECRET_KEYS.map((key) => config[key]).filter(
-        (value): value is string => typeof value === "string",
-      ),
-    );
-    const logger = createLogger(config.LOG_LEVEL, { service: "keanu-reviews" });
-    const auth = createInstallationAuth(
-      octokitMintFn(config.GITHUB_APP_ID, config.GITHUB_APP_PRIVATE_KEY),
-    );
-    const slack = createWebApiSlackClient(config.SLACK_BOT_TOKEN);
-    // Open the pool last so a failure while building clients cannot strand it.
-    const database = createDb(config.DATABASE_URL);
-    close = database.close;
-    const services = createServiceHandlers({ config, db: database.db, slack, logger, auth });
-    const run = createClosedPullRequestReconciliation({
-      handler: services.handler,
-      fetchSnapshot: createPullRequestSnapshotFetcher(auth, config.GITHUB_INSTALLATION_ID, {
-        logger,
-      }),
-      logger,
-    });
-    const summary = await run();
+    const ctx = open();
+    close = ctx.close;
+    const summary = await createClosedPullRequestReconciliation(ctx.deps, ctx.deps.fetchSnapshot)();
     io.stdout(JSON.stringify(summary));
     return summary.failed > 0 ? 1 : 0;
   } catch (error) {
@@ -72,6 +43,4 @@ export async function runReconcileClosedPullRequestsCli(
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.exitCode = await runReconcileClosedPullRequestsCli(process.argv.slice(2));
-}
+await runAsMain(import.meta.url, runReconcileClosedPullRequestsCli);

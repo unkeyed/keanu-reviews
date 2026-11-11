@@ -4,8 +4,10 @@ import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { afterEach, describe, expect, it } from "vitest";
+import type { PrId } from "#lib";
+import type { LedgerKind } from "../slack/catalog.ts";
+import { claim } from "../slack/ledger.ts";
 import type { Db } from "./client.ts";
-import { claimMessageEffect } from "./repositories/messages.ts";
 import * as schema from "./schema.ts";
 
 const migrationDirectory = fileURLToPath(new URL("./migrations", import.meta.url));
@@ -227,11 +229,11 @@ describe("incremental legacy-schema upgrade", () => {
 
     const db = drizzle(client, { schema }) as unknown as Db;
     await expect(
-      claimMessageEffect(db, {
-        prId: "legacy-canonical",
-        kind: "ci",
-        githubEventRef: "check-1",
-      }),
+      claim(
+        db,
+        { prId: "legacy-canonical" as PrId, kind: "ci" as LedgerKind, ref: "check-1" },
+        new Date(),
+      ),
     ).resolves.toBeUndefined();
 
     await expect(

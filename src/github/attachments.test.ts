@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type AnonymousFetch, commentImages, createGithubAttachmentMirror } from "./attachments.ts";
+import { commentImages } from "../mirror/author.ts";
+import { type AnonymousFetch, createGithubAttachmentMirror } from "./attachments.ts";
 
 const id = "1710cd7e-6589-4445-889a-a5666b859fc5";
 const attachment = `https://github.com/user-attachments/assets/${id}`;
@@ -12,7 +13,6 @@ const served =
   async () =>
     new Response(bytes, { status, headers: { "content-type": contentType } });
 
-// The path the bot handed Slack while GitHub still served the attachment.
 async function mintedPath(url = attachment, mintSecret = secret): Promise<string> {
   const mirror = createGithubAttachmentMirror({
     publicUrl,
@@ -270,13 +270,13 @@ describe("commentImages", () => {
 
   it("shows no images from a bot", async () => {
     const embedImages = vi.fn();
-    expect(await commentImages({ embedImages }, body, { type: "Bot" })).toEqual([]);
+    expect(await commentImages({ embedImages }, body, { isBot: true })).toEqual([]);
     expect(embedImages).not.toHaveBeenCalled();
   });
 
   it("asks the mirror about every image in a human's comment", async () => {
     const mirror = createGithubAttachmentMirror({ publicUrl, secret, fetch: served("image/png") });
-    expect(await commentImages(mirror, body, { type: "User" })).toEqual([
+    expect(await commentImages(mirror, body, { isBot: false })).toEqual([
       {
         kind: "embed",
         imageUrl: `${publicUrl}${await mintedPath()}`,
@@ -292,7 +292,8 @@ describe("commentImages", () => {
     ]);
   });
 
-  it("shows no images when no mirror is wired", async () => {
-    expect(await commentImages({}, body, { type: "User" })).toEqual([]);
+  it("shows no images for a comment that embeds none", async () => {
+    const mirror = createGithubAttachmentMirror({ publicUrl, secret, fetch: served("image/png") });
+    expect(await commentImages(mirror, "plain text, no images", { isBot: false })).toEqual([]);
   });
 });

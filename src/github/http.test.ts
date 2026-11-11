@@ -1,6 +1,7 @@
 import { type Server, createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { Retry } from "#lib";
 import type { InstallationAuth } from "./auth.ts";
 import { githubGetJson, githubPostJson } from "./http.ts";
 
@@ -74,6 +75,44 @@ describe("GitHub HTTP bodies", () => {
       },
     ).catch(() => {});
     expect(posted.cancelled()).toBe(true);
+  });
+});
+
+describe("GitHub rate limits", () => {
+  const limited = (status: number, headers: Record<string, string>) =>
+    vi.fn<typeof fetch>(async () => Response.json({ message: "rate limit" }, { status, headers }));
+
+  it("retries a read at the rate-limit reset when no requests remain", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_700_000_000_000);
+    const fetchFn = limited(403, {
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": "1700000600",
+    });
+
+    const read = githubGetJson(auth, "42", "/users/octocat", { fetch: fetchFn });
+
+    await expect(read).rejects.toBeInstanceOf(Retry);
+    await expect(read).rejects.toMatchObject({ retryAfterMs: 600_000 });
+    vi.useRealTimers();
+  });
+
+  it("retries a read after GitHub's retry-after", async () => {
+    const read = githubGetJson(auth, "42", "/users/octocat", {
+      fetch: limited(429, { "retry-after": "30" }),
+    });
+
+    await expect(read).rejects.toBeInstanceOf(Retry);
+    await expect(read).rejects.toMatchObject({ retryAfterMs: 30_000 });
+  });
+
+  it("keeps a 403 without rate-limit headers a plain API error", async () => {
+    const read = githubGetJson(auth, "42", "/users/octocat", {
+      fetch: limited(403, { "x-ratelimit-remaining": "4000" }),
+    });
+
+    await expect(read).rejects.toMatchObject({ name: "GithubApiError", status: 403 });
+    await expect(read).rejects.not.toBeInstanceOf(Retry);
   });
 });
 

@@ -1,12 +1,10 @@
-import type { Logger } from "../logger.ts";
-import type { SlackClient } from "./client.ts";
+import { type Logger, errMessage } from "#lib";
+import type { SlackGateway } from "./gateway.ts";
 
 export interface MemberCleanupDeps {
-  slack: SlackClient;
+  slack: SlackGateway;
   logger: Logger;
-  /** Decrypted Slack user token for a member, or undefined if none is stored. */
-  getUserToken: (slackUserId: string) => Promise<string | undefined>;
-  /** Drop a token Slack reported dead so it isn't retried on future archives. */
+  getUserTokens: (slackUserIds: readonly string[]) => Promise<Map<string, string>>;
   onInvalidToken: (slackUserId: string) => Promise<void>;
 }
 
@@ -19,14 +17,6 @@ export interface MemberCleanupSummary {
   failed: number;
 }
 
-/**
- * Make every channel member who has authorized us leave the channel using their
- * own token, so the subsequent archive is silent (no Slackbot "archived the
- * channel" ping). Best-effort by design: a member we can't move — no token, a
- * dead token, or a transient error — is simply left in place. They receive the
- * one archive notification, and archiving is never blocked. As more people run
- * `/link-slack`, the archive gets quieter, matching Axolo's model.
- */
 export async function quietlyRemoveMembers(
   deps: MemberCleanupDeps,
   channelId: string,
@@ -42,36 +32,38 @@ export async function quietlyRemoveMembers(
 
   let members: string[];
   try {
-    members = await deps.slack.listChannelMembers(channelId);
+    members = await deps.slack.members(channelId);
   } catch (err) {
-    // If we can't even list members, skip cleanup and let the archive proceed.
     deps.logger.warn("quiet archive: listing members failed; archiving with members present", {
       channelId,
-      err: err instanceof Error ? err.message : String(err),
+      err: errMessage(err),
     });
     return summary;
   }
   summary.members = members.length;
 
+  let tokens: Map<string, string>;
+  try {
+    tokens = await deps.getUserTokens(members);
+  } catch (err) {
+    summary.failed = members.length;
+    deps.logger.warn("quiet archive: reading member tokens failed", {
+      channelId,
+      err: errMessage(err),
+    });
+    deps.logger.info("quiet archive member cleanup", { channelId, ...summary });
+    return summary;
+  }
+
   for (const member of members) {
-    let token: string | undefined;
-    try {
-      token = await deps.getUserToken(member);
-    } catch (err) {
-      summary.failed += 1;
-      deps.logger.warn("quiet archive: reading a member token failed", {
-        channelId,
-        err: err instanceof Error ? err.message : String(err),
-      });
-      continue;
-    }
+    const token = tokens.get(member);
     if (!token) {
       summary.noToken += 1;
       continue;
     }
 
     try {
-      const outcome = await deps.slack.leaveChannelAsUser(channelId, token);
+      const outcome = await deps.slack.leave(channelId, token);
       if (outcome === "left") summary.left += 1;
       else if (outcome === "already_out") summary.alreadyOut += 1;
       else {
@@ -82,7 +74,7 @@ export async function quietlyRemoveMembers(
       summary.failed += 1;
       deps.logger.warn("quiet archive: a member leave failed", {
         channelId,
-        err: err instanceof Error ? err.message : String(err),
+        err: errMessage(err),
       });
     }
   }

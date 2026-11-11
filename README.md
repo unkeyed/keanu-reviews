@@ -67,9 +67,10 @@ default.
 
 ```
 GitHub App webhook  ──►  /webhooks/github  ──►  jobs table  ──►  worker  ──►  Slack Web API
-   (pull_request,        verify signature,      (durable,        (single      (create/rename/
-    review, comment,     authorize install,      at-least-once)   writer,       archive/invite/
-    check_run, …)        dedupe, enqueue)                         retries)      post messages)
+   (pull_request,        verify signature,      (durable,        (one job      (create/rename/
+    review, comment,     authorize install,      at-least-once)   per PR at     archive/invite/
+    check_run, …)        dedupe, enqueue)                         a time,       post messages)
+                                                                  retries)
 ```
 
 - **Ack-fast, process-async.** The webhook route verifies the signature,
@@ -79,6 +80,10 @@ GitHub App webhook  ──►  /webhooks/github  ──►  jobs table  ──�
 - **Idempotent & ordered.** PR state is a function of the latest known facts, not
   event arrival order, and every Slack side effect is keyed so retries and
   redeliveries never double-post.
+- **One writer per PR.** Every write to a PR's channel runs inside one PR session:
+  a per-PR lane in the process and a database lease across replicas. Jobs for
+  different PRs run in parallel (`WORKER_CONCURRENCY`); jobs for one PR run one
+  at a time, in arrival order.
 - **One-way boundary.** The bot reads GitHub and writes Slack. It never mutates
   GitHub except the opt-in merge comment.
 
@@ -114,7 +119,7 @@ For a click-by-click walkthrough of creating the GitHub App and Slack app, see
 
 All configuration comes from environment variables, is **validated at boot**, and
 the process refuses to start if anything required is missing or malformed (see
-[`src/config.ts`](src/config.ts)). Secrets are read from the environment (on a
+[`src/config/env.ts`](src/config/env.ts)). Secrets are read from the environment (on a
 managed host, from its secret store) and are **never written to logs**. See
 [`.env.example`](.env.example) for a copy-paste template.
 
@@ -146,6 +151,7 @@ managed host, from its secret store) and are **never written to logs**. See
 | `GITHUB_COMMENT_ON_MERGE` | `false` | Opt-in: post the Slack channel URL on the merged PR (the only GitHub write). |
 | `THREAD_COMMENTS` | `true` | Thread a review-comment reply under the original comment's Slack message (`false` keeps all comments flat). |
 | `ALLOWED_BOTS` | _(none)_ | Comma-separated bot logins to mirror (e.g. `pullfrog`). |
+| `WORKER_CONCURRENCY` | `4` | Jobs the worker runs at once. Jobs for the same PR always run one at a time. |
 | `REMINDER_HOURS` | `12` | Hours a review can be pending before one reminder fires. |
 | `REMINDER_SUPPRESS_APPROVALS` | `1` | Approvals that stop reminders for that PR (reviewers and the channel). |
 | `REMINDER_SCAN_INTERVAL_MS` | `60000` | How often the reminder scanner runs. |
@@ -334,14 +340,38 @@ Jobs retry with backoff and, after exhausting the budget, land in `failed` with
 their payload retained. Reset one to be reprocessed:
 
 ```bash
-pnpm jobs:replay <failed-job-id>
+pnpm jobs:replay -- <failed-job-id>
 ```
 
-### Self-healing channels
+The command loads the same configuration as the service, so run it where the
+service's environment is set.
 
-Channel writes recover automatically from two Slack states that would otherwise
-poison a PR's jobs: the bot being removed (`not_in_channel` → rejoin) and the
-channel being archived (`is_archived` → unarchive), each retried once.
+### Self-healing
+
+The service repairs these states without an operator:
+
+- **Channel state.** A write that finds the bot removed rejoins (`not_in_channel`),
+  and a write to an archived channel unarchives it (`is_archived`). Posts made
+  with an author's token get the same recovery, and fall back to the bot when
+  Slack refuses the token.
+- **Missing channel.** A review, review comment, or PR conversation comment on a
+  PR with no channel builds the channel first.
+- **Out-of-order comments.** A comment deleted before it was mirrored is never
+  posted. A reply whose parent is still posting waits briefly, then threads
+  under it. An edit or delete that Slack refuses with the author's token retries
+  as the bot.
+- **Review alerts.** A review-request alert that was never posted is posted by
+  the reminder scan instead of a reminder. A reminder that ran out of attempts
+  does not block the next request. A failed Slack profile read falls back to the
+  GitHub login.
+- **Rate limits.** A GitHub rate limit retries the job at GitHub's reset time
+  (at most 15 minutes).
+- **Stuck work.** A job handler that runs past 100 seconds is stopped and retried.
+  A job whose lease another worker took stops writing. Lifecycle locks left by a
+  crash are removed by the daily prune.
+- **Process faults.** An unhandled rejection or uncaught exception is logged,
+  in-flight work drains, and the process exits `1` so its supervisor restarts it.
+  Jobs are durable, so a restart loses nothing.
 
 ## Development
 
@@ -354,7 +384,7 @@ channel being archived (`is_archived` → unarchive), each retried once.
 | `pnpm format` | Biome format (write). |
 | `pnpm db:generate` / `db:migrate` / `db:push` | Drizzle schema tooling. |
 | `pnpm admin:import-identities -- <file>` | Bulk-import GitHub↔Slack identities. |
-| `pnpm jobs:replay <id>` | Reset a failed job for retry. |
+| `pnpm jobs:replay -- <id>` | Reset a failed job for retry. |
 
 Tests run fully offline against an in-memory Postgres (PGlite) and a fake Slack
 client, so no live credentials are needed. `src/integration.test.ts` exercises the
@@ -364,17 +394,26 @@ full webhook → worker → Slack wiring end to end.
 
 ```
 src/
-  config.ts          boot-time config validation
-  index.ts           wiring: routes, worker loop, reminder loop
-  routes/            HTTP: github webhook, slack commands, oauth callbacks, health
-  handlers/          per-event logic (pull request, review, comment, checks)
-  worker/            durable job queue + dispatch
-  scheduler/         reminder scheduling + delivery window
-  slack/             Slack Web API client, block builders, cleanup, oauth
+  lib/               domain-free primitives: errors, clock, logger, token cipher
+  config/            boot-time config validation
+  db/                Drizzle schema, migrations, connection, readiness
+  events/            GitHub webhook payloads parsed into typed domain events
   github/            App auth, OAuth, REST fetchers, webhook verification
-  identity/          GitHub↔Slack identity resolution
-  db/                Drizzle schema, migrations, repositories
+  slack/             Slack Web API gateway, message catalog, delivery ledger
+  identity/          GitHub↔Slack identity, user tokens, linking routes
+  reminders/         per-reviewer reminder state
+  pr/                pull request rows, the per-PR session and its channel writer
+  mirror/            comments and reviews mirrored into the PR channel as their author
+  reviews/           review-request alerts, check runs, the reminder scan
+  queue/             durable job queue and the worker
+  ingest/            GitHub webhook route
+  app/               the service context, HTTP app, background loops, event → handler table
+  admin/             operator CLIs (identity import, job replay, reconcile)
+  index.ts           entry point: config, context, server, loops, shutdown
 ```
+
+Each module is imported through its `#name` barrel, and
+`src/architecture.test.ts` enforces the layer order and table ownership.
 
 ## Deployment
 

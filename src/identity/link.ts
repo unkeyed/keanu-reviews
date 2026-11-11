@@ -1,15 +1,11 @@
-import type { Db } from "../db/client.ts";
-import { upsertIdentity } from "../db/repositories/identities.ts";
-import type { SlackClient } from "../slack/client.ts";
-
-/** Resolve a GitHub login to its immutable numeric id (read-only). */
-export type GithubUserFetcher = (
-  login: string,
-) => Promise<{ id: number; login: string } | undefined>;
+import type { Db } from "#db";
+import type { GithubUserFetcher } from "#github";
+import type { SlackGateway } from "#slack";
+import { upsertIdentity } from "./store.ts";
 
 export interface LinkDeps {
   db: Db;
-  slack: SlackClient;
+  slack: SlackGateway;
   fetchGithubUser: GithubUserFetcher;
 }
 
@@ -24,7 +20,6 @@ export interface ImportResult {
   skipped: { row: ImportRow; reason: string }[];
 }
 
-/** Admin bulk-import of identity mappings (U9). Malformed rows are skipped, not fatal. */
 export async function importIdentities(deps: LinkDeps, rows: ImportRow[]): Promise<ImportResult> {
   const result: ImportResult = { imported: 0, skipped: [] };
   for (const row of rows) {
@@ -39,7 +34,7 @@ export async function importIdentities(deps: LinkDeps, rows: ImportRow[]): Promi
     }
     const slackUserId =
       row.slack_user_id ??
-      (row.slack_email ? await deps.slack.lookupUserByEmail(row.slack_email) : undefined);
+      (row.slack_email ? await deps.slack.lookupByEmail(row.slack_email) : undefined);
     if (!slackUserId) {
       result.skipped.push({ row, reason: "no slack user for email" });
       continue;

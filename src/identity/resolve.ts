@@ -1,23 +1,15 @@
-import type { Db } from "../db/client.ts";
-import { findByGithubId, upsertIdentity } from "../db/repositories/identities.ts";
-import { sanitizeMrkdwn } from "../slack/blocks.ts";
-import type { SlackClient } from "../slack/client.ts";
-
-/** Fetch a GitHub user's public email (read-only; does not cross the one-way boundary). */
-export type GithubEmailFetcher = (login: string) => Promise<string | undefined>;
+import type { Db } from "#db";
+import type { GithubEmailFetcher } from "#github";
+import { type Logger, errMessage } from "#lib";
+import type { SlackGateway, SlackProfile } from "#slack";
+import { findByGithubId, upsertIdentity } from "./store.ts";
 
 export interface IdentityDeps {
   db: Db;
-  slack: SlackClient;
+  slack: SlackGateway;
   fetchGithubEmail?: GithubEmailFetcher;
 }
 
-/**
- * Resolve a GitHub reviewer to a Slack user id (KTD6, R11). Primary source is the
- * identity map (seeded by U9). Fallback: read the reviewer's public email and try
- * `users.lookupByEmail`, caching a hit back into the map. A private/noreply email
- * or an unknown Slack user yields undefined — the caller degrades to a plain login.
- */
 export async function resolveSlackUser(
   deps: IdentityDeps,
   reviewer: { githubId: number; login: string },
@@ -29,10 +21,9 @@ export async function resolveSlackUser(
   const email = await deps.fetchGithubEmail(reviewer.login);
   if (!email) return undefined;
 
-  const slackUserId = await deps.slack.lookupUserByEmail(email);
+  const slackUserId = await deps.slack.lookupByEmail(email);
   if (!slackUserId) return undefined;
 
-  // Cache the match so we never pay the lookup twice.
   await upsertIdentity(deps.db, {
     githubUserId: reviewer.githubId,
     githubLogin: reviewer.login,
@@ -42,17 +33,31 @@ export async function resolveSlackUser(
   return slackUserId;
 }
 
-/**
- * A non-pinging, Slack-safe label for a reviewer/commenter: their Slack display
- * name when linked, else their GitHub login. We deliberately never emit an
- * `<@id>` mention for reviewers — pinging someone for their own review activity
- * (or for a review request they're already invited to the channel for) is noise.
- */
-export async function reviewerDisplayLabel(
-  slack: SlackClient,
+export interface ProfileDeps {
+  slack: Pick<SlackGateway, "profile">;
+  logger: Logger;
+}
+
+export async function profileOrNone(
+  deps: ProfileDeps,
+  slackUserId: string,
+): Promise<SlackProfile | undefined> {
+  try {
+    return await deps.slack.profile(slackUserId);
+  } catch (err) {
+    deps.logger.warn("Slack profile read failed; labelling with the GitHub login", {
+      slackUserId,
+      err: errMessage(err),
+    });
+    return undefined;
+  }
+}
+
+export async function displayName(
+  deps: ProfileDeps,
   slackUserId: string | undefined,
   login: string,
 ): Promise<string> {
-  const name = slackUserId ? await slack.lookupUserName(slackUserId) : undefined;
-  return sanitizeMrkdwn(name ?? login);
+  const name = slackUserId ? (await profileOrNone(deps, slackUserId))?.name : undefined;
+  return name ?? login;
 }

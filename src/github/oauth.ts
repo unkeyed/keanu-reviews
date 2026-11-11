@@ -17,11 +17,8 @@ export interface OAuthStatePayload {
   nonce: string;
 }
 
-interface StateClockDeps {
+export interface CreateOAuthStateInput {
   now?: () => number;
-}
-
-export interface CreateOAuthStateInput extends StateClockDeps {
   secret: string;
   slackUserId: string;
   slackTeamId: string;

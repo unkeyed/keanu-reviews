@@ -1,8 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
-import { type EmbeddedImage, extractEmbeddedImages } from "../slack/blocks.ts";
-import type { MessageImage } from "../slack/client.ts";
-import { isBotActor } from "./actors.ts";
+import type { EmbeddedImage, MessageImage } from "#slack";
 
 // GitHub serves a pasted image at `github.com/user-attachments/assets/<uuid>`,
 // which 302s to an S3 URL signed for 300 s. Older pastes use
@@ -61,8 +59,6 @@ export function createGithubAttachmentMirror(opts: {
   fetch?: AnonymousFetch;
 }): GithubAttachmentMirror {
   const fetchFn: AnonymousFetch = opts.fetch ?? ((url, init) => globalThis.fetch(url, init));
-  // Serving only URLs the bot minted keeps strangers from spending the bot's
-  // anonymous GitHub rate limit, which would break every image it has posted.
   const key = createHmac("sha256", opts.secret).update("github-attachments").digest();
   const sign = (id: AttachmentId) =>
     createHmac("sha256", key).update(id).digest("base64url").slice(0, SIGNATURE_CHARS);
@@ -116,15 +112,6 @@ export function createGithubAttachmentMirror(opts: {
   });
 
   return { embedImages, route };
-}
-
-export async function commentImages(
-  deps: { embedImages?: ImageEmbedder },
-  body: string,
-  author: { type?: string },
-): Promise<MessageImage[]> {
-  if (isBotActor(author)) return [];
-  return deps.embedImages ? deps.embedImages(extractEmbeddedImages(body)) : [];
 }
 
 async function openPublicAttachment(

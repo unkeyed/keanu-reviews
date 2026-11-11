@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../db/client.ts";
-import { findByGithubId } from "../db/repositories/identities.ts";
 import { createTestDb } from "../db/testDb.ts";
-import { FakeSlackClient } from "../testing/fakeSlack.ts";
+import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import { importIdentities } from "./link.ts";
+import { findByGithubId } from "./store.ts";
 
 let db: Db;
-let slack: FakeSlackClient;
+let slack: FakeSlackGateway;
 let close: () => Promise<void>;
 
 const users: Record<string, { id: number; login: string }> = {
@@ -19,7 +19,7 @@ beforeEach(async () => {
   const t = await createTestDb();
   db = t.db;
   close = () => t.client.close();
-  slack = new FakeSlackClient();
+  slack = new FakeSlackGateway();
   slack.emailToUser.set("flo@unkey.com", "U2");
 });
 afterEach(() => close());
@@ -27,10 +27,10 @@ afterEach(() => close());
 describe("importIdentities (U9 admin bulk-import)", () => {
   it("imports valid rows and skips malformed / unknown ones", async () => {
     const result = await importIdentities({ db, slack, fetchGithubUser }, [
-      { github_login: "octocat", slack_user_id: "U1" }, // direct id
-      { github_login: "flo", slack_email: "flo@unkey.com" }, // email -> lookup
-      { github_login: "ghost", slack_user_id: "U9" }, // unknown login -> skip
-      { slack_user_id: "U5" }, // missing github_login -> skip
+      { github_login: "octocat", slack_user_id: "U1" },
+      { github_login: "flo", slack_email: "flo@unkey.com" },
+      { github_login: "ghost", slack_user_id: "U9" },
+      { slack_user_id: "U5" },
     ]);
     expect(result.imported).toBe(2);
     expect(result.skipped).toHaveLength(2);

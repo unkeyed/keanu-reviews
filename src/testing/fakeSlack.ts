@@ -1,68 +1,98 @@
-import type {
-  LeaveChannelOutcome,
-  SlackClient,
-  SlackMessage,
-  SlackMessageUpdate,
-  SlackUserProfile,
-  UninvitableUser,
-} from "../slack/client.ts";
+import type { ClientMsgId } from "#lib";
+import {
+  type LeaveOutcome,
+  type MessageImage,
+  type Poster,
+  type RefusedInvite,
+  type RenderedMessage,
+  SlackApiError,
+  type SlackBlock,
+  type SlackGateway,
+  type SlackProfile,
+} from "#slack";
 
-/** In-memory Slack client for offline tests. Records every call for assertions. */
-export class FakeSlackClient implements SlackClient {
+export interface FakePost {
+  channel: string;
+  ts: string;
+  text: string;
+  blocks?: SlackBlock[];
+  images?: readonly MessageImage[];
+  threadTs?: string;
+  clientMsgId: ClientMsgId;
+  username?: string;
+  iconUrl?: string;
+  authorUserToken?: string;
+  authorUserId?: string;
+}
+
+export interface FakeUpdate {
+  channel: string;
+  ts: string;
+  text: string;
+  blocks?: SlackBlock[];
+  images?: readonly MessageImage[];
+  authorUserToken?: string;
+}
+
+const fail = (method: string, code: string) => new SlackApiError(method, code);
+
+export class FakeSlackGateway implements SlackGateway {
   channels: { id: string; name: string; archived: boolean; topic?: string }[] = [];
-  // Stored posts carry the assigned `ts` so tests can assert threading targets.
-  messages: (SlackMessage & { ts: string })[] = [];
+  messages: FakePost[] = [];
   invites: { channelId: string; userIds: string[] }[] = [];
-  // Every chat.update call, for asserting edit-sync behavior.
-  updates: SlackMessageUpdate[] = [];
-  // Every chat.delete call, for asserting delete-sync behavior.
+  updates: FakeUpdate[] = [];
   deletes: { channel: string; ts: string; authorUserToken?: string }[] = [];
   leftMembers: { channelId: string; userId: string }[] = [];
   emailToUser = new Map<string, string>();
-  userNames = new Map<string, string>();
-  userProfiles = new Map<string, SlackUserProfile>();
-  /** Test-set map of Slack user id -> the (decrypted) token leave calls expect. */
+  profiles = new Map<string, SlackProfile>();
   userTokens = new Map<string, string>();
-  /** Tokens the fake should treat as revoked/invalid. */
   invalidTokens = new Set<string>();
-  /** Slack user id -> the error Slack returns when inviting that user (e.g. a guest). */
   uninvitableUsers = new Map<string, string>();
   private memberships = new Map<string, Set<string>>();
+  private resolved = new Map<string, string>();
   private chanSeq = 0;
   private tsSeq = 0;
   private clientMessageIds = new Map<string, string>();
 
-  async createChannel(name: string): Promise<{ channelId: string }> {
+  async createChannel(name: string): Promise<string> {
     if (this.channels.some((channel) => channel.name === name)) {
-      throw { data: { error: "name_taken" } };
+      throw fail("conversations.create", "name_taken");
     }
     const id = `C${++this.chanSeq}`;
     this.channels.push({ id, name, archived: false });
-    return { channelId: id };
+    return id;
   }
   async findChannelByName(name: string): Promise<string | undefined> {
     return this.channels.find((channel) => channel.name === name)?.id;
   }
-  async renameChannel(channelId: string, name: string): Promise<void> {
-    const ch = this.channels.find((c) => c.id === channelId);
+  async resolveChannel(idOrName: string): Promise<string | undefined> {
+    if (/^[CGD][A-Z0-9]{5,}$/.test(idOrName)) return idOrName;
+    const cached = this.resolved.get(idOrName);
+    if (cached) return cached;
+    const id = await this.findChannelByName(idOrName.replace(/^#/, ""));
+    if (id) this.resolved.set(idOrName, id);
+    return id;
+  }
+  async rename(channelId: string, name: string): Promise<void> {
+    const ch = this.channel(channelId);
     if (ch) ch.name = name;
   }
   async setTopic(channelId: string, topic: string): Promise<void> {
-    const ch = this.channels.find((c) => c.id === channelId);
+    const ch = this.channel(channelId);
     if (ch) ch.topic = topic;
   }
-  async archiveChannel(channelId: string): Promise<void> {
-    const ch = this.channels.find((c) => c.id === channelId);
+  async archive(channelId: string): Promise<void> {
+    const ch = this.channel(channelId);
     if (ch) ch.archived = true;
   }
-  async unarchiveChannel(channelId: string): Promise<void> {
-    const ch = this.channels.find((c) => c.id === channelId);
+  async unarchive(channelId: string): Promise<void> {
+    const ch = this.channel(channelId);
     if (ch) ch.archived = false;
   }
-  async isChannelArchived(channelId: string): Promise<boolean | undefined> {
-    return this.channels.find((c) => c.id === channelId)?.archived;
+  async isArchived(channelId: string): Promise<boolean | undefined> {
+    return this.channel(channelId)?.archived;
   }
-  async inviteUsers(channelId: string, requested: string[]): Promise<UninvitableUser[]> {
+  async invite(channelId: string, requested: readonly string[]): Promise<RefusedInvite[]> {
     const refused = requested.flatMap((userId) => {
       const error = this.uninvitableUsers.get(userId);
       return error ? [{ userId, error }] : [];
@@ -80,10 +110,10 @@ export class FakeSlackClient implements SlackClient {
     this.memberships.set(channelId, members);
     return refused;
   }
-  async listChannelMembers(channelId: string): Promise<string[]> {
+  async members(channelId: string): Promise<string[]> {
     return [...(this.memberships.get(channelId) ?? [])];
   }
-  async leaveChannelAsUser(channelId: string, userToken: string): Promise<LeaveChannelOutcome> {
+  async leave(channelId: string, userToken: string): Promise<LeaveOutcome> {
     if (this.invalidTokens.has(userToken)) return "invalid_token";
     const userId = [...this.userTokens.entries()].find(([, token]) => token === userToken)?.[0];
     const members = this.memberships.get(channelId);
@@ -92,65 +122,75 @@ export class FakeSlackClient implements SlackClient {
     this.leftMembers.push({ channelId, userId });
     return "left";
   }
-  async postMessage(msg: SlackMessage): Promise<{ ts: string }> {
-    if (msg.clientMsgId) {
-      const existing = this.clientMessageIds.get(msg.clientMsgId);
-      if (existing) return { ts: existing };
-    }
-    // Posting AS the user via their token: a revoked token fails (so callers drop
-    // it and fall back to the bot), and a non-member is auto-invited first
-    // (chat.postMessage would otherwise return not_in_channel).
-    if (msg.authorUserToken) {
-      if (this.invalidTokens.has(msg.authorUserToken)) {
-        throw { data: { error: "token_revoked" } };
-      }
-      if (msg.authorUserId) {
-        const members = this.memberships.get(msg.channel) ?? new Set<string>();
-        if (!members.has(msg.authorUserId)) {
-          this.invites.push({ channelId: msg.channel, userIds: [msg.authorUserId] });
-          members.add(msg.authorUserId);
-          this.memberships.set(msg.channel, members);
-        }
+  async post(
+    channel: string,
+    msg: RenderedMessage,
+    opts: { poster: Poster; threadTs?: string; clientMsgId: ClientMsgId },
+  ): Promise<string> {
+    const existing = this.clientMessageIds.get(opts.clientMsgId);
+    if (existing) return existing;
+    const { poster } = opts;
+    if (poster.kind === "user") {
+      if (this.invalidTokens.has(poster.token)) throw fail("chat.postMessage", "token_revoked");
+      const members = this.memberships.get(channel) ?? new Set<string>();
+      if (!members.has(poster.userId)) {
+        this.invites.push({ channelId: channel, userIds: [poster.userId] });
+        members.add(poster.userId);
+        this.memberships.set(channel, members);
       }
     }
-    if (this.channel(msg.channel)?.archived) {
-      throw { data: { error: "is_archived" } };
-    }
+    if (this.channel(channel)?.archived) throw fail("chat.postMessage", "is_archived");
     const ts = `ts-${++this.tsSeq}`;
-    this.messages.push({ ...msg, ts });
-    if (msg.clientMsgId) this.clientMessageIds.set(msg.clientMsgId, ts);
-    return { ts };
+    this.messages.push({
+      channel,
+      ts,
+      text: msg.text,
+      blocks: msg.blocks,
+      images: msg.images,
+      threadTs: opts.threadTs,
+      clientMsgId: opts.clientMsgId,
+      username: poster.kind === "bot-as" ? poster.username : undefined,
+      iconUrl: poster.kind === "bot-as" ? poster.iconUrl : undefined,
+      authorUserToken: poster.kind === "user" ? poster.token : undefined,
+      authorUserId: poster.kind === "user" ? poster.userId : undefined,
+    });
+    this.clientMessageIds.set(opts.clientMsgId, ts);
+    return ts;
   }
-  async updateMessage(update: SlackMessageUpdate): Promise<void> {
-    if (update.authorUserToken && this.invalidTokens.has(update.authorUserToken)) {
-      throw { data: { error: "token_revoked" } };
-    }
-    const msg = this.messages.find((m) => m.ts === update.ts && m.channel === update.channel);
-    if (!msg) throw { data: { error: "message_not_found" } };
-    this.updates.push(update);
-    msg.text = update.text;
-    msg.blocks = update.blocks;
-  }
-  async deleteMessage(channel: string, ts: string, authorUserToken?: string): Promise<void> {
+  async update(
+    channel: string,
+    ts: string,
+    msg: RenderedMessage,
+    authorUserToken?: string,
+  ): Promise<void> {
     if (authorUserToken && this.invalidTokens.has(authorUserToken)) {
-      throw { data: { error: "token_revoked" } };
+      throw fail("chat.update", "token_revoked");
+    }
+    const posted = this.messages.find((m) => m.ts === ts && m.channel === channel);
+    if (!posted) throw fail("chat.update", "message_not_found");
+    if (posted.authorUserToken !== authorUserToken)
+      throw fail("chat.update", "cant_update_message");
+    this.updates.push({ channel, ts, ...msg, authorUserToken });
+    posted.text = msg.text;
+    posted.blocks = msg.blocks;
+  }
+  async remove(channel: string, ts: string, authorUserToken?: string): Promise<void> {
+    if (authorUserToken && this.invalidTokens.has(authorUserToken)) {
+      throw fail("chat.delete", "token_revoked");
     }
     const idx = this.messages.findIndex((m) => m.ts === ts && m.channel === channel);
-    if (idx === -1) throw { data: { error: "message_not_found" } };
+    if (idx === -1) throw fail("chat.delete", "message_not_found");
+    if (this.messages[idx]?.authorUserToken !== authorUserToken) {
+      throw fail("chat.delete", "cant_delete_message");
+    }
     this.deletes.push({ channel, ts, authorUserToken });
     this.messages.splice(idx, 1);
   }
-  async lookupUserByEmail(email: string): Promise<string | undefined> {
+  async lookupByEmail(email: string): Promise<string | undefined> {
     return this.emailToUser.get(email);
   }
-  async lookupUserName(userId: string): Promise<string | undefined> {
-    return this.userNames.get(userId);
-  }
-  async lookupUserProfile(userId: string): Promise<SlackUserProfile | undefined> {
-    const explicit = this.userProfiles.get(userId);
-    if (explicit) return explicit;
-    const name = this.userNames.get(userId);
-    return name ? { name } : undefined;
+  async profile(userId: string): Promise<SlackProfile | undefined> {
+    return this.profiles.get(userId);
   }
 
   channel(id: string) {

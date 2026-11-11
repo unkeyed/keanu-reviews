@@ -1,5 +1,12 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { LinkDeps } from "../identity/link.ts";
+import { ConfigError } from "#config";
+import { createTestDb } from "../db/testDb.ts";
+import { findByGithubId } from "../identity/store.ts";
+import { testContext } from "../testing/context.ts";
+import { FakeSlackGateway } from "../testing/fakeSlack.ts";
 import {
   IdentityImportInputError,
   parseIdentityImport,
@@ -45,70 +52,86 @@ describe("identity import input", () => {
 });
 
 describe("identity import CLI", () => {
-  it("returns a nonzero status for an invalid invocation before loading configuration", async () => {
-    const stdout = vi.fn();
-    const stderr = vi.fn();
+  const io = () => ({ stdout: vi.fn(), stderr: vi.fn() });
+  const unopened = () => {
+    throw new Error("the command opened the service context");
+  };
 
-    await expect(runIdentityImportCli([], {}, { stdout, stderr })).resolves.toBe(2);
+  it("returns a nonzero status for an invalid invocation before loading configuration", async () => {
+    const { stdout, stderr } = io();
+
+    await expect(runIdentityImportCli([], { stdout, stderr }, unopened)).resolves.toBe(2);
     expect(stderr).toHaveBeenCalledWith(expect.stringContaining("Usage:"));
     expect(stdout).not.toHaveBeenCalled();
   });
 
   it("accepts pnpm's forwarded option separator", async () => {
-    const stdout = vi.fn();
-    const stderr = vi.fn();
+    const { stdout, stderr } = io();
 
-    await expect(runIdentityImportCli(["--", "--help"], {}, { stdout, stderr })).resolves.toBe(0);
+    await expect(
+      runIdentityImportCli(["--", "--help"], { stdout, stderr }, unopened),
+    ).resolves.toBe(0);
     expect(stdout).toHaveBeenCalledWith(expect.stringContaining("Usage:"));
     expect(stderr).not.toHaveBeenCalled();
   });
 
-  it("reports aggregate results and closes the production database dependency", async () => {
-    const stdout = vi.fn();
-    const stderr = vi.fn();
-    const close = vi.fn(async () => {});
-    const env = {
-      GITHUB_APP_ID: "1",
-      GITHUB_APP_PRIVATE_KEY: "not-used-by-test",
-      GITHUB_WEBHOOK_SECRET: "webhook-secret",
-      GITHUB_OAUTH_CLIENT_ID: "client-id",
-      GITHUB_OAUTH_CLIENT_SECRET: "client-secret",
-      OAUTH_STATE_SECRET: "a-secure-state-secret-of-32-characters",
-      PUBLIC_URL: "http://localhost:3000",
-      GITHUB_INSTALLATION_ID: "42",
-      SLACK_BOT_TOKEN: "xoxb-test",
-      SLACK_SIGNING_SECRET: "slack-secret",
-      SLACK_TEAM_ID: "T123",
-      DATABASE_URL: "postgres://user:pass@localhost/database",
-    };
+  it("reports aggregate results and closes the service context", async () => {
+    const { stdout, stderr } = io();
+    const testDb = await createTestDb();
+    const dir = await mkdtemp(join(tmpdir(), "identity-import-"));
+    try {
+      const file = join(dir, "identities.json");
+      await writeFile(
+        file,
+        JSON.stringify([
+          { github_login: "octocat", slack_user_id: "U123" },
+          { github_login: "ghost", slack_user_id: "U999" },
+        ]),
+      );
+      const ctx = testContext(testDb.db, new FakeSlackGateway(), {
+        fetchGithubUser: async (login) => (login === "octocat" ? { id: 1, login } : undefined),
+      });
 
-    await expect(
-      runIdentityImportCli(
-        ["identities.json"],
-        env,
-        { stdout, stderr },
-        {
-          loadRows: async () => [{ github_login: "octocat", slack_user_id: "U123" }],
-          createRuntime: () => ({ deps: {} as LinkDeps, close }),
-          importRows: async () => ({
-            imported: 1,
-            skipped: [
-              {
-                row: { github_login: "ghost", slack_user_id: "U999" },
-                reason: "unknown github login",
-              },
-            ],
-          }),
-        },
-      ),
-    ).resolves.toBe(0);
+      await expect(runIdentityImportCli(["--", file], { stdout, stderr }, () => ctx)).resolves.toBe(
+        0,
+      );
 
-    expect(JSON.parse(stdout.mock.calls[0]?.[0] as string)).toEqual({
-      imported: 1,
-      skipped: 1,
-      skippedByReason: { "unknown github login": 1 },
-    });
-    expect(stderr).not.toHaveBeenCalled();
-    expect(close).toHaveBeenCalledOnce();
+      expect(JSON.parse(stdout.mock.calls[0]?.[0] as string)).toEqual({
+        imported: 1,
+        skipped: 1,
+        skippedByReason: { "unknown github login": 1 },
+      });
+      expect(stderr).not.toHaveBeenCalled();
+      expect(ctx.closed()).toBe(true);
+      expect((await findByGithubId(testDb.db, 1))?.slackUserId).toBe("U123");
+    } finally {
+      await rm(dir, { recursive: true });
+      await testDb.client.close();
+    }
+  });
+
+  it("reads the rows before the configuration, and reports a configuration error", async () => {
+    const { stdout, stderr } = io();
+    const dir = await mkdtemp(join(tmpdir(), "identity-import-"));
+    try {
+      const file = join(dir, "identities.csv");
+      await writeFile(file, "github_login,slack_user_id\noctocat,U123\n");
+
+      await expect(
+        runIdentityImportCli([file], { stdout, stderr }, () => {
+          throw new ConfigError(["DATABASE_URL: Required"]);
+        }),
+      ).resolves.toBe(1);
+      expect(stderr).toHaveBeenCalledWith(
+        expect.stringMatching(/^Identity import failed: [\s\S]*DATABASE_URL/),
+      );
+
+      await expect(
+        runIdentityImportCli([join(dir, "missing.csv")], { stdout, stderr }, unopened),
+      ).resolves.toBe(1);
+      expect(stdout).not.toHaveBeenCalled();
+    } finally {
+      await rm(dir, { recursive: true });
+    }
   });
 });

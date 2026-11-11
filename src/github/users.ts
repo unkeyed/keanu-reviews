@@ -1,13 +1,11 @@
+import { ttlCache } from "#lib";
+import type { InstallationAuth } from "./auth.ts";
 import {
   type CiCheckRun,
   type CiReadiness,
   type PrForShaFetcher,
   classifyCiReadiness,
-} from "../ci/status.ts";
-import type { PullRequestFetcher } from "../handlers/mergeability.ts";
-import type { GithubUserFetcher } from "../identity/link.ts";
-import type { GithubEmailFetcher } from "../identity/resolve.ts";
-import type { InstallationAuth } from "./auth.ts";
+} from "./ci.ts";
 import {
   GithubApiError,
   type GithubRequestOptions,
@@ -15,9 +13,26 @@ import {
   githubGetJson,
 } from "./http.ts";
 
-export { GithubApiError } from "./http.ts";
+export type GithubEmailFetcher = (login: string) => Promise<string | undefined>;
 
-/** Most pages (of 100) read from one paged GitHub list. */
+export type GithubUserFetcher = (
+  login: string,
+) => Promise<{ id: number; login: string } | undefined>;
+
+export interface PullRequestMergeability {
+  mergeableState: string;
+  draft: boolean;
+  requestedReviewers?: { id: number; login: string }[];
+}
+
+export type PullRequestFetcher = (
+  repoFullName: string,
+  number: number,
+) => Promise<PullRequestMergeability | undefined>;
+
+const EMAIL_CACHE_MS = 5 * 60_000;
+const EMAIL_CACHE_ENTRIES = 5_000;
+
 const PAGE_LIMIT = 10;
 
 type GithubUserResponse = { id?: unknown; login?: unknown };
@@ -30,27 +45,26 @@ function invalidResponse(path: string): GithubApiError {
   });
 }
 
-/**
- * Production GitHub email fetcher (U5). Reads a user's public profile via
- * `GET /users/{login}`. This is a read — it never writes to GitHub, so it stays
- * within the one-way boundary (R10). Returns undefined when the email is private.
- */
 export function createGithubEmailFetcher(
   auth: InstallationAuth,
   installationId: string,
   options: GithubRequestOptions = {},
 ): GithubEmailFetcher {
-  return async (login: string): Promise<string | undefined> => {
-    const path = `/users/${encodeURIComponent(login)}`;
-    const body = await githubGetJson<GithubEmailResponse>(auth, installationId, path, options);
-    if (body === undefined) return undefined;
-    if (body.email === null) return undefined;
-    if (typeof body.email !== "string") throw invalidResponse(path);
-    return body.email;
-  };
+  const emails = ttlCache<string, string | undefined>({
+    ttlMs: EMAIL_CACHE_MS,
+    maxEntries: EMAIL_CACHE_ENTRIES,
+  });
+  return (login) =>
+    emails.get(login.toLowerCase(), async () => {
+      const path = `/users/${encodeURIComponent(login)}`;
+      const body = await githubGetJson<GithubEmailResponse>(auth, installationId, path, options);
+      if (body === undefined) return undefined;
+      if (body.email === null) return undefined;
+      if (typeof body.email !== "string") throw invalidResponse(path);
+      return body.email;
+    });
 }
 
-/** Production GitHub user fetcher (U9): resolve a login to its immutable id. */
 export function createGithubUserFetcher(
   auth: InstallationAuth,
   installationId: string,
@@ -67,7 +81,6 @@ export function createGithubUserFetcher(
   };
 }
 
-/** Read a PR's mergeability via `GET /repos/{owner}/{repo}/pulls/{number}` (read-only). */
 export function createPullRequestFetcher(
   auth: InstallationAuth,
   installationId: string,
@@ -76,14 +89,12 @@ export function createPullRequestFetcher(
   return async (repoFullName: string, number: number) => {
     const path = `/repos/${encodedRepoPath(repoFullName)}/pulls/${number}`;
     const body = await githubGetJson<{
-      mergeable?: unknown;
       mergeable_state?: unknown;
       draft?: unknown;
       requested_reviewers?: unknown;
     }>(auth, installationId, path, options);
     if (body === undefined) return undefined;
     return {
-      mergeable: typeof body.mergeable === "boolean" ? body.mergeable : null,
       mergeableState: typeof body.mergeable_state === "string" ? body.mergeable_state : "unknown",
       draft: body.draft === true,
       requestedReviewers: requestedReviewersFrom(body.requested_reviewers),
@@ -91,7 +102,6 @@ export function createPullRequestFetcher(
   };
 }
 
-/** Count of a PR's current distinct approvals, from the reviews list. */
 export type ReviewApprovalFetcher = (
   repoFullName: string,
   number: number,
@@ -113,7 +123,6 @@ export function createReviewApprovalFetcher(
     const latestByUser = new Map<number, string>();
     for (let page = 1; ; page++) {
       if (page > PAGE_LIMIT) {
-        // A partial history can miss a later dismissal, so don't report a count.
         throw new GithubApiError(`GitHub reviews list exceeded ${PAGE_LIMIT} pages`, {
           kind: "invalid_response",
           url: `https://api.github.com${reviews}`,
@@ -128,10 +137,10 @@ export function createReviewApprovalFetcher(
         const userId = (review as { user?: { id?: unknown } }).user?.id;
         const state = (review as { state?: unknown }).state;
         if (!Number.isInteger(userId) || typeof state !== "string") continue;
-        if (state === "COMMENTED" || state === "PENDING") continue; // not a decision
+        if (state === "COMMENTED" || state === "PENDING") continue;
         latestByUser.set(userId as number, state);
       }
-      if (body.length < 100) break; // last page
+      if (body.length < 100) break;
     }
     let approvals = 0;
     for (const state of latestByUser.values()) if (state === "APPROVED") approvals += 1;
@@ -152,7 +161,6 @@ function requestedReviewersFrom(value: unknown): { id: number; login: string }[]
   return reviewers;
 }
 
-/** Read whether the commit's check runs are passing, failing, still running, or absent. */
 export type CiReadinessFetcher = (repoFullName: string, sha: string) => Promise<CiReadiness>;
 
 interface CheckRunList {
@@ -160,10 +168,6 @@ interface CheckRunList {
   check_runs?: unknown;
 }
 
-/**
- * Page check runs. Stops after {@link PAGE_LIMIT} pages and the caller treats a
- * truncated list as still pending so a missing later failure cannot look green.
- */
 async function listCheckRuns(
   load: (page: number) => Promise<{ total: number; items: CiCheckRun[] }>,
 ): Promise<{ items: CiCheckRun[]; truncated: boolean }> {
@@ -186,20 +190,15 @@ function stringField(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
-/**
- * Production CI aggregate (read-only). Uses only the check-runs API, which the
- * existing Checks: Read permission already allows. Legacy commit statuses are
- * not consulted.
- */
 export function createCiReadinessFetcher(
   auth: InstallationAuth,
   installationId: string,
   options: GithubRequestOptions = {},
 ): CiReadinessFetcher {
   return async (repoFullName: string, sha: string): Promise<CiReadiness> => {
-    const root = `/repos/${encodedRepoPath(repoFullName)}/commits/${encodeURIComponent(sha)}`;
+    const checkRuns = `/repos/${encodedRepoPath(repoFullName)}/commits/${encodeURIComponent(sha)}/check-runs`;
     const runs = await listCheckRuns(async (page) => {
-      const path = `${root}/check-runs?per_page=100&page=${page}`;
+      const path = `${checkRuns}?per_page=100&page=${page}`;
       const body = await githubGetJson<CheckRunList>(auth, installationId, path, options);
       if (body === undefined || !Array.isArray(body.check_runs)) throw invalidResponse(path);
       return {
@@ -228,7 +227,6 @@ export function createCiReadinessFetcher(
   };
 }
 
-/** Production fallback PR resolver (U7): the PR a commit heads, via the Checks-safe read API. */
 export function createPrForShaFetcher(
   auth: InstallationAuth,
   installationId: string,

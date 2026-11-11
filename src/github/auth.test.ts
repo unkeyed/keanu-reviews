@@ -22,10 +22,24 @@ describe("createInstallationAuth", () => {
     const mint = vi.fn(async () => ({ token: `tok-${t}`, expiresAt: new Date(t + 6 * 60_000) }));
     const auth = createInstallationAuth(mint, now);
     const first = await auth.getToken("42");
-    t += 2 * 60_000; // now within the 5-min refresh skew of the 6-min token
+    t += 2 * 60_000;
     const second = await auth.getToken("42");
     expect(second).not.toBe(first);
     expect(mint).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares one mint among concurrent requests for the same installation", async () => {
+    const now = () => 1_000_000;
+    const pending: ((token: { token: string; expiresAt: Date }) => void)[] = [];
+    const mint = vi.fn<MintFn>(() => new Promise((resolve) => pending.push(resolve)));
+    const auth = createInstallationAuth(mint, now);
+
+    const tokens = Promise.all([auth.getToken("42"), auth.getToken("42"), auth.getToken("42")]);
+    for (const release of pending)
+      release({ token: "tok", expiresAt: new Date(now() + 60 * 60_000) });
+
+    expect(await tokens).toEqual(["tok", "tok", "tok"]);
+    expect(mint).toHaveBeenCalledTimes(1);
   });
 
   it("forces a re-mint after a reported 401 invalidates the token", async () => {

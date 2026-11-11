@@ -1,6 +1,20 @@
+import { RateLimited } from "#lib";
 import type { InstallationAuth } from "./auth.ts";
 
 const GITHUB_API_BASE = "https://api.github.com";
+
+export const GITHUB_ROUTES = [
+  "GET /repos/{owner}/{repo}/pulls/{number}",
+  "GET /repos/{owner}/{repo}/pulls/{number}/reviews",
+  "GET /repos/{owner}/{repo}/commits/{sha}/check-runs",
+  "GET /repos/{owner}/{repo}/commits/{sha}/pulls",
+  "GET /users/{login}",
+  "POST /repos/{owner}/{repo}/issues/{number}/comments",
+  "POST /app/installations/{installation_id}/access_tokens",
+  "GET /user",
+  "GET https://github.com/login/oauth/authorize",
+  "POST https://github.com/login/oauth/access_token",
+] as const;
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 export type GithubApiErrorKind = "http" | "timeout" | "network" | "invalid_response";
@@ -22,7 +36,43 @@ export class GithubApiError extends Error {
   }
 }
 
-/** `owner/repo` as a URL path, each segment encoded and the separator kept. */
+export function headerNumber(headers: Headers, name: string): number | undefined {
+  const raw = headers.get(name)?.trim();
+  if (!raw) return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * A 403 or 429 that is a GitHub rate limit, as a retry at the time GitHub
+ * names: `retry-after` for a secondary limit, or `x-ratelimit-reset` once
+ * `x-ratelimit-remaining` hits 0. Pass the body when it was read, since a
+ * secondary limit can say so only there.
+ */
+export function rateLimitOf(
+  response: Response,
+  url: string,
+  body?: string,
+): RateLimited | undefined {
+  const { status, headers } = response;
+  if (status !== 403 && status !== 429) return undefined;
+  const retryAfterSec = headerNumber(headers, "retry-after");
+  const remaining = headerNumber(headers, "x-ratelimit-remaining");
+  const resetSec = headerNumber(headers, "x-ratelimit-reset");
+  const limited =
+    retryAfterSec !== undefined ||
+    remaining === 0 ||
+    (body !== undefined && /rate limit/i.test(body));
+  if (!limited) return undefined;
+  const retryAfterMs =
+    retryAfterSec !== undefined
+      ? Math.ceil(retryAfterSec * 1000)
+      : remaining === 0 && resetSec !== undefined
+        ? Math.max(0, Math.ceil(resetSec * 1000 - Date.now()))
+        : undefined;
+  return new RateLimited(`GitHub rate limit exceeded (HTTP ${status})`, { url }, retryAfterMs);
+}
+
 export function encodedRepoPath(repoFullName: string): string {
   return repoFullName.split("/").map(encodeURIComponent).join("/");
 }
@@ -34,15 +84,9 @@ export interface GithubRequestOptions {
 
 export interface GithubRequestOptionsWithBody extends GithubRequestOptions {
   method?: "GET" | "POST";
-  /** JSON body for POST. Omit for GET. */
   jsonBody?: unknown;
 }
 
-/**
- * Authenticated GitHub request with one 401 retry. Returns the final response,
- * including non-2xx statuses, so callers can read rate-limit headers themselves.
- * Network failures and timeouts throw {@link GithubApiError}.
- */
 export async function githubRequest(
   auth: InstallationAuth,
   installationId: string,
@@ -91,10 +135,6 @@ export async function githubRequest(
   return response;
 }
 
-/**
- * Perform an authenticated GitHub JSON GET with bounded latency and consistent
- * error semantics. A 404 is the only HTTP response represented as absence.
- */
 export async function githubGetJson<T>(
   auth: InstallationAuth,
   installationId: string,
@@ -107,6 +147,11 @@ export async function githubGetJson<T>(
   if (response.status === 404) {
     await response.body?.cancel();
     return undefined;
+  }
+  const rateLimit = rateLimitOf(response, url);
+  if (rateLimit) {
+    await response.body?.cancel();
+    throw rateLimit;
   }
   if (!response.ok) {
     await response.body?.cancel();
@@ -138,12 +183,6 @@ export async function githubGetJson<T>(
   }
 }
 
-/**
- * Perform an authenticated GitHub JSON POST. This is the ONLY write path in the
- * service and is used exclusively behind the opt-in merge-comment feature; the
- * one-way boundary otherwise holds. A 403 typically means the GitHub App lacks
- * the write permission (grant it and reinstall).
- */
 export async function githubPostJson(
   auth: InstallationAuth,
   installationId: string,
@@ -159,6 +198,8 @@ export async function githubPostJson(
   });
   await response.body?.cancel();
 
+  const rateLimit = rateLimitOf(response, url);
+  if (rateLimit) throw rateLimit;
   if (!response.ok) {
     const hint =
       response.status === 403
