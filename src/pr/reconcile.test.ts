@@ -258,6 +258,50 @@ describe("closed pull request reconciliation", () => {
     );
   });
 
+  it("leaves a channel open when its PR reopens after the sweep listed it (F2)", async () => {
+    const deps = handler();
+    await openPr(1, 101, deps);
+    await convergePullRequest(deps, pullRequestEvent(merge(1, 101)));
+    await openPr(2, 102, deps);
+    await convergePullRequest(deps, pullRequestEvent(merge(2, 102)));
+    let listed = () => {};
+    const reopened = new Promise<void>((resolve) => {
+      listed = resolve;
+    }).then(() =>
+      convergePullRequest(
+        deps,
+        pullRequestEvent({
+          ...opened(1, 101),
+          action: "reopened",
+          pull_request: {
+            ...opened(1, 101).pull_request,
+            updated_at: new Date(Date.now() + 60_000).toISOString(),
+          },
+        }),
+      ),
+    );
+    const isArchived = slack.isArchived.bind(slack);
+    slack.isArchived = async (channelId) => {
+      if (channelId === "C2") {
+        listed();
+        await reopened;
+      }
+      return isArchived(channelId);
+    };
+
+    const result = await createClosedPullRequestReconciliation(deps, noSnapshots)();
+
+    expect(result).toMatchObject({ reArchived: 0, failed: 0 });
+    expect(slack.channel("C1")).toMatchObject({
+      archived: false,
+      name: expect.stringMatching(/^pr-/),
+    });
+    expect(await findByRepoNumber(db, "unkey/api", 1)).toMatchObject({
+      currentState: "pr",
+      appliedState: "pr",
+    });
+  });
+
   it("leaves a drifted channel to the next run while another replica holds the PR", async () => {
     const deps = handler();
     await openPr(1, 101, deps);

@@ -196,7 +196,9 @@ async function reArchiveDriftedChannels(
     if (!channelId) continue;
     const fields = { repoFullName: row.repoFullName, number: row.number, channelId };
     try {
-      await session(deps, { kind: "existing", githubPrId: row.githubPrId }, async () => {
+      await session(deps, { kind: "existing", githubPrId: row.githubPrId }, async (s) => {
+        const fresh = await s.channelPr();
+        if (!isTerminal(fresh.currentState) || fresh.channelId !== channelId) return;
         const archived = await slack.isArchived(channelId);
         if (archived !== false) return;
         if (deps.quietArchive) await deps.quietArchive(channelId);
