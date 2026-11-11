@@ -198,6 +198,16 @@ async function callApi(web: SlackWebApi, method: string, args: Record<string, un
   }
 }
 
+/** `fn`'s result, or undefined when Slack answers with `code`. */
+async function tolerating<T>(code: string, fn: () => Promise<T>): Promise<T | undefined> {
+  try {
+    return await fn();
+  } catch (error) {
+    if (error instanceof SlackApiError && error.code === code) return undefined;
+    throw error;
+  }
+}
+
 function requireNonEmptyString(value: unknown, method: string, description: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new SlackApiError(method, "invalid_response", {
@@ -384,36 +394,25 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
       "chat.postMessage timestamp",
     );
 
+  type PostArgs = Record<string, unknown> & { channel: string };
+
   const postAsBot = async (
-    channel: string,
-    msg: RenderedMessage,
-    blocks: SlackBlock[] | undefined,
-    opts: {
-      poster: Extract<Poster, { kind: "bot" | "bot-as" }>;
-      threadTs?: string;
-      clientMsgId: ClientMsgId;
-    },
+    poster: Extract<Poster, { kind: "bot" | "bot-as" }>,
+    args: PostArgs,
   ): Promise<unknown> => {
-    const username = opts.poster.kind === "bot-as" ? opts.poster.username : undefined;
-    const iconUrl = opts.poster.kind === "bot-as" ? opts.poster.iconUrl : undefined;
+    const username = poster.kind === "bot-as" ? poster.username : undefined;
+    const iconUrl = poster.kind === "bot-as" ? poster.iconUrl : undefined;
     const customize = Boolean(username || iconUrl);
     const post = (withAuthor: boolean) =>
-      withWritableChannel(channel, () =>
+      withWritableChannel(args.channel, () =>
         bot("chat.postMessage", {
-          channel,
-          text: msg.text,
-          blocks,
-          thread_ts: opts.threadTs,
-          client_msg_id: opts.clientMsgId,
+          ...args,
           username: withAuthor ? username : undefined,
           icon_url: withAuthor ? iconUrl : undefined,
-          // The block already links out; a preview card is noise.
-          unfurl_links: false,
-          unfurl_media: false,
         }),
       );
     try {
-      return (await post(customize)) as { ts?: unknown };
+      return await post(customize);
     } catch (error) {
       if (customize && error instanceof SlackApiError && error.code === "missing_scope") {
         return post(false);
@@ -426,35 +425,17 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
   // so the bot invites them on `not_in_channel` and unarchives on
   // `is_archived`, with the same two recoveries a bot write gets. Any other
   // error, a dead token included, propagates so the caller can post as the bot.
-  const postAsUser = async (
-    channel: string,
-    msg: RenderedMessage,
-    blocks: SlackBlock[] | undefined,
-    opts: {
-      poster: Extract<Poster, { kind: "user" }>;
-      threadTs?: string;
-      clientMsgId: ClientMsgId;
-    },
-  ): Promise<unknown> => {
-    const post = () =>
-      asUser(opts.poster.token, "chat.postMessage", {
-        channel,
-        text: msg.text,
-        blocks,
-        thread_ts: opts.threadTs,
-        client_msg_id: opts.clientMsgId,
-        // User-token posts unfurl by default; match the bot posts.
-        unfurl_links: false,
-        unfurl_media: false,
-      });
-    const inviteUser = async () => {
-      try {
-        await bot("conversations.invite", { channel, users: opts.poster.userId });
-      } catch (error) {
-        if (!(error instanceof SlackApiError) || error.code !== "already_in_channel") throw error;
-      }
-    };
-    return withWritableChannel(channel, post, inviteUser);
+  const postAsUser = (poster: Extract<Poster, { kind: "user" }>, args: PostArgs) => {
+    const { channel } = args;
+    const inviteUser = () =>
+      tolerating("already_in_channel", () =>
+        bot("conversations.invite", { channel, users: poster.userId }),
+      );
+    return withWritableChannel(
+      channel,
+      () => asUser(poster.token, "chat.postMessage", args),
+      inviteUser,
+    );
   };
 
   const findChannelByName = async (name: string): Promise<string | undefined> => {
@@ -533,34 +514,26 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
       }),
     archive: (channel) =>
       call(async () => {
-        try {
-          await withWritableChannel(channel, () => bot("conversations.archive", { channel }));
-        } catch (error) {
-          if (!(error instanceof SlackApiError) || error.code !== "already_archived") throw error;
-        }
+        await tolerating("already_archived", () =>
+          withWritableChannel(channel, () => bot("conversations.archive", { channel })),
+        );
       }),
     unarchive: (channel) =>
       call(async () => {
-        try {
-          await withWritableChannel(channel, () => bot("conversations.unarchive", { channel }));
-        } catch (error) {
-          if (!(error instanceof SlackApiError) || error.code !== "not_archived") throw error;
-        }
+        await tolerating("not_archived", () =>
+          withWritableChannel(channel, () => bot("conversations.unarchive", { channel })),
+        );
       }),
     isArchived: (channel) =>
-      call(async () => {
-        try {
+      call(() =>
+        tolerating("channel_not_found", async () => {
           const res = (await bot("conversations.info", { channel })) as {
             channel?: { is_archived?: unknown };
           };
           const archived = res?.channel?.is_archived;
           return typeof archived === "boolean" ? archived : undefined;
-        } catch (error) {
-          if (error instanceof SlackApiError && error.code === "channel_not_found")
-            return undefined;
-          throw error;
-        }
-      }),
+        }),
+      ),
     invite: (channel, users) =>
       call(async () => {
         if (users.length === 0) return [];
@@ -628,10 +601,20 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
             channel,
             msg,
             "chat.postMessage",
-            (blocks) =>
-              poster.kind === "user"
-                ? postAsUser(channel, msg, blocks, { ...opts, poster })
-                : postAsBot(channel, msg, blocks, { ...opts, poster }),
+            (blocks) => {
+              const args = {
+                channel,
+                text: msg.text,
+                blocks,
+                thread_ts: opts.threadTs,
+                client_msg_id: opts.clientMsgId,
+                // The block already links out; a preview card is noise.
+                // User-token posts unfurl by default, so they say so too.
+                unfurl_links: false,
+                unfurl_media: false,
+              };
+              return poster.kind === "user" ? postAsUser(poster, args) : postAsBot(poster, args);
+            },
             options.onImageFallback,
           );
           return ts(result);
@@ -664,8 +647,9 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
       ),
     lookupByEmail: (email) =>
       emailLookups.get(email, () =>
-        call(async () => {
-          try {
+        call(() =>
+          // A legitimate miss; every other error is operational.
+          tolerating("users_not_found", async () => {
             const result = (await bot("users.lookupByEmail", { email })) as {
               user?: { id?: unknown };
             };
@@ -674,18 +658,13 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
               "users.lookupByEmail",
               "users.lookupByEmail user ID",
             );
-          } catch (error) {
-            // A legitimate miss; every other error is operational.
-            if (error instanceof SlackApiError && error.code === "users_not_found")
-              return undefined;
-            throw error;
-          }
-        }),
+          }),
+        ),
       ),
     profile: (user) =>
       profiles.get(user, () =>
-        call(async () => {
-          try {
+        call(() =>
+          tolerating("user_not_found", async () => {
             const result = (await bot("users.info", { user })) as {
               user?: {
                 name?: string;
@@ -708,11 +687,8 @@ export function createSlackGateway(token: string, options: SlackGatewayOptions =
             const iconUrl = p?.image_72?.trim() || p?.image_48?.trim() || undefined;
             if (!name && !iconUrl) return undefined;
             return { name, iconUrl };
-          } catch (error) {
-            if (error instanceof SlackApiError && error.code === "user_not_found") return undefined;
-            throw error;
-          }
-        }),
+          }),
+        ),
       ),
   };
 }
