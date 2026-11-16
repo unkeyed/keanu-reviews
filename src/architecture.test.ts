@@ -8,7 +8,7 @@ import { SLACK_METHODS } from "./slack/gateway.ts";
 
 const SRC = join(import.meta.dirname);
 
-const SCHEMA_HASH = "6b7c5f163b27aac3a8309fe1b9c43889013173d7fb21cd0a97de293bf7b4f965";
+const SCHEMA_HASH = "e15306757c6125693897f82bb71f1b0313c4228a012b23d8b1e77bae1b35e60e";
 
 const SLACK_BASELINE = {
   bot: [

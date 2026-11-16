@@ -72,6 +72,8 @@ export const pullRequests = pgTable(
     lastMergeableState: text("last_mergeable_state"),
     // Claim marker so the opt-in merge-comment posts to GitHub at most once.
     mergeCommentPostedAt: timestamp("merge_comment_posted_at", { withTimezone: true }),
+    // Claim marker so the cross-model Pullfrog review request posts at most once.
+    crossReviewRequestedAt: timestamp("cross_review_requested_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
