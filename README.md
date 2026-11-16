@@ -10,9 +10,9 @@ Slack.
 
 The bot **only ever writes to Slack** and makes **read-only** GitHub calls
 (REST + OAuth). Nothing typed in Slack is written back to GitHub — the PR stays
-the single source of truth. The one optional exception is a merge comment (see
-[Optional GitHub write](#optional-github-write-merge-comment)), which is off by
-default.
+the single source of truth. The optional exceptions are a merge comment and a
+cross-model Pullfrog review request (see
+[Optional GitHub writes](#optional-github-writes)). Both are off by default.
 
 - [Features](#features)
 - [How it works](#how-it-works)
@@ -55,6 +55,9 @@ default.
   noise); you can allow specific review bots (e.g. Pullfrog) by login. An allowed
   bot's review summary is threaded under the PR root and its HTML/marketing cruft
   is stripped.
+- **Cross-model Pullfrog review (optional).** Asks Pullfrog to review each new
+  PR on a different model family than the agent that wrote it, so a model never
+  grades its own work.
 - **Quiet archiving (optional).** With per-user Slack OAuth, the bot archives
   channels **silently** — no "archived the channel" notifications — by having
   participants leave on their own token first (the way Axolo does it).
@@ -87,7 +90,7 @@ GitHub App webhook  ──►  /webhooks/github  ──►  jobs table  ──�
   at a time, in arrival order. The queue holds a PR's next job back until its
   current one finishes, so a burst on one PR never fills the worker's slots.
 - **One-way boundary.** The bot reads GitHub and writes Slack. It never mutates
-  GitHub except the opt-in merge comment.
+  GitHub except the opt-in merge comment and cross-model review request.
 
 ## Requirements
 
@@ -150,7 +153,8 @@ managed host, from its secret store) and are **never written to logs**. See
 | `PORT` | `3000` | HTTP port. |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`. |
 | `SLACK_SHIPPED_CHANNEL` | _(off)_ | Channel ID or name that gets a "shipped" note on merge. |
-| `GITHUB_COMMENT_ON_MERGE` | `false` | Opt-in: post the Slack channel URL on the merged PR (the only GitHub write). |
+| `GITHUB_COMMENT_ON_MERGE` | `false` | Opt-in: post the Slack channel URL on the merged PR (a [GitHub write](#optional-github-writes)). |
+| `PULLFROG_CROSS_REVIEW_REPOS` | _(off)_ | Comma-separated `owner/repo` list (case-insensitive) where each new PR gets a Pullfrog review on a different model family (a [GitHub write](#optional-github-writes)). |
 | `THREAD_COMMENTS` | `true` | Thread a review-comment reply under the original comment's Slack message (`false` keeps all comments flat). |
 | `ALLOWED_BOTS` | _(none)_ | Comma-separated bot logins to mirror (e.g. `pullfrog`). |
 | `WORKER_CONCURRENCY` | `4` | Jobs the worker runs at once. Jobs for the same PR always run one at a time. |
@@ -187,12 +191,46 @@ ID in `GITHUB_INSTALLATION_ID`; events from any other installation are rejected.
 For account linking, create an OAuth client on the App and set its callback URL to
 exactly `${PUBLIC_URL}/oauth/github/callback`.
 
-### Optional GitHub write (merge comment)
+### Optional GitHub writes
 
-Setting `GITHUB_COMMENT_ON_MERGE=true` makes the bot post the Slack channel URL as
-a comment on each merged PR — the **only** exception to the one-way boundary. It's
-**off by default**. To use it, change **Pull requests** permission to **Read &
-write** and reinstall the App; otherwise the comment POST returns `403`.
+Two opt-in features comment on PRs. They are the only exceptions to the one-way
+boundary, and both are **off by default**. Either one needs the **Pull requests**
+permission changed to **Read & write** and the App reinstalled. Without it, the
+comment POST returns `403`.
+
+**Merge comment.** `GITHUB_COMMENT_ON_MERGE=true` makes the bot post the Slack
+channel URL as a comment on each merged PR.
+
+**Cross-model Pullfrog review.** `PULLFROG_CROSS_REVIEW_REPOS` lists the repos
+where the bot asks [Pullfrog](https://docs.pullfrog.com/pr-reviews.md) to review
+each new PR on a model family other than the one that wrote it. When a PR opens
+(not as a draft) or is marked ready for review, the bot reads the PR body's
+`Agent or tool used` heading (any level) and comments once with a
+[model flag](https://docs.pullfrog.com/flags.md). The reviewer is the first of
+Codex, Claude Opus, and Grok whose family the section doesn't name:
+
+| Section names | Comment |
+| --- | --- |
+| Claude (Claude, Anthropic, Opus, Sonnet, Haiku, Fable) | `@pullfrog review --codex` |
+| Codex (Codex, GPT, OpenAI, ChatGPT) | `@pullfrog review --opus` |
+| Grok (Grok, xAI) | `@pullfrog review --codex` |
+| Claude and Codex | `@pullfrog review --grok` |
+| Nothing above, or no section (people, Cursor agent, Amp) | `@pullfrog review --codex` |
+
+The template's placeholder line (one that starts with `e.g.`) and HTML comments
+don't count as a declaration. The bot skips PRs opened by bots and PRs whose body
+already mentions `@pullfrog` outside code, because Pullfrog starts its own run
+from that mention. It comments at most once per PR. A failed comment fails the
+job, and the retry posts it.
+
+Pullfrog must be installed on every listed repo and must accept the bot's
+mention. Pullfrog treats the bot as a non-collaborator (GitHub reports its
+repository permission as `none`), so turn on non-collaborator mentions for each
+repo, or the comment starts no run:
+
+```bash
+pullfrog config set mention.non-collaborators true --repo owner/repo
+```
 
 ## Slack app setup
 
@@ -301,7 +339,7 @@ case and GitHub's `[bot]` suffix, so `pullfrog` matches `pullfrog[bot]`. An
 allowed bot's **review summary** is **threaded under the PR root** to reduce
 noise, and its body is cleaned of HTML comments, `<sup>` marketing footers, and
 logo images before rendering. Never list your own App's bot login, or it would
-echo its own merge comments.
+echo its own comments.
 
 ### Quiet archiving (optional)
 

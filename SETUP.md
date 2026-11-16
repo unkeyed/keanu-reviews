@@ -107,9 +107,10 @@ Set these to **Read-only**:
 - **Checks** — Read-only
 - **Metadata** — Read-only (mandatory, auto-selected)
 
-> The bot is read-only by design. The **only** exception is the optional
-> merge-comment feature (Step 8.2), which needs **Pull requests: Read & write**.
-> Leave everything read-only unless you plan to enable it.
+> The bot is read-only by design. The only exceptions are the optional merge
+> comment (Step 8.2) and cross-model Pullfrog review (Step 8.3), which need
+> **Pull requests: Read & write**. Leave everything read-only unless you plan to
+> enable one of them.
 
 ### 3.3 Subscribe to events
 
@@ -338,8 +339,8 @@ Unset = disabled. The bot auto-joins the channel on first post (needs the
 
 ### 8.2 Comment the Slack channel URL back on the PR (opt-in GitHub write)
 
-This is the **only** feature that writes to GitHub, and it's **off by default**.
-When enabled, a merged PR gets one comment linking to its Slack channel.
+This writes to GitHub, and it's **off by default**. When enabled, a merged PR
+gets one comment linking to its Slack channel.
 
 To enable:
 
@@ -353,6 +354,29 @@ To enable:
    ```
 
 Leave it `false` (or unset) to keep the app fully read-only and one-way.
+
+### 8.3 Ask Pullfrog for a cross-model review (opt-in GitHub write)
+
+Off by default. When enabled, each new PR in a listed repo gets one
+`@pullfrog review --<model>` comment that picks a model family other than the
+agent named in the PR body's `Agent or tool used` section. See
+[Optional GitHub writes](README.md#optional-github-writes) for the mapping.
+
+To enable:
+
+1. Grant **Pull requests: Read & write** and reinstall, as in Step 8.2.
+2. Install Pullfrog on each repo, and let it accept the bot's mention. Pullfrog
+   sees the bot as a non-collaborator, so without this the comment starts no run:
+
+   ```bash
+   pullfrog config set mention.non-collaborators true --repo owner/repo
+   ```
+
+3. Set:
+
+   ```bash
+   PULLFROG_CROSS_REVIEW_REPOS=owner/repo,owner/other-repo
+   ```
 
 ---
 
@@ -393,7 +417,8 @@ Every Slack/GitHub API error is logged with actionable detail. Common ones:
 | `invalid_signature` on the webhook | `GITHUB_WEBHOOK_SECRET` doesn't match the value in the GitHub App's webhook config. |
 | `PR channel is not ready …` logged at **info**, then resolves | Normal: a child event (CI/comment) arrived before the PR channel existed; it retries and self-heals. |
 | `mergeability not computed yet` (info, retries) | Normal: GitHub computes `mergeable_state` asynchronously; it settles on retry. |
-| Merge comment fails with `403` | The App lacks write permission — do Step 8.2 (grant Pull requests: Read & write, reinstall). |
+| Merge comment or cross-model review request fails with `403` | The App lacks write permission. Do Step 8.2 (grant Pull requests: Read & write, reinstall). |
+| Cross-model review comment posts but Pullfrog never runs | Pullfrog ignores mentions from non-collaborators. Run `pullfrog config set mention.non-collaborators true --repo owner/repo` (Step 8.3). |
 | `failed to set channel topic` (warn) | Topic is best-effort; if it names a missing scope, add it and reinstall. Channel creation is unaffected. |
 | `/ready` returns not-ready | `DATABASE_URL` is wrong/unreachable, or migrations haven't run (`pnpm db:migrate`). |
 
@@ -427,6 +452,7 @@ Every Slack/GitHub API error is logged with actionable detail. Common ones:
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` |
 | `SLACK_SHIPPED_CHANNEL` | unset (disabled) | `#shipped` announcement channel (id or name) |
 | `GITHUB_COMMENT_ON_MERGE` | `false` | opt-in GitHub write (needs write permission) |
+| `PULLFROG_CROSS_REVIEW_REPOS` | unset (disabled) | opt-in GitHub write: `owner/repo` list for cross-model Pullfrog reviews (Step 8.3) |
 | `REMINDER_HOURS` | `12` | hours before a pending-review reminder becomes due |
 | `REMINDER_SUPPRESS_APPROVALS` | `1` | approvals that stop reminders for that PR (reviewers and the channel) |
 | `REMINDER_SCAN_INTERVAL_MS` | `60000` | how often the reminder loop scans |
