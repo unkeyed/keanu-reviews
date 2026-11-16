@@ -27,6 +27,7 @@ export function handlerDeps(
     suppressApprovals: 1,
     shippedChannel: undefined,
     postPrComment: undefined,
+    crossReview: undefined,
     slackTeamId: "T123",
     quietArchive: undefined,
     embedImages: async () => [],

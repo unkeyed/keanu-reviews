@@ -205,6 +205,24 @@ export async function releaseMergeComment(db: Db, id: PrId): Promise<void> {
   await db.update(pullRequests).set({ mergeCommentPostedAt: null }).where(eq(pullRequests.id, id));
 }
 
+export async function claimCrossReview(db: Db, githubPrId: number, now: Date): Promise<boolean> {
+  const rows = await db
+    .update(pullRequests)
+    .set({ crossReviewRequestedAt: now })
+    .where(
+      and(eq(pullRequests.githubPrId, githubPrId), isNull(pullRequests.crossReviewRequestedAt)),
+    )
+    .returning({ id: pullRequests.id });
+  return rows.length > 0;
+}
+
+export async function releaseCrossReview(db: Db, githubPrId: number): Promise<void> {
+  await db
+    .update(pullRequests)
+    .set({ crossReviewRequestedAt: null })
+    .where(eq(pullRequests.githubPrId, githubPrId));
+}
+
 export async function markSlackStateApplied(
   db: Db,
   id: PrId,

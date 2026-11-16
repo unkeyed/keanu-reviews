@@ -49,6 +49,7 @@ const pr = {
   number: 7,
   id: 70,
   title: "Fix it",
+  body: "## Agent or tool used\nCodex",
   html_url: "https://github.com/acme/api/pull/7",
   user: { login: "oz", id: 100, type: "User" },
   head: { sha: "abc", ref: "oz/fix" },
@@ -65,6 +66,7 @@ describe("parseEvent", () => {
     expect(parseEvent("pull_request", { action: "closed", repository, pull_request: pr })).toEqual({
       kind: "pull_request",
       action: "closed",
+      body: "## Agent or tool used\nCodex",
       merged: true,
       requestedReviewer: undefined,
       requestedTeam: undefined,
@@ -83,6 +85,15 @@ describe("parseEvent", () => {
         requestedReviewers: [{ id: 7, login: "flo", isBot: false }],
       },
     });
+  });
+
+  it("reads a missing PR body as empty", () => {
+    const ev = parseEvent("pull_request", {
+      action: "opened",
+      repository,
+      pull_request: { ...pr, body: null },
+    });
+    expect(ev).toMatchObject({ kind: "pull_request", body: "" });
   });
 
   it("reads team-only and individual review requests, treating an untyped actor as human", () => {

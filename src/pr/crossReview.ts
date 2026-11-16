@@ -1,3 +1,8 @@
+import type { PullRequestEvent } from "#events";
+import type { PrCommenter } from "#github";
+import type { PrDeps } from "./converge.ts";
+import { claimCrossReview, releaseCrossReview } from "./store.ts";
+
 export type ModelFamily = "claude" | "codex" | "grok";
 
 const FAMILIES: readonly { family: ModelFamily; label: string; pattern: RegExp }[] = [
@@ -71,4 +76,57 @@ export function crossReviewBody(
       ? `This PR names no Claude, Codex, or Grok agent under "Agent or tool used", so ${reviewer.label} reviews it by default.`
       : `This PR was written with ${declared.join(" and ")}, so a different model, ${reviewer.label}, reviews it.`;
   return `@pullfrog review ${reviewer.flag}\n\n${why}`;
+}
+
+export interface CrossReview {
+  /** Lowercase `owner/repo` names that have Pullfrog installed. */
+  repos: ReadonlySet<string>;
+  postPrComment: PrCommenter;
+}
+
+const asksForReview = (ev: PullRequestEvent) =>
+  ev.action === "ready_for_review" || (ev.action === "opened" && !ev.pr.draft);
+
+function skipReason(crossReview: CrossReview, ev: PullRequestEvent): string | undefined {
+  if (!crossReview.repos.has(ev.pr.repo.toLowerCase())) return "repo not enabled";
+  if (ev.pr.author.isBot) return "bot author";
+  if (mentionsPullfrog(ev.body)) return "PR body already mentions @pullfrog";
+  return undefined;
+}
+
+/**
+ * Comment `@pullfrog review <flag>` once per PR when it opens for review. A
+ * failed post releases the claim and rethrows so the job retries: a lost review
+ * request is worse than a rare duplicate.
+ */
+export async function requestCrossReview(
+  deps: Pick<PrDeps, "db" | "logger" | "crossReview">,
+  ev: PullRequestEvent,
+): Promise<void> {
+  const { db, logger, crossReview } = deps;
+  if (!crossReview || !asksForReview(ev)) return;
+  const fields = { repo: ev.pr.repo, number: ev.pr.number, action: ev.action };
+  const families = authoringFamilies(ev.body);
+  const reviewer = pickReviewer(families);
+  const skipped =
+    skipReason(crossReview, ev) ?? (reviewer ? undefined : "every reviewer family wrote this PR");
+  if (skipped || !reviewer) {
+    logger.info("skipped cross-model review request", { ...fields, reason: skipped });
+    return;
+  }
+  if (!(await claimCrossReview(db, ev.pr.githubPrId, new Date()))) {
+    logger.info("skipped cross-model review request", { ...fields, reason: "already requested" });
+    return;
+  }
+  try {
+    await crossReview.postPrComment(ev.pr.repo, ev.pr.number, crossReviewBody(families, reviewer));
+  } catch (err) {
+    await releaseCrossReview(db, ev.pr.githubPrId);
+    throw err;
+  }
+  logger.info("requested cross-model review", {
+    ...fields,
+    authoredBy: [...families],
+    reviewer: reviewer.flag,
+  });
 }

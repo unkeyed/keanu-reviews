@@ -110,6 +110,7 @@ describe("createContext", () => {
         slackTeamId: "T123",
         shippedChannel: undefined,
         postPrComment: undefined,
+        crossReview: undefined,
         quietArchive: undefined,
         authorPoster: undefined,
         threadComments: true,
@@ -137,6 +138,19 @@ describe("createContext", () => {
       expect(ctx.deps.quietArchive).toBeDefined();
       expect(ctx.deps.postPrComment).toBeDefined();
       expect(routePaths(ctx)).toContain("GET /oauth/slack/callback");
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it("turns on cross-model review requests without turning on merge comments", async () => {
+    const ctx = createContext(
+      loadConfig({ ...TEST_ENV, PULLFROG_CROSS_REVIEW_REPOS: "Unkeyed/Unkey" }),
+    );
+    try {
+      expect(ctx.deps.postPrComment).toBeUndefined();
+      expect(ctx.deps.crossReview?.repos).toEqual(new Set(["unkeyed/unkey"]));
+      expect(ctx.deps.crossReview?.postPrComment).toBeTypeOf("function");
     } finally {
       await ctx.close();
     }

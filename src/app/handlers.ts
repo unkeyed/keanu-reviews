@@ -1,7 +1,7 @@
 import { type DomainEvent, type Work, jobArrivalKey, parseEvent } from "#events";
 import { shouldSkipActor } from "#github";
 import { type MirrorDeps, mirrorReview, onIssueComment, onReviewComment } from "#mirror";
-import { session } from "#pr";
+import { requestCrossReview, session } from "#pr";
 import type { Dispatch } from "#queue";
 import { type ReviewDeps, onCheckRun, onPullRequest, onReviewSubmitted } from "#reviews";
 
@@ -26,7 +26,10 @@ export const handlers: HandlerTable = {
     return session(
       deps,
       { kind: "snapshot", snapshot: ev.pr, cause },
-      (s) => onPullRequest(deps, s, ev, work),
+      async (s) => {
+        await onPullRequest(deps, s, ev, work);
+        await requestCrossReview(deps, ev);
+      },
       work.signal,
     );
   },

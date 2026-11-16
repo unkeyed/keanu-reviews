@@ -15,6 +15,7 @@ import {
   slackChannelUrl,
 } from "#slack";
 import { prChannel } from "./channel.ts";
+import type { CrossReview } from "./crossReview.ts";
 import { type ChannelStep, type ConvergeCause, causeClaim, planChannel } from "./plan.ts";
 import { notifyShipped } from "./shipped.ts";
 import {
@@ -34,6 +35,7 @@ export interface PrDeps {
   fetchGithubEmail: GithubEmailFetcher;
   shippedChannel: string | undefined;
   postPrComment: PrCommenter | undefined;
+  crossReview: CrossReview | undefined;
   slackTeamId: string;
   quietArchive: ((channelId: string) => Promise<void>) | undefined;
 }

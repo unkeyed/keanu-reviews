@@ -57,6 +57,7 @@ export interface Review {
 
 export interface PullRequestEvent extends PrChange {
   kind: "pull_request";
+  body: string;
   requestedReviewer: GithubActor | undefined;
   requestedTeam: string | undefined;
 }
