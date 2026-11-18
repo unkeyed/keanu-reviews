@@ -79,6 +79,7 @@ export function createContext(config: Config): AppContext {
     secret: config.OAUTH_STATE_SECRET,
   });
   const { db, close } = createDb(config.DATABASE_URL);
+  const postPrComment = createPrCommenter(auth, installationId);
   const userTokens =
     slackOAuth && userTokenAccess({ db, slack, logger, teamId, cipher: slackOAuth.cipher });
 
@@ -100,9 +101,11 @@ export function createContext(config: Config): AppContext {
     },
     suppressApprovals: config.REMINDER_SUPPRESS_APPROVALS,
     shippedChannel: config.SLACK_SHIPPED_CHANNEL,
-    postPrComment: config.GITHUB_COMMENT_ON_MERGE
-      ? createPrCommenter(auth, installationId)
-      : undefined,
+    postPrComment: config.GITHUB_COMMENT_ON_MERGE ? postPrComment : undefined,
+    crossReview:
+      config.PULLFROG_CROSS_REVIEW_REPOS.size > 0
+        ? { repos: config.PULLFROG_CROSS_REVIEW_REPOS, postPrComment }
+        : undefined,
     slackTeamId: teamId,
     embedImages: attachments.embedImages,
     quietArchive: userTokens?.quietArchive,

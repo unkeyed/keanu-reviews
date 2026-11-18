@@ -1,4 +1,5 @@
 export { type PrDeps, isMergeComment, mergeCommentBody } from "./converge.ts";
+export { type CrossReview, requestCrossReview } from "./crossReview.ts";
 export { createClosedPullRequestReconciliation } from "./reconcile.ts";
 export {
   type ChannelPr,

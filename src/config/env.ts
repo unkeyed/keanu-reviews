@@ -81,12 +81,34 @@ export const ConfigSchema = z
         }
       }, "SLACK_USER_TOKEN_ENC_KEY must decode to 32 bytes (hex, base64, or base64url)"),
     // Opt-in: post the Slack channel URL as a comment on the PR when it merges.
-    // This is the ONLY GitHub write path and is OFF by default — enabling it
-    // requires granting the GitHub App write permission and reinstalling.
+    // OFF by default. This and PULLFROG_CROSS_REVIEW_REPOS are the only GitHub
+    // writes; either one requires granting the GitHub App write permission.
     GITHUB_COMMENT_ON_MERGE: z
       .enum(["true", "false"])
       .default("false")
       .transform((value) => value === "true"),
+    // Opt-in: comma-separated owner/repo list. When a PR opens (not as a draft)
+    // or leaves draft in one of these repos, the bot comments `@pullfrog review`
+    // with a model flag from a different family than the agent the PR body
+    // names. Pullfrog must be installed on each repo. Unset turns it off.
+    PULLFROG_CROSS_REVIEW_REPOS: z
+      .string()
+      .default("")
+      .transform((value, ctx) => {
+        const repos = new Set<string>();
+        for (const raw of value.split(",")) {
+          const repo = raw.trim().toLowerCase();
+          if (!repo) continue;
+          if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `"${raw.trim()}" is not an owner/repo name`,
+            });
+          }
+          repos.add(repo);
+        }
+        return repos as ReadonlySet<string>;
+      }),
     // Optional channel that receives a "shipped" announcement when a PR is merged.
     // Accepts a channel ID (e.g. C0123ABC) or a name (e.g. shipped / #shipped).
     // Unset disables the feature.

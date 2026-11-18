@@ -155,6 +155,26 @@ describe("loadConfig", () => {
     expect([...cfg.ALLOWED_BOTS].sort()).toEqual(["dependabot", "pullfrog"]);
   });
 
+  it("parses PULLFROG_CROSS_REVIEW_REPOS into lowercase owner/repo names (default off)", () => {
+    expect([...loadConfig(validEnv()).PULLFROG_CROSS_REVIEW_REPOS]).toEqual([]);
+    const cfg = loadConfig({
+      ...validEnv(),
+      PULLFROG_CROSS_REVIEW_REPOS: " Unkeyed/Unkey, unkeyed/keanu-reviews ,,",
+    });
+    expect([...cfg.PULLFROG_CROSS_REVIEW_REPOS].sort()).toEqual([
+      "unkeyed/keanu-reviews",
+      "unkeyed/unkey",
+    ]);
+  });
+
+  it.each(["unkey", "unkeyed/unkey/extra", "https://github.com/unkeyed/unkey"])(
+    "rejects a PULLFROG_CROSS_REVIEW_REPOS entry that is not owner/repo: %s",
+    (entry) => {
+      const env = { ...validEnv(), PULLFROG_CROSS_REVIEW_REPOS: `unkeyed/unkey,${entry}` };
+      expect(() => loadConfig(env)).toThrowError(/PULLFROG_CROSS_REVIEW_REPOS/);
+    },
+  );
+
   it.each(["workspace-name", "E123", "T-123"])("rejects an invalid SLACK_TEAM_ID: %s", (teamId) => {
     const env = validEnv();
     env.SLACK_TEAM_ID = teamId;
