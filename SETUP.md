@@ -359,7 +359,7 @@ Leave it `false` (or unset) to keep the app fully read-only and one-way.
 
 Off by default. When enabled, each new PR in a listed repo gets one
 `@pullfrog review --<model>` comment that picks a model family other than the
-agent named in the PR body's `Agent or tool used` section. See
+agent named in the PR body's `What model was used for the work?` section. See
 [Optional GitHub writes](README.md#optional-github-writes) for the mapping.
 
 To enable:

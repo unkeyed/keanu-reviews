@@ -205,7 +205,7 @@ channel URL as a comment on each merged PR.
 where the bot asks [Pullfrog](https://docs.pullfrog.com/pr-reviews.md) to review
 each new PR on a model family other than the one that wrote it. When a PR opens
 (not as a draft) or is marked ready for review, the bot reads the PR body's
-`Agent or tool used` heading (any level) and comments once with a
+`What model was used for the work?` (or `Agent or tool used`) heading, at any level, and comments once with a
 [model flag](https://docs.pullfrog.com/flags.md). The reviewer is the first of
 Codex, Claude Opus, and Grok whose family the section doesn't name:
 
