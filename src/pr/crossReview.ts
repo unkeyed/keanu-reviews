@@ -29,12 +29,12 @@ const REVIEWERS: readonly CrossReviewer[] = [
   { family: "grok", flag: "--grok", label: "Grok" },
 ];
 
-const AGENT_HEADING = /^agent or tool used\b/i;
+const AGENT_HEADING = /^(?:what model was used for the work|agent or tool used)\b/i;
 const HEADING = /^ {0,3}#{1,6}(?:[ \t]+(.*?))?[ \t#]*$/;
 const HTML_COMMENT = /<!--[\s\S]*?(?:-->|$)/g;
 const PLACEHOLDER = /^\s*[_*]*\s*e\.g\./i;
 
-/** Model families named under the PR template's "Agent or tool used" heading. */
+/** Model families named under the PR template's model heading. */
 export function authoringFamilies(body: string): Set<ModelFamily> {
   const declared = agentSection(body)
     .filter((line) => !PLACEHOLDER.test(line))
@@ -73,7 +73,7 @@ export function crossReviewBody(
   const declared = FAMILIES.filter((f) => families.has(f.family)).map((f) => f.label);
   const why =
     declared.length === 0
-      ? `This PR names no Claude, Codex, or Grok agent under "Agent or tool used", so ${reviewer.label} reviews it by default.`
+      ? `This PR names no Claude, Codex, or Grok model, so ${reviewer.label} reviews it by default.`
       : `This PR was written with ${declared.join(" and ")}, so a different model, ${reviewer.label}, reviews it.`;
   return `@pullfrog review ${reviewer.flag}\n\n${why}`;
 }

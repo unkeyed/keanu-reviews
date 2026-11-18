@@ -22,6 +22,20 @@ Unit tests. ${around.after}
 const flagFor = (body: string) => pickReviewer(authoringFamilies(body))?.flag;
 
 describe("cross-model reviewer", () => {
+  it("reads the model section of the unkey PR template", () => {
+    const body = `## Why
+A test
+
+## What model was used for the work?
+Opus 5.5
+
+## Checklist
+- [ ] CI is green
+`;
+    expect(flagFor(body)).toBe("--codex");
+    expect(flagFor(body.replace("Opus 5.5", "Codex"))).toBe("--opus");
+  });
+
   it.each([
     ["Claude Code", "--codex"],
     ["claude opus 4.5", "--codex"],
