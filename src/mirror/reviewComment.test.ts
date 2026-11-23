@@ -572,7 +572,7 @@ describe("onReviewComment (U6)", () => {
     expect(slack.messages.at(-1)?.images).toEqual([]);
   });
 
-  it("mirrors an allow-listed bot's comment top-level but still skips other bots", async () => {
+  it("threads an allow-listed bot's comment under the PR root but still skips other bots", async () => {
     await seedChannel();
     const allowed = { ...deps(), embedImages: embedAll, allowedBots: new Set(["pullfrog"]) };
     await onReviewComment(
@@ -582,7 +582,7 @@ describe("onReviewComment (U6)", () => {
       ),
     );
     expect(slack.messages).toHaveLength(1);
-    expect(slack.messages.at(-1)?.threadTs).toBeUndefined();
+    expect(slack.messages.at(-1)?.threadTs).toBe("ts-root");
     await onReviewComment(
       allowed,
       reviewCommentEvent(payload({ id: 72, user: { id: 21, login: "vercel[bot]", type: "Bot" } })),
@@ -604,6 +604,40 @@ describe("onReviewComment (U6)", () => {
     await onReviewComment(
       deps(),
       reviewCommentEvent(payload({ id: 56, in_reply_to_id: 55, body: "agreed" })),
+    );
+    expect(slack.messages.at(-1)?.threadTs).toBe(parentTs);
+  });
+
+  it("posts a reply to a bot comment into the PR root thread, not under a thread reply", async () => {
+    await seedChannel();
+    const allowed = { ...deps(), allowedBots: new Set(["pullfrog"]) };
+    const bot = { id: 20, login: "pullfrog[bot]", type: "Bot" };
+    await onReviewComment(allowed, reviewCommentEvent(payload({ id: 81, user: bot })));
+    await onReviewComment(
+      allowed,
+      reviewCommentEvent(payload({ id: 82, in_reply_to_id: 81, body: "fixed" })),
+    );
+    await onReviewComment(
+      allowed,
+      reviewCommentEvent(payload({ id: 83, in_reply_to_id: 81, user: bot, body: "thanks" })),
+    );
+    expect(slack.messages.map((m) => m.threadTs)).toEqual(["ts-root", "ts-root", "ts-root"]);
+  });
+
+  it("threads a bot's reply under the human comment it answers", async () => {
+    await seedChannel();
+    const allowed = { ...deps(), allowedBots: new Set(["pullfrog"]) };
+    await onReviewComment(allowed, reviewCommentEvent(payload({ id: 91 })));
+    const parentTs = slack.messages.at(-1)?.ts;
+    await onReviewComment(
+      allowed,
+      reviewCommentEvent(
+        payload({
+          id: 92,
+          in_reply_to_id: 91,
+          user: { id: 20, login: "pullfrog[bot]", type: "Bot" },
+        }),
+      ),
     );
     expect(slack.messages.at(-1)?.threadTs).toBe(parentTs);
   });

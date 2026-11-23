@@ -5,6 +5,7 @@ import {
   type Message,
   cleanGithubMarkdown,
   extractEmbeddedImages,
+  githubToMrkdwn,
   keys,
   render,
   sanitizeMrkdwn,
@@ -185,6 +186,81 @@ describe("render review_comment", () => {
   it("carries the images through for the gateway to append", () => {
     const images = [{ kind: "link" as const, sourceUrl: "https://gh/a", alt: "a" }];
     expect(render(comment({ images })).images).toEqual(images);
+  });
+});
+
+describe("githubToMrkdwn", () => {
+  const pullfrog = [
+    "Readers target `unkey`. See [the CLI docs](https://example.com/a_(b)#L1).",
+    "",
+    "<details><summary>Technical details</summary>",
+    "",
+    "````markdown",
+    "# Keep the server name",
+    "- `a.mdx:18` — uses <unkey> & more",
+    "```",
+    "````",
+    "",
+    "</details>",
+  ].join("\n");
+
+  it("turns a fence of any length into a Slack code block, outside the quote", () => {
+    expect(githubToMrkdwn(pullfrog, { quote: true })).toBe(
+      [
+        "> Readers target `unkey`. See <https://example.com/a_(b)#L1|the CLI docs>.",
+        "> ",
+        "> *Technical details*",
+        "```",
+        "# Keep the server name",
+        "- `a.mdx:18` — uses &lt;unkey&gt; &amp; more",
+        "ˋˋˋ",
+        "```",
+      ].join("\n"),
+    );
+  });
+
+  it("runs an unclosed fence to the end of the body", () => {
+    expect(githubToMrkdwn("intro\n~~~\ncode")).toBe("intro\n```\ncode\n```");
+  });
+
+  it("rewrites headings, emphasis, bullets, alerts and quotes into Slack syntax", () => {
+    const body = [
+      "> [!IMPORTANT]",
+      "> Watch **this**.",
+      "## Summary",
+      "- *one* and __two__",
+      "* ~~three~~",
+    ].join("\n");
+    expect(githubToMrkdwn(body)).toBe(
+      ["> *Important*", "> Watch *this*.", "*Summary*", "• _one_ and *two*", "• ~three~"].join(
+        "\n",
+      ),
+    );
+  });
+
+  it("leaves inline code alone and keeps hostile text escaped", () => {
+    expect(githubToMrkdwn("`**x**` <!channel> [a|b](https://e.com/?q=1&r=2)")).toBe(
+      "`**x**` &lt;!channel&gt; <https://e.com/?q=1&amp;r=2|a¦b>",
+    );
+  });
+
+  it("only links http(s) targets", () => {
+    expect(githubToMrkdwn("[x](javascript:alert(1))")).toBe("[x](javascript:alert(1))");
+  });
+
+  it("closes a code block that the section limit cuts through", () => {
+    const body = `\`\`\`\n${"x\n".repeat(2_000)}\`\`\``;
+    const blocks = blocksOf({
+      kind: "review",
+      authorLogin: "a",
+      state: "commented",
+      body,
+      url: "u",
+      images: [],
+    });
+    const text = blocks[1]?.text?.text ?? "";
+    expect(text.length).toBeLessThanOrEqual(3_000);
+    expect(text.endsWith("\n```")).toBe(true);
   });
 });
 

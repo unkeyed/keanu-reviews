@@ -228,6 +228,12 @@ describe("incremental legacy-schema upgrade", () => {
       "oauth_state_nonces",
     ]);
 
+    // Today's ledger writes every messages column, so finish the upgrade first.
+    for (const file of readdirSync(migrationDirectory)
+      .filter((name) => name.endsWith(".sql") && name > "0006")
+      .sort()) {
+      await applyMigration(client, file);
+    }
     const db = drizzle(client, { schema }) as unknown as Db;
     await expect(
       claim(

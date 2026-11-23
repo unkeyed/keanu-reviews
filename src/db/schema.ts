@@ -101,6 +101,7 @@ export const messages = pgTable(
       .references(() => pullRequests.id),
     githubEventRef: text("github_event_ref"), // e.g. review-comment id, for idempotency
     slackTs: text("slack_ts"),
+    threadTs: text("thread_ts"),
     kind: text("kind").notNull(), // root | review_comment | review | ci | reminder | lifecycle
     status: messageStatusEnum("status").notNull().default("pending"),
     clientMsgId: text("client_msg_id").notNull(),
