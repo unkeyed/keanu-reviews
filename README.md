@@ -54,8 +54,9 @@ cross-model Pullfrog review request (see
 - **Allow-listed bots.** Bot accounts are filtered out by default (deploy-preview
   noise); you can allow specific review bots (e.g. Pullfrog) by login. Everything
   an allowed bot posts (its review summary, inline comments and conversation
-  comments) is threaded under the PR root, along with replies to it. Its
-  HTML/marketing cruft is stripped.
+  comments) is threaded under the PR root, along with replies to it. It posts
+  under the bot's own name and GitHub avatar (e.g. "Pullfrog" with the frog),
+  and its HTML/marketing cruft is stripped.
 - **Slack-native formatting.** GitHub markdown is rewritten for Slack: links,
   bold, headings, bullets and quotes, plus code fences of any length (Pullfrog
   uses four backticks), which become Slack code blocks.

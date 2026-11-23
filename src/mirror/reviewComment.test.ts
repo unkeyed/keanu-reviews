@@ -578,11 +578,23 @@ describe("onReviewComment (U6)", () => {
     await onReviewComment(
       allowed,
       reviewCommentEvent(
-        payload({ id: 71, user: { id: 20, login: "pullfrog[bot]", type: "Bot" } }),
+        payload({
+          id: 71,
+          user: {
+            id: 20,
+            login: "pullfrog[bot]",
+            type: "Bot",
+            avatar_url: "https://avatars.githubusercontent.com/in/1768019?v=4",
+          },
+        }),
       ),
     );
     expect(slack.messages).toHaveLength(1);
-    expect(slack.messages.at(-1)?.threadTs).toBe("ts-root");
+    const posted = slack.messages.at(-1);
+    expect(posted?.threadTs).toBe("ts-root");
+    expect(posted?.username).toBe("Pullfrog");
+    expect(posted?.iconUrl).toBe("https://avatars.githubusercontent.com/in/1768019?v=4");
+    expect(JSON.stringify(posted?.blocks)).not.toContain("by pullfrog[bot]");
     await onReviewComment(
       allowed,
       reviewCommentEvent(payload({ id: 72, user: { id: 21, login: "vercel[bot]", type: "Bot" } })),

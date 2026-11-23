@@ -4,6 +4,8 @@ export interface GithubActor {
   id: number;
   login: string;
   isBot: boolean;
+  /** GitHub's avatar for the account, when the webhook includes one. */
+  avatarUrl?: string;
 }
 
 export interface PrSnapshot {

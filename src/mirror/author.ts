@@ -1,3 +1,4 @@
+import { normalizeBotName } from "#config";
 import type { GithubActor } from "#events";
 import type { ImageEmbedder, PullRequestSnapshotFetcher } from "#github";
 import { profileOrNone, resolveSlackUser } from "#identity";
@@ -36,7 +37,8 @@ export type Author =
       profile: SlackProfile | undefined;
     }
   | { kind: "linked"; login: string; slackUserId: string; profile: SlackProfile | undefined }
-  | { kind: "unlinked"; login: string };
+  | { kind: "unlinked"; login: string }
+  | { kind: "bot"; login: string; name: string; iconUrl: string | undefined };
 
 type UserAuthor = Extract<Author, { kind: "user" }>;
 
@@ -45,8 +47,34 @@ export interface Presentation {
   label: string | undefined;
 }
 
+/** "pullfrog[bot]" → "Pullfrog", "some-review-bot[bot]" → "Some Review Bot". */
+export function botDisplayName(login: string): string {
+  return normalizeBotName(login)
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((word) => `${word[0]?.toUpperCase()}${word.slice(1)}`)
+    .join(" ");
+}
+
+function httpsUrl(value: string | undefined): string | undefined {
+  try {
+    return value && new URL(value).protocol === "https:" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function authorFor(deps: MirrorDeps, actor: GithubActor): Promise<Author> {
   const { login } = actor;
+  // A bot has no Slack account, so post under its own name and GitHub avatar.
+  if (actor.isBot) {
+    return {
+      kind: "bot",
+      login,
+      name: botDisplayName(login),
+      iconUrl: httpsUrl(actor.avatarUrl),
+    };
+  }
   const slackUserId = await resolveSlackUser(deps, { githubId: actor.id, login });
   if (!slackUserId) {
     deps.logger.debug("message author not linked; posting as bot", {
@@ -77,7 +105,13 @@ const userPoster = (author: UserAuthor): Poster => ({
   token: author.token,
 });
 
+const botPresentation = (author: Extract<Author, { kind: "bot" }>): Presentation => ({
+  poster: { kind: "bot-as", username: author.name, iconUrl: author.iconUrl },
+  label: undefined,
+});
+
 export function commentPresentation(author: Author): Presentation {
+  if (author.kind === "bot") return botPresentation(author);
   const label = author.kind !== "unlinked" && author.profile?.name ? undefined : author.login;
   switch (author.kind) {
     case "user":
@@ -98,6 +132,8 @@ export function commentPresentation(author: Author): Presentation {
 
 export function reviewPresentation(author: Author): Presentation {
   switch (author.kind) {
+    case "bot":
+      return botPresentation(author);
     case "user":
       return { poster: userPoster(author), label: undefined };
     case "linked":
