@@ -41,10 +41,13 @@ export async function onReviewComment(
     { kind: "snapshot", snapshot: ev.pr, cause: { kind: "child" } },
     async (s) => {
       const pr = await s.ready();
-      const threadTs =
+      const replyThread =
         deps.threadComments && c.inReplyTo !== undefined
-          ? await parentTs(s, keys.reviewComment(pr.id, c.inReplyTo), work.attempt)
+          ? await parentThread(s, keys.reviewComment(pr.id, c.inReplyTo), work.attempt)
           : undefined;
+      // An allowed bot's comments join its review summary in the PR root's
+      // thread instead of flooding the channel.
+      const threadTs = replyThread ?? (c.author.isBot ? pr.rootMessageTs : undefined);
       const item = { key: keys.reviewComment(pr.id, c.id), action, author: c.author, body: c.body };
       await upsertAuthored(deps, s, item, (author, images) => {
         const { poster, label } = commentPresentation(author);
@@ -68,13 +71,17 @@ export async function onReviewComment(
   );
 }
 
-async function parentTs(
+/**
+ * The Slack thread a reply belongs in. Slack threads are one level deep, so a
+ * reply to a message that is itself a thread reply joins that same thread.
+ */
+async function parentThread(
   s: PrSession,
   parent: EffectKey,
   attempt: number,
 ): Promise<string | undefined> {
   const state = await s.state(parent);
-  if (state.status === "sent") return state.ts;
+  if (state.status === "sent") return state.threadTs ?? state.ts;
   if (state.status === "in-flight" && attempt < PARENT_WAIT_ATTEMPTS) {
     throw new Retry("parent review comment is still being mirrored", { ref: parent.ref });
   }
@@ -105,12 +112,14 @@ export async function onIssueComment(
     deps,
     pr?.channelId ? locked(pr) : await fromGithub(deps, ev.repo, ev.number),
     async (s) => {
-      const { id } = await s.channelPr();
+      const { id, rootMessageTs } = await s.channelPr();
+      const threadTs = c.author.isBot ? (rootMessageTs ?? undefined) : undefined;
       const item = { key: keys.issueComment(id, c.id), action, author: c.author, body: c.body };
       await upsertAuthored(deps, s, item, (author, images) => {
         const { poster, label } = commentPresentation(author);
         return {
           poster,
+          threadTs,
           message: {
             kind: "issue_comment",
             authorLogin: c.author.login,

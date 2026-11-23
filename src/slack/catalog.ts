@@ -33,6 +33,86 @@ export function cleanGithubMarkdown(body: string): string {
     .trim();
 }
 
+const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})([^`]*)$/;
+
+/**
+ * Converts a GitHub comment body to Slack mrkdwn. Fences of any length become
+ * Slack code blocks. Links, emphasis, headings, bullets and quotes are
+ * rewritten into Slack's syntax. With `quote`, prose lines are block-quoted,
+ * but code blocks are not: Slack shows a `>` inside a code block as literal text.
+ */
+export function githubToMrkdwn(body: string, opts: { quote?: boolean } = {}): string {
+  const lines = stripHtmlComments(body)
+    .replace(/<summary>\s*([\s\S]*?)\s*<\/summary>/gi, "\n**$1**\n")
+    .split("\n");
+  const out: string[] = [];
+  let prose: string[] = [];
+  const flushProse = () => {
+    const cleaned = cleanGithubMarkdown(prose.join("\n"));
+    prose = [];
+    if (!cleaned) return;
+    for (const line of cleaned.split("\n")) {
+      const converted = proseLine(line);
+      out.push(opts.quote ? `> ${converted.replace(/^> /, "")}` : converted);
+    }
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const open = FENCE_OPEN.exec(lines[i] ?? "");
+    if (!open?.[1]) {
+      prose.push(lines[i] ?? "");
+      continue;
+    }
+    flushProse();
+    const marker = open[1];
+    const close = new RegExp(`^ {0,3}${marker[0]}{${marker.length},}\\s*$`);
+    const code: string[] = [];
+    for (i++; i < lines.length && !close.test(lines[i] ?? ""); i++) code.push(lines[i] ?? "");
+    out.push(`\`\`\`\n${sanitizeMrkdwn(code.join("\n")).replace(/```/g, "ˋˋˋ")}\n\`\`\``);
+  }
+  flushProse();
+  return out.join("\n").trim();
+}
+
+const ALERT = /^\[!(note|tip|important|warning|caution)\]$/i;
+
+function proseLine(line: string): string {
+  const quoted = /^\s*(?:>\s?)+/.exec(line);
+  let text = quoted ? line.slice(quoted[0].length) : line;
+  const alert = ALERT.exec(text.trim());
+  if (alert?.[1]) text = `**${alert[1][0]?.toUpperCase()}${alert[1].slice(1).toLowerCase()}**`;
+  text = text.replace(/^#{1,6}\s+(.*?)(?:\s+#+)?\s*$/, "**$1**").replace(/^(\s*)[-*+]\s+/, "$1• ");
+  return `${quoted ? "> " : ""}${withLinks(text)}`;
+}
+
+const MD_LINK = /\[([^[\]\n]+)\]\((https?:\/\/[^\s()]+(?:\([^\s()]*\)[^\s()]*)*)\)/g;
+
+function withLinks(text: string): string {
+  let out = "";
+  let last = 0;
+  for (const m of text.matchAll(MD_LINK)) {
+    const [whole, label = "", url = ""] = m;
+    out += withInlineCode(text.slice(last, m.index));
+    out += `<${sanitizeMrkdwn(url).replace(/\|/g, "%7C")}|${sanitizeLinkLabel(label.replace(/`/g, ""))}>`;
+    last = (m.index ?? 0) + whole.length;
+  }
+  return out + withInlineCode(text.slice(last));
+}
+
+function withInlineCode(text: string): string {
+  return text
+    .split(/(`[^`\n]+`)/)
+    .map((part, i) => (i % 2 === 1 ? sanitizeMrkdwn(part) : emphasis(sanitizeMrkdwn(part))))
+    .join("");
+}
+
+function emphasis(text: string): string {
+  return text
+    .replace(/(?<![*\w])\*(?![\s*])([^*\n]+?)(?<![\s*])\*(?![*\w])/g, "_$1_")
+    .replace(/\*\*(?!\s)([^*\n]+?)(?<!\s)\*\*/g, "*$1*")
+    .replace(/(?<!\w)__(?!\s)([^_\n]+?)(?<!\s)__(?!\w)/g, "*$1*")
+    .replace(/~~(?!\s)([^~\n]+?)(?<!\s)~~/g, "~$1~");
+}
+
 function stripHtmlComments(body: string): string {
   const end = body.lastIndexOf("-->");
   if (end < 0) return body;
@@ -81,9 +161,10 @@ export function extractEmbeddedImages(body: string, max = 5): EmbeddedImage[] {
 export const SLACK_SECTION_TEXT_LIMIT = 3_000;
 
 function clipSlackText(text: string): string {
-  return text.length > SLACK_SECTION_TEXT_LIMIT
-    ? `${text.slice(0, SLACK_SECTION_TEXT_LIMIT - 1)}…`
-    : text;
+  if (text.length <= SLACK_SECTION_TEXT_LIMIT) return text;
+  const clipped = `${text.slice(0, SLACK_SECTION_TEXT_LIMIT - 5)}…`;
+  // A cut inside a code block would leave the rest of the message unformatted.
+  return (clipped.match(/```/g) ?? []).length % 2 === 1 ? `${clipped}\n\`\`\`` : clipped;
 }
 
 export interface PrView {
@@ -234,12 +315,7 @@ export function render(message: Message): RenderedMessage {
     }
     case "review_comment": {
       const location = `${message.path}${message.line ? `:${message.line}` : ""}`;
-      const quoted = clipSlackText(
-        sanitizeMrkdwn(cleanGithubMarkdown(message.body))
-          .split("\n")
-          .map((l) => `> ${l}`)
-          .join("\n"),
-      );
+      const quoted = clipSlackText(githubToMrkdwn(message.body, { quote: true }));
       const by = message.label ? ` · by ${sanitizeMrkdwn(message.label)}` : "";
       return {
         text: sanitizeMrkdwn(`New review comment on ${location}`),
@@ -264,9 +340,7 @@ export function render(message: Message): RenderedMessage {
         text: sanitizeMrkdwn(`Comment by ${message.authorLogin}`),
         blocks: [
           section(
-            clipSlackText(
-              `💬 <${message.url}|comment>${by}\n${sanitizeMrkdwn(cleanGithubMarkdown(message.body))}`,
-            ),
+            clipSlackText(`💬 <${message.url}|comment>${by}\n${githubToMrkdwn(message.body)}`),
           ),
         ],
         images: message.images,
@@ -277,8 +351,8 @@ export function render(message: Message): RenderedMessage {
       const blocks = [
         section(`<${message.url}|${STATE_LABEL[message.state] ?? message.state}>${by}`),
       ];
-      const cleaned = cleanGithubMarkdown(message.body);
-      if (cleaned) blocks.push(section(clipSlackText(sanitizeMrkdwn(cleaned))));
+      const converted = githubToMrkdwn(message.body);
+      if (converted) blocks.push(section(clipSlackText(converted)));
       return {
         text: sanitizeMrkdwn(`Review ${message.state} by ${message.authorLogin}`),
         blocks,

@@ -448,6 +448,13 @@ describe("onIssueComment (U6)", () => {
     expect(slack.messages).toHaveLength(0);
   });
 
+  it("threads an allow-listed bot's conversation comment under the PR root", async () => {
+    const bot = issueComment(true);
+    bot.comment.user = { id: 20, login: "pullfrog[bot]", type: "Bot" };
+    await onIssueComment(deps({ allowedBots: new Set(["pullfrog"]) }), issueCommentEvent(bot));
+    expect(slack.messages.at(-1)?.threadTs).toBe("ts-root");
+  });
+
   it("never echoes the merge comment, even when its bot is allow-listed", async () => {
     const fromApp = (body: string) => {
       const input = issueComment(true);

@@ -72,12 +72,13 @@ export async function complete(
   row: MessageRow,
   slackTs: string,
   onSentTx?: (tx: Db) => Promise<void>,
+  threadTs?: string,
 ): Promise<boolean> {
   const markSent = async (conn: Db) =>
     (
       await conn
         .update(messages)
-        .set({ status: "sent", slackTs, claimedAt: null })
+        .set({ status: "sent", slackTs, threadTs: threadTs ?? null, claimedAt: null })
         .where(currentClaim(row))
         .returning({ id: messages.id })
     ).length > 0;
@@ -144,14 +145,17 @@ export interface Ledger {
   tombstone(key: EffectKey): Promise<string | undefined>;
 }
 
+/** `threadTs` is the thread the message was posted into; a reply to it must use the same one. */
 export type EffectState =
   | { status: "none" | "in-flight" | "tombstoned" }
-  | { status: "sent"; ts: string };
+  | { status: "sent"; ts: string; threadTs: string | undefined };
 
 function stateOf(row: MessageRow | undefined): EffectState {
   if (!row) return { status: "none" };
   if (row.status !== "sent") return { status: "in-flight" };
-  return row.slackTs ? { status: "sent", ts: row.slackTs } : { status: "tombstoned" };
+  return row.slackTs
+    ? { status: "sent", ts: row.slackTs, threadTs: row.threadTs ?? undefined }
+    : { status: "tombstoned" };
 }
 
 const sentTsOf = (row: MessageRow | undefined) => {
@@ -200,7 +204,7 @@ export function createLedger(db: Db, clock: Clock = systemClock): Ledger {
         threadTs: out.threadTs,
         clientMsgId: row.clientMsgId as ClientMsgId,
       });
-      if (!(await complete(db, row, ts, opts.onSentTx))) {
+      if (!(await complete(db, row, ts, opts.onSentTx, out.threadTs))) {
         throw new Error(`Slack effect lease was lost before completion: ${key.kind}`);
       }
       return { status: "posted", ts };

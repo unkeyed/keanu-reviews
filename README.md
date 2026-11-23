@@ -52,9 +52,13 @@ cross-model Pullfrog review request (see
 - **`#shipped` announcement.** Optionally announces each merge into a channel of
   your choice.
 - **Allow-listed bots.** Bot accounts are filtered out by default (deploy-preview
-  noise); you can allow specific review bots (e.g. Pullfrog) by login. An allowed
-  bot's review summary is threaded under the PR root and its HTML/marketing cruft
-  is stripped.
+  noise); you can allow specific review bots (e.g. Pullfrog) by login. Everything
+  an allowed bot posts (its review summary, inline comments and conversation
+  comments) is threaded under the PR root, along with replies to it. Its
+  HTML/marketing cruft is stripped.
+- **Slack-native formatting.** GitHub markdown is rewritten for Slack: links,
+  bold, headings, bullets and quotes, plus code fences of any length (Pullfrog
+  uses four backticks), which become Slack code blocks.
 - **Cross-model Pullfrog review (optional).** Asks Pullfrog to review each new
   PR on a different model family than the agent that wrote it, so a model never
   grades its own work.
