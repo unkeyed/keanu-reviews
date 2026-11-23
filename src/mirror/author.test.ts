@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type Author, commentPresentation, reviewPresentation } from "./author.ts";
+import { type Author, botDisplayName, commentPresentation, reviewPresentation } from "./author.ts";
 
 const profile = { name: "Flo Rider", iconUrl: "https://slack/a.png" };
 const user = (p: typeof profile | undefined): Author => ({
@@ -48,5 +48,33 @@ describe("reviewPresentation", () => {
     ["an unlinked author", unlinked, { kind: "bot" }, "flo"],
   ])("posts %s", (_, author, poster, label) => {
     expect(reviewPresentation(author)).toEqual({ poster, label });
+  });
+});
+
+describe("bot authors", () => {
+  const pullfrog: Author = {
+    kind: "bot",
+    login: "pullfrog[bot]",
+    name: "Pullfrog",
+    iconUrl: "https://avatars.githubusercontent.com/in/1768019?v=4",
+  };
+  const asPullfrog = {
+    kind: "bot-as",
+    username: "Pullfrog",
+    iconUrl: "https://avatars.githubusercontent.com/in/1768019?v=4",
+  };
+
+  it("posts comments and reviews under the bot's own name and avatar, with no login label", () => {
+    expect(commentPresentation(pullfrog)).toEqual({ poster: asPullfrog, label: undefined });
+    expect(reviewPresentation(pullfrog)).toEqual({ poster: asPullfrog, label: undefined });
+  });
+
+  it.each([
+    ["pullfrog[bot]", "Pullfrog"],
+    ["Pullfrog[bot]", "Pullfrog"],
+    ["some-review_bot[bot]", "Some Review Bot"],
+    ["dependabot", "Dependabot"],
+  ])("names %s as %s", (login, name) => {
+    expect(botDisplayName(login)).toBe(name);
   });
 });

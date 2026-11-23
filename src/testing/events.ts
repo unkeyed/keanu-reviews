@@ -4,6 +4,7 @@ export interface GithubUserJson {
   id: number;
   login: string;
   type?: string;
+  avatar_url?: string;
 }
 
 export interface PullRequestJson {

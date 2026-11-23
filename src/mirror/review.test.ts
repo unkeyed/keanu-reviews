@@ -269,11 +269,15 @@ describe("review job (U6, R5)", () => {
     const botReview = review("commented");
     botReview.review.user.type = "Bot";
     botReview.review.user.login = "pullfrog[bot]";
+    botReview.review.user.avatar_url = "https://avatars.githubusercontent.com/in/1768019?v=4";
     botReview.review.body =
       "Looks good overall.\n<!-- pullfrog meta -->\n<sup>marketing footer</sup>";
     await handleReview(deps({ allowedBots: new Set(["pullfrog"]) }), reviewEvent(botReview));
     const msg = slack.messages.at(-1);
     expect(msg?.threadTs).toBe("ts-root");
+    expect(msg?.username).toBe("Pullfrog");
+    expect(msg?.iconUrl).toBe("https://avatars.githubusercontent.com/in/1768019?v=4");
+    expect(JSON.stringify(msg?.blocks)).not.toContain("pullfrog[bot]");
     const blocks = JSON.stringify(msg?.blocks);
     expect(blocks).toContain("Looks good overall.");
     expect(blocks).not.toContain("<!--");
@@ -453,6 +457,7 @@ describe("onIssueComment (U6)", () => {
     bot.comment.user = { id: 20, login: "pullfrog[bot]", type: "Bot" };
     await onIssueComment(deps({ allowedBots: new Set(["pullfrog"]) }), issueCommentEvent(bot));
     expect(slack.messages.at(-1)?.threadTs).toBe("ts-root");
+    expect(slack.messages.at(-1)?.username).toBe("Pullfrog");
   });
 
   it("never echoes the merge comment, even when its bot is allow-listed", async () => {

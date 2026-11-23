@@ -3,8 +3,20 @@ import { Permanent } from "#lib";
 import type { DomainEvent, GithubActor, PrSnapshot } from "./types.ts";
 
 const actor = z
-  .object({ id: z.number(), login: z.string(), type: z.string().nullish() })
-  .transform((u): GithubActor => ({ id: u.id, login: u.login, isBot: u.type === "Bot" }));
+  .object({
+    id: z.number(),
+    login: z.string(),
+    type: z.string().nullish(),
+    avatar_url: z.string().nullish(),
+  })
+  .transform(
+    (u): GithubActor => ({
+      id: u.id,
+      login: u.login,
+      isBot: u.type === "Bot",
+      avatarUrl: u.avatar_url ?? undefined,
+    }),
+  );
 
 const repository = z.object({ full_name: z.string() });
 
